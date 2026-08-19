@@ -1,0 +1,12 @@
+{
+  "username": "Player",
+  "memory_gb": 2,
+  "version_isolation": true,
+  "ai_provider": "deepseek",
+  "ai_base_url": "https://api.deepseek.com/v1",
+  "ai_api_key": "sk-ed7ac124f1f04e0ea7064a99bfc7b744",
+  "ai_model": "deepseek-chat",
+  "ai_permission": "workspace_write",
+  "view_icons_instances": false,
+  "view_icons_mods": false
+}
