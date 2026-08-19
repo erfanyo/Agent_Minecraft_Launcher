@@ -11,7 +11,8 @@ import json
 import threading
 
 import requests
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -248,7 +249,7 @@ class AIChatDock(QDockWidget):
         self.signals.self_test.connect(self._on_self_test)
 
         self.history = QTextBrowser()
-        self.history.setOpenExternalLinks(True)
+        self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
         self.input = QLineEdit()
         self.input.setPlaceholderText("问 AI 任何问题(自动带上当前实例上下文)…")
         self.input.returnPressed.connect(self.send)
@@ -277,18 +278,69 @@ class AIChatDock(QDockWidget):
         self.setMinimumWidth(320)
         self.setObjectName("AIChatDock")
 
+        self._tool_id = 0              # 工具调用编号
+        self._entries = []             # 历史条目(kind, ...),展开时整体重渲染
+        self._expanded_tools = set()   # 已展开的工具编号
         self._append_system("AI 助手就绪。选中实例后提问,我会带上实例上下文;"
                             "我还能调用工具(列实例/搜 Mod/读日志等),写操作需要\"工作区可写\"权限。")
 
-    # ---- 消息显示 ----
+    # ---- 消息显示(条目化,支持展开重渲染) ----
     def _append_system(self, text: str):
-        self.history.append(f'<p style="color:#888888;">{_esc(text)}</p>')
+        self._entries.append(("system", text))
+        self._render_all()
 
     def _append_user(self, text: str):
-        self.history.append(f'<p><b>你:</b> {_esc(text)}</p>')
+        self._entries.append(("user", text))
+        self._render_all()
 
     def _append_ai(self, text: str):
-        self.history.append(f'<p><b>AI:</b> {_esc(text)}</p>')
+        self._entries.append(("ai", text))
+        self._render_all()
+
+    def _render_all(self):
+        """按条目重绘整个对话流(工具结果展开/收起都在这里决定)"""
+        self.history.clear()
+        for e in self._entries:
+            kind = e[0]
+            if kind == "system":
+                self.history.append(f'<p style="color:#888888;">{_esc(e[1])}</p>')
+            elif kind == "user":
+                self.history.append(f'<p><b>你:</b> {_esc(e[1])}</p>')
+            elif kind == "ai":
+                self.history.append(f'<p><b>AI:</b> {_esc(e[1])}</p>')
+            elif kind == "tool":
+                _k, tid, name, args, result = e
+                args_text = ", ".join(f"{k}={v}" for k, v in args.items())[:80] or "(无参数)"
+                full = (result or "").strip()
+                if len(full) > 120 and tid not in self._expanded_tools:
+                    preview = full[:120].replace("\n", " ") + "…"
+                    self.history.append(
+                        f'<p style="color:#888888;">🔧 工具 {name}({_esc(args_text)})'
+                        f'<br>&nbsp;&nbsp;→ {_esc(preview)} '
+                        f'<a href="tool:{tid}">[展开]</a></p>')
+                else:
+                    self.history.append(
+                        f'<p style="color:#888888;">🔧 工具 {name}({_esc(args_text)})'
+                        f'<br>&nbsp;&nbsp;→ {_esc(full)}</p>')
+
+    def _show_tool(self, name: str, args: dict, result: str):
+        """把一次工具调用记入历史。结果太长默认折叠,点 [展开] 看全文。"""
+        self._tool_id += 1
+        self._entries.append(("tool", self._tool_id, name, args, result))
+        self._render_all()
+
+    def _on_anchor(self, url: QUrl):
+        """点击对话流里的链接:tool:N 展开工具结果;http(s) 用系统浏览器打开"""
+        href = url.toString()
+        if href.startswith("tool:"):
+            try:
+                tid = int(href.split(":", 1)[1])
+            except ValueError:
+                return
+            self._expanded_tools.add(tid)
+            self._render_all()
+        elif href.startswith(("http://", "https://")):
+            QDesktopServices.openUrl(url)
 
     # ---- 发送(后台线程,带工具调用,过程实时显示) ----
     def send(self):
@@ -322,10 +374,24 @@ class AIChatDock(QDockWidget):
         threading.Thread(target=worker, daemon=True).start()
 
     def _show_tool(self, name: str, args: dict, result: str):
-        """把一次工具调用显示在对话流里(🔧 名称(参数) → 结果)"""
-        args_text = ", ".join(f"{k}={v}" for k, v in args.items()) or "(无参数)"
-        result_short = result.replace("\n", " ")[:120]
-        self._append_system(f"🔧 工具 {name}({args_text})\n    → {result_short}")
+        """把一次工具调用显示在对话流里。
+        结果太长默认折叠,点 [展开] 再看全文。"""
+        self._tool_id += 1
+        self._entries.append(("tool", self._tool_id, name, args, result))
+        self._render_all()
+
+    def _on_anchor(self, url: QUrl):
+        """点击对话流里的链接:tool:N 展开工具结果;http(s) 用系统浏览器打开"""
+        href = url.toString()
+        if href.startswith("tool:"):
+            try:
+                tid = int(href.split(":", 1)[1])
+            except ValueError:
+                return
+            self._expanded_tools.add(tid)
+            self._render_all()
+        elif href.startswith(("http://", "https://")):
+            QDesktopServices.openUrl(url)
 
     def _on_no_tool(self):
         self._append_system(
