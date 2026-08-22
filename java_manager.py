@@ -13,6 +13,7 @@ Adoptium API 用法:https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/
 import os
 import platform
 import re
+import shutil
 import subprocess
 import zipfile
 
@@ -21,6 +22,8 @@ from downloader import download_file
 # Adoptium 免登录下载地址模板
 ADOPTIUM_API = ("https://api.adoptium.net/v3/binary/latest/{major}/ga/"
                 "{os_name}/{arch}/jre/hotspot/normal/eclipse")
+
+MAX_DOWNLOAD_ATTEMPTS = 3  # 下载/解压失败重试次数(网络不稳时自动重下)
 
 
 def parse_java_major(output: str) -> int:
@@ -94,10 +97,23 @@ def _find_java_exe(directory: str) -> str | None:
     return None
 
 
+def valid_zip(path: str) -> bool:
+    """校验 zip 完整性:能打开且所有文件 CRC 通过才算好(避免下载了一半的残包)"""
+    try:
+        with zipfile.ZipFile(path) as z:
+            return z.testzip() is None
+    except (zipfile.BadZipFile, OSError, EOFError):
+        return False
+
+
 def ensure_java(runtime_dir: str, required_major: int,
                 progress_callback=None, status_callback=None) -> str:
     """保证有一个大版本 >= required_major 的 Java,返回 java.exe 路径。
-    找不到就下载并解压 Temurin JRE(约 50MB,只装一次)。"""
+    找不到就下载并解压 Temurin JRE(约 50MB,只装一次)。
+
+    下载可能因网络中断留下半截 zip / 解压可能留下半截目录——这里做:
+    残留损坏包自动重下、解压前校验完整性、解压前清旧残留、解压后验证 java 可用,
+    最多重试 MAX_DOWNLOAD_ATTEMPTS 次。"""
     found = find_java(runtime_dir, required_major)
     if found:
         return found
@@ -109,22 +125,54 @@ def ensure_java(runtime_dir: str, required_major: int,
     zip_path = os.path.join(runtime_dir, f"jre-{required_major}.zip")
     dest_dir = os.path.join(runtime_dir, f"jre-{required_major}")
 
-    if not os.path.exists(zip_path):
+    for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+        # 1) 下载:残留的损坏 zip 先删掉,别让它骗过"已存在"检查
+        if os.path.exists(zip_path) and not valid_zip(zip_path):
+            if status_callback:
+                status_callback(f"发现 Java 压缩包损坏,删除后重新下载(第 {attempt} 次)")
+            os.remove(zip_path)
+        if not os.path.exists(zip_path):
+            if status_callback:
+                status_callback(f"下载 Java {required_major}(约 50MB,第 {attempt} 次)...")
+            try:
+                download_file(url, zip_path, progress_callback=progress_callback)
+            except Exception as e:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)  # 下载中断:清掉半截文件
+                if attempt >= MAX_DOWNLOAD_ATTEMPTS:
+                    raise RuntimeError(f"Java 下载失败(已重试 {attempt} 次):{e}")
+                continue
+
+        # 2) 解压前再校验一次完整性(下载中断可能留下能打开但 CRC 错的包)
+        if not valid_zip(zip_path):
+            os.remove(zip_path)
+            if attempt >= MAX_DOWNLOAD_ATTEMPTS:
+                raise RuntimeError("Java 压缩包损坏(多次下载仍失败),请检查网络后重试")
+            continue
+
+        # 3) 解压:先清掉上次可能残留的半截目录
+        if os.path.isdir(dest_dir):
+            shutil.rmtree(dest_dir, ignore_errors=True)
         if status_callback:
-            status_callback(f"下载 Java {required_major}(约 50MB,仅此一次)...")
-        download_file(url, zip_path, progress_callback=progress_callback)
+            status_callback(f"解压 Java {required_major}...")
+        try:
+            with zipfile.ZipFile(zip_path) as z:
+                z.extractall(dest_dir)
+        except Exception:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            if attempt >= MAX_DOWNLOAD_ATTEMPTS:
+                raise RuntimeError("Java 解压失败(已重试多次),请清理后重试")
+            continue
 
-    if status_callback:
-        status_callback(f"解压 Java {required_major}...")
-    try:
-        with zipfile.ZipFile(zip_path) as z:
-            z.extractall(dest_dir)
-    except zipfile.BadZipFile:
-        os.remove(zip_path)  # 下载损坏,删掉让下次重下
-        raise RuntimeError("Java 压缩包损坏,请重试")
+        # 4) 验证解压结果:找到 java.exe 且版本达标,否则整目录作废重来
+        java_exe = _find_java_exe(dest_dir)
+        if java_exe and java_major(java_exe) >= required_major:
+            os.remove(zip_path)  # 解压成功就删掉压缩包,省空间
+            return java_exe
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
 
-    java_exe = _find_java_exe(dest_dir)
-    if java_exe is None:
-        raise RuntimeError("Java 解压后未找到 java.exe")
-    os.remove(zip_path)  # 解压成功就删掉压缩包,省空间
-    return java_exe
+    raise RuntimeError(f"Java {required_major} 安装失败(已重试 {MAX_DOWNLOAD_ATTEMPTS} 次)")

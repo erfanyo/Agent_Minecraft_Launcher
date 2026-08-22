@@ -37,16 +37,25 @@ def download_file(url: str, dest: str, sha1: str | None = None,
       progress_callback(done, total) —— 进度回调,total 为 0 表示总量未知
     """
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    resp = requests.get(url, stream=True, timeout=30)
-    resp.raise_for_status()
-    total = int(resp.headers.get("content-length", 0))
-    done = 0
-    with open(dest, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
-            f.write(chunk)
-            done += len(chunk)
-            if progress_callback:
-                progress_callback(done, total)
+    try:
+        resp = requests.get(url, stream=True, timeout=30)
+        resp.raise_for_status()
+        total = int(resp.headers.get("content-length", 0))
+        done = 0
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                f.write(chunk)
+                done += len(chunk)
+                if progress_callback:
+                    progress_callback(done, total)
+    except Exception:
+        # 下载中断/失败:删掉半截文件,避免下次被"文件已存在"骗过
+        if os.path.exists(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+        raise
 
     if sha1 and sha1_of_file(dest) != sha1:
         os.remove(dest)
