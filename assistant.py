@@ -68,10 +68,17 @@ TOOLS = [
     _tool("read_crash_report", "读取某实例最新的崩溃报告(诊断崩溃用)",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("get_settings", "查看启动器当前设置(内存/用户名等)", {}, []),
-    _tool("install_mod", "给某实例安装 Mod(写操作,需要工作区写权限;会先自动备份)",
+    _tool("install_mod", "给某实例安装单个 Mod(写操作,需要工作区写权限;会先自动备份)。"
+          "要一次性装多个 Mod 时,用 install_mods 一次装完,别逐个调用浪费轮数",
           {"slug": {"type": "string"}, "instance": {"type": "string"},
            "version": {"type": "string", "description": "可选,指定版本"}},
           ["slug", "instance"]),
+    _tool("install_mods", "批量给某实例安装多个 Mod(一次调用装完所有,省工具轮数)。"
+          "支持中文名(如 钠/锂/玉/JEI)或英文 slug。写操作,需要工作区写权限;会自动备份",
+          {"slugs": {"type": "array", "items": {"type": "string"},
+                     "description": "要装的 Mod 列表,如 [\"钠\",\"锂\",\"玉\"] 或 [\"sodium\",\"lithium\",\"jade\"]"},
+           "instance": {"type": "string", "description": "实例 id(用 list_instances 查)"}},
+          ["slugs", "instance"]),
     _tool("backup_instance", "备份某实例:存档打包 zip + 模组列表 txt(写操作)",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("set_setting", "修改启动器设置,如 memory_gb=6(写操作)",
@@ -108,7 +115,7 @@ TOOLS = [
 ]
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
-WRITE_TOOLS = {"install_mod", "backup_instance", "set_setting"}
+WRITE_TOOLS = {"install_mod", "install_mods", "backup_instance", "set_setting"}
 
 
 def build_executor(settings: dict):
@@ -124,8 +131,8 @@ def build_executor(settings: dict):
             return f"错误:未知工具 {name}"
         if name in WRITE_TOOLS:
             require_workspace_write(settings)  # 只读权限 → 直接拒绝
-        # 灵感 #6:写操作前先自动备份(装 Mod 前防坏档)
-        if name == "install_mod":
+        # 灵感 #6:写操作前先自动备份(装 Mod 前防坏档);批量安装只备份一次
+        if name in ("install_mod", "install_mods"):
             try:
                 backup_note = agent_tools.backup_instance(args.get("instance", ""))
             except Exception as e:
@@ -144,7 +151,7 @@ def build_executor(settings: dict):
 
 
 def chat_with_tools(messages: list, settings: dict, tools: list,
-                    executor, max_rounds: int = 6, on_tool=None) -> str:
+                    executor, max_rounds: int = 10, on_tool=None) -> str:
     """带工具调用的对话循环:LLM 提议 → 执行 → 结果回传 → 直到完成。
 
     tools 为 None 时退化为普通对话。

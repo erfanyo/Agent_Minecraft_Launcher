@@ -106,6 +106,52 @@ def install_mod(slug: str, instance: str, version: str = "",
             f"{'指定版本' if version else '可用'}版本")
 
 
+def _resolve_slug(name: str) -> str:
+    """中文名 → Modrinth slug(查本地库);英文 slug / 已是 slug 的原样返回"""
+    name = name.strip()
+    if not name:
+        return name
+    from mod_cn import find_slugs_by_cn, has_cjk
+    if has_cjk(name):
+        hits = find_slugs_by_cn(name)
+        if hits:
+            return hits[0]
+    return name
+
+
+def install_mods(slugs, instance: str, game_dir: str = None) -> str:
+    """批量给实例安装多个 Mod(一次调用装完,省 AI 工具轮数)。
+    slugs 支持中文名(如 钠/锂/玉/JEI)或英文 slug;可传 list,也可传逗号分隔字符串。
+    逐项报告成功/失败,返回汇总。"""
+    game_dir = _gd(game_dir)
+    if isinstance(slugs, str):
+        slugs = [s.strip() for s in slugs.replace("，", ",").split(",") if s.strip()]
+    slugs = [s for s in (slugs or []) if str(s).strip()]
+    if not slugs:
+        return "错误:没有要安装的 Mod"
+    inst = next((i for i in scan_instances(game_dir) if i["id"] == instance), None)
+    if inst is None:
+        return f"错误:没有实例 {instance}(可用 list_instances 查看)"
+    loader = inst["loader"]
+    if loader not in ("fabric", "forge", "neoforge"):
+        return f"错误:{instance} 不是 Mod 实例(加载器:{loader or '原版'})"
+    gv = inst["base"]
+    mods_dir = os.path.join(game_dir, "versions", instance, "mods")
+    lines, ok = [], 0
+    for s in slugs:
+        slug = _resolve_slug(str(s))
+        try:
+            filename = download_mod(slug, gv, loader, mods_dir)
+            if filename:
+                ok += 1
+                lines.append(f"• {slug}: 已安装 {filename} ✅")
+            else:
+                lines.append(f"• {slug}: 错误:没有 {gv}+{loader} 的可用版本 ❌")
+        except Exception as e:
+            lines.append(f"• {slug}: 安装失败:{type(e).__name__}: {e} ❌")
+    return f"共 {len(slugs)} 个,成功 {ok} 个:\n" + "\n".join(lines)
+
+
 def install_instance(version: str, loader: str = "", loader_version: str = "",
                      shader: bool = False, optimize: bool = False,
                      game_dir: str = None, status=print) -> str:
