@@ -1,0 +1,17 @@
+modLoader = "javafml"
+loaderVersion = "[52,)"
+license = "MIT"
+
+[[mods]]
+modId = "agentmc_bridge"
+version = "0.1.0"
+displayName = "AgentMC Bridge"
+description = "启动器桥接:本地指令口 + 配方/物品数据导出 + 自动 RCON"
+authors = "AgentMinecraftLauncher"
+
+[[dependencies.agentmc_bridge]]
+modId = "forge"
+mandatory = true
+versionRange = "[52,)"
+ordering = "NONE"
+side = "BOTH"

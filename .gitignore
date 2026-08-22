@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 虚拟环境(每个开发者的本地环境,不提交)
+.venv/
+venv/
+
+# 构建产物
+dist/
+build/
+
+# 运行时数据(游戏目录、下载缓存、日志)
+.minecraft/
+downloads/
+logs/
+*.log
+
+# 测试临时目录
+.tmp/
+
+# Gradle / Java(bridge-mod 构建)
+.gradle/
+**/run/
+bridge-mod/dist/
+*.iml
+
+# 编辑器
+.vscode/
+.idea/
+
+# 敏感信息(API key 绝不能提交!)
+*.env
+.env
+
+# 用户配置(本地个性化设置)
+config.json

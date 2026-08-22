@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "agentmc_bridge",
+  "version": "0.1.0",
+  "name": "AgentMC Bridge",
+  "description": "启动器桥接:本地指令口 + 配方/物品数据导出 + 自动 RCON",
+  "authors": ["AgentMinecraftLauncher"],
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.agentmc.bridge.fabric.BridgeFabric"]
+  },
+  "mixins": [
+    "agentmc_bridge.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1"
+  }
+}
