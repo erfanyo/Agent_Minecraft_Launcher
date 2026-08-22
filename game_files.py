@@ -14,7 +14,7 @@ import os
 import platform
 import sys
 
-from downloader import download_maven, download_with_mirror
+from downloader import download_many, download_maven, download_with_mirror
 
 # 当前操作系统名(用于 libraries 的系统规则判断)
 OS_NAME = (
@@ -194,27 +194,23 @@ def install_version_files(d: dict, game_dir: str,
         return downloaded, failures
 
     if status_callback:
-        status_callback(f"下载依赖库与资源文件(共 {len(tasks)} 个)...")
+        status_callback(f"并行下载依赖库与资源文件(共 {len(tasks)} 个)...")
 
-    total = sum(t[3] for t in tasks)
-    base = 0
+    # 并行下载:文件间无依赖,4 线程同时下,进度按总字节聚合
+    jobs = []
     for url, dest, sha1, size in tasks:
-        def wrap(done, _total):
-            if progress_callback:
-                progress_callback(base + done, total)
-        try:
-            if url:
-                download_with_mirror(url, dest, sha1=sha1, progress_callback=wrap)
-            else:
-                # 没有地址的库:从 dest 还原 Maven 相对路径,轮流试仓库
-                rel = dest.replace("\\", "/")
-                path = rel.split("/libraries/", 1)[1]
-                download_maven(path, dest, sha1=sha1, progress_callback=wrap)
-            base += size
-            downloaded += 1
-        except Exception as e:
-            # 单个文件失败不中断:记录后继续,装完统一提示
-            failures.append((os.path.basename(dest), str(e)[:80]))
+        name = os.path.basename(dest)
+        if url:
+            jobs.append((name, size, lambda cb, u=url, de=dest, s=sha1:
+                         download_with_mirror(u, de, sha1=s, progress_callback=cb)))
+        else:
+            # 没有地址的库:从 dest 还原 Maven 相对路径,轮流试仓库
+            rel = dest.replace("\\", "/")
+            path = rel.split("/libraries/", 1)[1]
+            jobs.append((name, size, lambda cb, p=path, de=dest, s=sha1:
+                         download_maven(p, de, sha1=s, progress_callback=cb)))
+    d2, failures = download_many(jobs, progress_callback=progress_callback)
+    downloaded += d2
 
     if failures and status_callback:
         status_callback(f"{len(failures)} 个文件下载失败(重跑安装会自动补齐)")

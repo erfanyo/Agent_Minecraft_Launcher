@@ -137,18 +137,31 @@ def install_mods(slugs, instance: str, game_dir: str = None) -> str:
         return f"错误:{instance} 不是 Mod 实例(加载器:{loader or '原版'})"
     gv = inst["base"]
     mods_dir = os.path.join(game_dir, "versions", instance, "mods")
-    lines, ok = [], 0
-    for s in slugs:
+
+    def dl_one(s):
         slug = _resolve_slug(str(s))
-        try:
-            filename = download_mod(slug, gv, loader, mods_dir)
-            if filename:
-                ok += 1
-                lines.append(f"• {slug}: 已安装 {filename} ✅")
-            else:
-                lines.append(f"• {slug}: 错误:没有 {gv}+{loader} 的可用版本 ❌")
-        except Exception as e:
-            lines.append(f"• {slug}: 安装失败:{type(e).__name__}: {e} ❌")
+        filename = download_mod(slug, gv, loader, mods_dir)
+        if filename:
+            return f"• {slug}: 已安装 {filename} ✅"
+        return f"• {slug}: 错误:没有 {gv}+{loader} 的可用版本 ❌"
+
+    # 并行下载(最多 4 个同时下),结果按输入顺序汇总
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = {}
+    if len(slugs) <= 1:
+        for s in slugs:
+            results[str(s)] = dl_one(s)
+    else:
+        with ThreadPoolExecutor(max_workers=min(4, len(slugs))) as ex:
+            futs = {ex.submit(dl_one, s): s for s in slugs}
+            for f in as_completed(futs):
+                s = futs[f]
+                try:
+                    results[s] = f.result()
+                except Exception as e:
+                    results[s] = f"• {s}: 安装失败:{type(e).__name__}: {e} ❌"
+    lines = [results[str(s)] for s in slugs]
+    ok = sum(1 for l in lines if "已安装" in l)
     return f"共 {len(slugs)} 个,成功 {ok} 个:\n" + "\n".join(lines)
 
 

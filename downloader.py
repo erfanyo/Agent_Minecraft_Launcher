@@ -8,10 +8,13 @@ sha1 是文件的"指纹"。Mojang 数据里会给每个文件标好期望的 sh
 """
 import hashlib
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
 CHUNK_SIZE = 1024 * 256  # 每次读写 256KB
+PARALLEL_WORKERS = 4     # 并行下载线程数(网络下载瓶颈在延迟,4 个足够且不触发限流)
 
 
 def sha1_of_file(path: str) -> str:
@@ -111,3 +114,53 @@ def download_maven(path: str, dest: str, sha1: str | None = None,
         except Exception as e:
             last_err = e
     raise last_err
+
+
+def download_many(jobs: list, workers: int = PARALLEL_WORKERS,
+                  progress_callback=None) -> tuple:
+    """并行下载多个文件,单个失败不中断其余。
+
+    jobs: [(名字, 大小, 任务函数)] — 任务函数签名 fn(progress_callback),
+          成功正常返回,失败抛异常。
+    进度:total = 已知大小之和(全未知时按任务数),回调 (已完成总字节, total),
+    单调递增(每个任务完成时把其大小累加进已完成)。
+    返回 (成功数, 失败列表[(名字, 原因)])。"""
+    total = sum(int(s) for _n, s, _f in jobs) or len(jobs)
+    completed = [0.0]
+    lock = threading.Lock()
+
+    def report(done, size):
+        with lock:
+            now = completed[0] + done
+        if progress_callback:
+            progress_callback(now, total)
+
+    def run(name, size, fn):
+        try:
+            fn(lambda d, _t: report(d, size))
+            with lock:
+                completed[0] += size
+            return True, None
+        except Exception as e:
+            return False, (str(e) or type(e).__name__)[:120]
+
+    ok = 0
+    failures = []
+    if len(jobs) <= 1 or workers <= 1:
+        for name, size, fn in jobs:
+            good, err = run(name, size, fn)
+            ok += good
+            if err:
+                failures.append((name, err))
+        return ok, failures
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(run, n, s, f): n for n, s, f in jobs}
+        for fut in futs:
+            try:
+                good, err = fut.result()
+            except Exception as e:
+                good, err = False, (str(e) or type(e).__name__)[:120]
+            ok += good
+            if err:
+                failures.append((futs[fut], err))
+    return ok, failures
