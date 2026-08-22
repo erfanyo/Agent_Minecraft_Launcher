@@ -46,6 +46,9 @@
 ## 🚀 快速开始
 
 ### 方式一:直接运行 exe(给朋友/普通用户)
+- 从 [GitHub Releases](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases) 下载
+  **AgentMinecraftLauncher.exe**(Windows,无需安装 Python),双击即用
+- 或开发机自己打包:
 ```bash
 # 开发机打包(一次性)
 pip install pyinstaller
