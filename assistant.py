@@ -1173,6 +1173,20 @@ class AIChatDock(QDockWidget):
         """当前 provider 是否为内置本地模型"""
         return self.settings.get("ai_provider") == LOCAL_PROVIDER
 
+    def _cloud_available(self) -> bool:
+        """云端通道是否可用:provider 不是本地模型,且接口地址带 scheme。
+        本地模型(ai_base_url 为空)下路由判到 cloud 时,不能拼出 /chat/completions。"""
+        if self._local_enabled():
+            return False
+        base = (self.settings.get("ai_base_url") or "").strip()
+        return base.startswith(("http://", "https://"))
+
+    def _cloud_unavailable_hint(self) -> str:
+        """§1.3 业务语言:本地模型下没有云端通道时的友好提示(不是技术报错)。"""
+        return ("这个任务超出了本地模型的基础能力(比如深度诊断/复杂分析),需要联网的云端模型。"
+                "你可以:① 换一种本地模型能处理的说法(装 Mod/查配方/改设置等);"
+                "② 在设置 → AI 助手里切换到云端服务(如 DeepSeek),输入密钥即可。")
+
     def _get_local_engine(self):
         """懒加载本地推理引擎单例(首次用到才起;窗口关闭/游戏启动时 stop)"""
         if self._local_engine is None:
@@ -1446,14 +1460,32 @@ class AIChatDock(QDockWidget):
                                 self.signals.reply.emit(reply)
                                 self._update_ctx_ring()
                                 return
-                            # 本地失败 → 落到云端(§1.4 失败链路)
-                            self._append_system("本地推理未成功,已转云端处理…")
+                            # 本地失败 → 有云端则落云端,否则友好提示(§1.3/§1.4)
+                            if self._cloud_available():
+                                self._append_system("本地推理未成功,已转云端处理…")
+                            else:
+                                self.signals.reply.emit(self._cloud_unavailable_hint())
+                                self._update_ctx_ring()
+                                return
                         else:
                             # 模型未下载(§2 懒加载):提示后走云端;同时后台触发下载(带进度弹窗)
                             self._append_system("本地模型未下载,先走云端(设置里可关本地模型)。"
                                                 "首次使用会在后台下载约 500MB…")
                             self.signals.local_dl_start.emit()
-                    # decision==ask 或模型未就绪:都落云端(ask 由云端循环触发 ask_user 交互)
+                            if not self._cloud_available():
+                                # 本地模型也没下、云端也没有 → 无法继续,友好提示
+                                self.signals.reply.emit(
+                                    "本地模型还没下载,而且当前没有可用的云端服务。"
+                                    "模型正在后台下载,下载完成后就能离线用了;"
+                                    "或者到设置里配置云端服务(如 DeepSeek)。")
+                                self._update_ctx_ring()
+                                return
+                    # decision==ask 或模型未就绪:落云端(ask 由云端循环触发 ask_user 交互)
+                    if not self._cloud_available():
+                        # 本地模式下路由判到 cloud/ask 但没有云端通道 → 友好提示,不拼空 URL
+                        self.signals.reply.emit(self._cloud_unavailable_hint())
+                        self._update_ctx_ring()
+                        return
                 result = chat_with_tools(messages, s, TOOLS, executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
                                          return_messages=True)
