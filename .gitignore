@@ -37,3 +37,6 @@ bridge-mod/dist/
 # 用户配置(本地个性化设置)
 config.json
 AMCL/
+
+# DSH ���Բ���
+DPH_Chat/

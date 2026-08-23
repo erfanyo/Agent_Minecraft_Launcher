@@ -22,12 +22,16 @@ TOKEN_RE = re.compile(r"\$\{([^}]+)\}")
 
 
 def load_version_json(version_id: str, game_dir: str) -> dict:
-    """从磁盘读一个已安装版本的版本 JSON(versions/<id>/<id>.json)。
+    """从磁盘读一个已安装版本的版本 JSON。
 
-    启动器把每个版本的 JSON 存在它的实例目录里(自包含),
-    Mojang 原版和 Fabric/Forge 版本都从这里读。
+    查找顺序:
+    1. versions/<id>/<id>.json —— 真实例(用户主动安装的版本/加载器实例)
+    2. versions/_versions/<id>/<id>.json —— 版本仓库(加载器自动带出的基础原版)
+    这样基础原版收进 _versions 仓库后,继承链解析和启动命令都不受影响。
     """
     path = os.path.join(game_dir, "versions", version_id, version_id + ".json")
+    if not os.path.exists(path):
+        path = os.path.join(game_dir, "versions", "_versions", version_id, version_id + ".json")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 

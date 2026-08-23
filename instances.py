@@ -55,6 +55,8 @@ def scan_instances(game_dir: str = None) -> list:
     if not os.path.isdir(versions_dir):
         return instances
     for name in sorted(os.listdir(versions_dir)):
+        if name.startswith("_"):
+            continue   # 版本仓库(_versions/ 等),不是实例
         vjson = os.path.join(versions_dir, name, name + ".json")
         if not os.path.exists(vjson):
             continue

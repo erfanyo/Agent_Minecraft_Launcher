@@ -1114,6 +1114,7 @@ class MainWindow(QMainWindow):
     # ---- 下载 Mod 选项卡 ----
     def refresh_instances(self):
         """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的打小抄"""
+        self._tidy_base_versions()   # 把纯基础原版收进 _versions 仓库(一次性迁移)
         instances = scan_instances(paths.GAME_DIR)
 
         # 隐藏"依赖型原版实例":被 Mod 实例继承、且没有自己存档的原版,
@@ -1138,6 +1139,30 @@ class MainWindow(QMainWindow):
 
         # 3) 打小抄(实例清单备忘,可手动编辑)
         self.write_cheat_sheet(shown)
+
+    def _tidy_base_versions(self):
+        """把"被加载器继承、且没有自己存档"的纯基础原版,收进 versions/_versions/ 版本仓库。
+        versions 目录只留真实例(用户主动装的版本/加载器实例);基础原版只是地基,
+        收进仓库后 UI 和磁盘目录都干净(有自己存档的算真实例,不动)。"""
+        try:
+            instances = scan_instances(paths.GAME_DIR)
+        except Exception:
+            return
+        bases_in_use = {i["base"] for i in instances if i["loader"]}
+        repo = os.path.join(paths.GAME_DIR, "versions", "_versions")
+        for inst in instances:
+            if inst["loader"] is not None or inst["id"] not in bases_in_use:
+                continue   # 不是"被继承的纯原版"
+            inst_dir = self.game_dir_for(inst["id"])
+            if os.path.isdir(os.path.join(inst_dir, "saves")):
+                continue   # 有自己的存档 → 真实例,不动
+            dest = os.path.join(repo, inst["id"])
+            try:
+                if not os.path.isdir(dest) and os.path.isdir(inst_dir):
+                    os.makedirs(repo, exist_ok=True)
+                    shutil.move(inst_dir, dest)
+            except OSError:
+                pass
 
     # ---- 目标实例卡片(与加载器选择同款,深浅色主题兼容) ----
 

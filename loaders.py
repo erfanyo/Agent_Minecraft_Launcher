@@ -330,8 +330,15 @@ def install_loader(loader: str, mc: str, game_dir: str,
             status_callback(f"准备安装 {version_id} ...")
 
         # 2) 继承链的根(原版 JSON + 客户端 jar)必须在磁盘上
-        base_path = os.path.join(game_dir, "versions", parent_id, parent_id + ".json")
-        base_jar = os.path.join(game_dir, "versions", parent_id, parent_id + ".jar")
+        #    基础原版收进 versions/_versions/ 版本仓库,versions 目录只留真实例
+        base_dir = os.path.join(game_dir, "versions", "_versions", parent_id)
+        base_path = os.path.join(base_dir, parent_id + ".json")
+        base_jar = os.path.join(base_dir, parent_id + ".jar")
+        # 优先复用:用户已装的原版实例(versions/<id>/)或仓库里已有的
+        alt_json = os.path.join(game_dir, "versions", parent_id, parent_id + ".json")
+        if not os.path.exists(base_path) and os.path.exists(alt_json):
+            base_path = alt_json
+            base_jar = os.path.join(game_dir, "versions", parent_id, parent_id + ".jar")
         if not os.path.exists(base_path):
             from fetch_versions import fetch_version_detail, fetch_version_manifest
             manifest = fetch_version_manifest()
