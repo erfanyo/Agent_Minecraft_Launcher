@@ -13,12 +13,14 @@ import mimetypes
 import os
 import tempfile
 import threading
+import time
 
 import requests
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
+    QIcon,
     QImage,
     QPainter,
     QPen,
@@ -35,6 +37,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
@@ -277,6 +281,92 @@ class ContextRing(QWidget):
         p.end()
 
 
+def collect_screenshots(game_dir: str, limit: int = 30) -> list:
+    """收集最近的游戏截图(按修改时间新→旧,最多 limit 张)。
+    截图位置:未版本隔离 → <game_dir>/screenshots;隔离 → <game_dir>/versions/<id>/screenshots。"""
+    dirs = [os.path.join(game_dir, "screenshots")]
+    versions_dir = os.path.join(game_dir, "versions")
+    if os.path.isdir(versions_dir):
+        try:
+            for name in os.listdir(versions_dir):
+                dirs.append(os.path.join(versions_dir, name, "screenshots"))
+        except OSError:
+            pass
+    rows = []
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        try:
+            files = os.listdir(d)
+        except OSError:
+            continue
+        for f in files:
+            if f.lower().endswith((".png", ".jpg", ".jpeg")):
+                p = os.path.join(d, f)
+                try:
+                    rows.append((os.path.getmtime(p), p))
+                except OSError:
+                    continue
+    rows.sort(reverse=True)
+    return [p for _m, p in rows[:limit]]
+
+
+class RecentScreenshotsDialog(QDialog):
+    """微信式"最近照片":列出 .minecraft 里的最近游戏截图,双击或选中点"添加"进 AI 输入。"""
+
+    def __init__(self, game_dir: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("最近截图")
+        self.setMinimumSize(560, 400)
+        self.picked = []   # 选中的图片路径
+
+        self.list = QListWidget()
+        self.list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.list.setIconSize(QSize(120, 68))
+        self.list.setResizeMode(QListWidget.ResizeMode.Adjust)
+        self.list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.list.setWordWrap(True)
+        shots = collect_screenshots(game_dir, limit=30)
+        if not shots:
+            hint = QLabel("还没有截图。游戏里按 F2 截图后会自动存到 .minecraft 里(启动器会自动找到)。")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color:#888888;")
+        else:
+            hint = QLabel(f"共找到最近 {len(shots)} 张截图:双击添加,或选中多张点[添加]")
+            hint.setStyleSheet("color:#888888;")
+            for p in shots:
+                name = os.path.basename(p)
+                when = time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(p)))
+                item = QListWidgetItem(QIcon(p), f"{name}\n{when}")
+                item.setData(Qt.ItemDataRole.UserRole, p)
+                item.setToolTip(p)
+                self.list.addItem(item)
+
+        add_btn = QPushButton("添加选中")
+        add_btn.setEnabled(bool(shots))
+        add_btn.clicked.connect(self._add_selected)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        row = QHBoxLayout()
+        row.addWidget(hint, 1)
+        row.addStretch()
+        row.addWidget(add_btn)
+        row.addWidget(cancel_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.list, 1)
+        layout.addLayout(row)
+
+        self.list.itemDoubleClicked.connect(lambda _it: self._add_selected())
+
+    def _add_selected(self):
+        self.picked = [it.data(Qt.ItemDataRole.UserRole)
+                       for it in self.list.selectedItems()
+                       if it.data(Qt.ItemDataRole.UserRole)]
+        if self.picked:
+            self.accept()
+
+
 class AISettingsForm(QWidget):
     """AI 服务设置表单(可嵌入对话框 / 首次引导页):服务商 / 接口 / 密钥 / 模型 / 权限"""
 
@@ -388,6 +478,7 @@ class _ChatInput(QPlainTextEdit):
     sendClicked = Signal()
     testClicked = Signal()
     imageClicked = Signal()
+    recentClicked = Signal()
     imagePasted = Signal(QImage)   # 从剪贴板粘贴了图片
 
     def __init__(self, parent=None):
@@ -424,15 +515,26 @@ class _ChatInput(QPlainTextEdit):
             " font-size:14px; border:none;}"
             "QPushButton:hover{background:rgba(128,128,128,160);}")
         self.img_btn.clicked.connect(self.imageClicked.emit)
+        # 最近照片:微信式,列出 .minecraft 里的游戏截图(再左边)
+        self.recent_btn = QPushButton("🖼", self)
+        self.recent_btn.setFixedSize(30, 30)
+        self.recent_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.recent_btn.setToolTip("最近截图:从 .minecraft 里选游戏内 F2 截图")
+        self.recent_btn.setStyleSheet(
+            "QPushButton{border-radius:15px; background:rgba(128,128,128,90);"
+            " font-size:14px; border:none;}"
+            "QPushButton:hover{background:rgba(128,128,128,160);}")
+        self.recent_btn.clicked.connect(self.recentClicked.emit)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 圆形按钮钉在输入框右下角(发送在最后,🛠 在它左边,📷 再左边)
+        # 圆形按钮钉在输入框右下角(发送在最后,🛠 在它左边,📷 再左边,🖼 最左)
         m = 6
         bw = self.send_btn.width()
         self.send_btn.move(self.width() - bw - m, self.height() - bw - m)
         self.test_btn.move(self.width() - bw * 2 - m * 2, self.height() - bw - m)
         self.img_btn.move(self.width() - bw * 3 - m * 3, self.height() - bw - m)
+        self.recent_btn.move(self.width() - bw * 4 - m * 4, self.height() - bw - m)
 
     def canInsertFromMimeData(self, source):
         return source.hasImage() or super().canInsertFromMimeData(source)
@@ -482,6 +584,7 @@ class AIChatDock(QDockWidget):
         self.input.testClicked.connect(self.self_test_tools)   # 🛠 已移进输入框,挨着发送
         self.input.imageClicked.connect(self._pick_images)
         self.input.imagePasted.connect(self._add_image_data)
+        self.input.recentClicked.connect(self._pick_recent_screenshots)
         # 浮动/停靠使用 QDockWidget 标题栏右上角自带的浮动按钮(与系统行为整合)
 
         # 顶部:技能管理入口(相对靠上,一眼可见)
@@ -638,6 +741,14 @@ class AIChatDock(QDockWidget):
             "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp);;所有文件 (*)")
         for p in paths:
             self._add_image_path(p)
+
+    def _pick_recent_screenshots(self):
+        """🖼 最近照片:列出 .minecraft 里的游戏截图,选中的添加进输入"""
+        import paths as _paths
+        dlg = RecentScreenshotsDialog(_paths.GAME_DIR, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            for p in dlg.picked:
+                self._add_image_path(p)
 
     def _add_image_data(self, img: QImage):
         """从剪贴板粘贴的图片:存成临时 png 再走统一添加流程"""
