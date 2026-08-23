@@ -552,11 +552,12 @@ class AISettingsForm(QWidget):
         ll.addWidget(self.local_builtin_row)
         ll.addWidget(self.local_server_row)
         self.local_explainer = QLabel(
-            "内置本地模型怎么工作?\n"
-            "- 简单指令(装 Mod / 查配方 / 改设置 / 看日志)→ 本地模型直接处理,离线可用;\n"
-            "- 固定问答(怎么下载 / 怎么联机)→ 内置规则库直接回答,最快;\n"
-            "- 复杂任务(深度诊断 / 代码分析 / 多步规划)→ 超出本地模型能力,需要联网的云端模型,\n"
-            "  会提示你切换到云端服务(如 DeepSeek),或用本地能处理的方式重新提问。")
+            "内置本地模型 + 规则引擎怎么工作?\n"
+            "- 简单操作(装 Mod / 查配方 / 改设置 / 看日志)→ 本地模型直接处理,离线可用;\n"
+            "- 固定问答(怎么下载 / 怎么联机 / Java 相关)→ 内置规则库直接回答,最快;\n"
+            "- 能力不足自动切云端:深度诊断 / 代码分析 / 多步规划 / 方案 等复杂任务,"
+            "会自动转到云端处理(需联网);本地没答好(失败 / 拿不准 / 超时)也会自动切云端兜底;\n"
+            "- 拿不准你要什么(如「推荐 / 该装哪些」)→ 会先问你。")
         self.local_explainer.setWordWrap(True)
         self.local_explainer.setStyleSheet("color: #888888;")
         ll.addWidget(self.local_explainer)
