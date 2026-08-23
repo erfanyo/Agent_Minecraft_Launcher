@@ -304,6 +304,7 @@ class MainWindow(QMainWindow):
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
         from resource_center import ResourceCenter
         self.resource_center = ResourceCenter()
+        self.resource_center.set_ui_mode(self.settings.get("ui_mode", "beginner"))
         # 兼容旧引用:download_tab 是资源中心内的实例向导
         self.download_tab = self.resource_center.download_tab
         self.resource_center.set_hooks(
@@ -512,6 +513,7 @@ class MainWindow(QMainWindow):
             self.settings = dlg.settings
             self.ai_dock.settings = dlg.settings
             self.skill_mgr.settings = dlg.settings   # 技能启停状态同步
+            self.resource_center.set_ui_mode(dlg.settings.get("ui_mode", "beginner"))
             self.refresh_instances()   # 游戏目录可能被改了,重新扫描
             self.statusBar().showMessage("设置已保存")
 

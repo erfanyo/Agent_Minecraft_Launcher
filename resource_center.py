@@ -458,17 +458,30 @@ class ResourceCenter(QWidget):
             cards.addWidget(b)
         layout.addLayout(cards)
         layout.addSpacing(20)
-        # 新手科普:MC 社区资源结构(想自己挑资源的人先看懂这些是什么)
-        layout.addWidget(QLabel(
+        # 新手科普:MC 社区资源结构(新手模式显示,专家模式隐藏)
+        self.guide_title = QLabel(
             t("📚 了解 MC 资源结构(自己挑资源前先看一眼):",
-              "MC resource types (read before picking):")))
+              "MC resource types (read before picking):"))
+        layout.addWidget(self.guide_title)
+        self._guide_labels = []
         for line in _RESOURCE_GUIDE:
             l = QLabel("• " + line)
             l.setWordWrap(True)
             l.setStyleSheet(hint_style())
             layout.addWidget(l)
+            self._guide_labels.append(l)
         layout.addStretch()
         return home
+
+    def set_ui_mode(self, mode: str):
+        """新手模式显示科普/提示;专家模式隐藏"""
+        beginner = mode != "expert"
+        if hasattr(self, "guide_title"):
+            self.guide_title.setVisible(beginner)
+        for l in getattr(self, "_guide_labels", []):
+            l.setVisible(beginner)
+        if hasattr(self, "home_hint"):
+            self.home_hint.setVisible(beginner)
 
     # ---- 对外接口 ----
     def set_hooks(self, instance_dir, on_download, on_start_instance):

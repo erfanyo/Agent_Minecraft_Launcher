@@ -74,8 +74,22 @@ class SettingsDialog(QDialog):
         self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
         lang_hint = QLabel("切换语言后需重启启动器生效(检测系统语言:中文系统自动用中文)")
         lang_hint.setStyleSheet("color: #888888;")
+
+        # ---------- 界面模式(新手多提示 / 专家少提示) ----------
+        self.ui_mode_combo = QComboBox()
+        for label, value in (("新手(显示更多提示与科普)", "beginner"),
+                             ("专家(精简提示)", "expert")):
+            self.ui_mode_combo.addItem(label, value)
+        mode = settings.get("ui_mode", "beginner")
+        idx = self.ui_mode_combo.findData(mode)
+        self.ui_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        mode_hint = QLabel("新手模式:首页显示资源结构科普、更详细的状态提示;专家模式:全部隐藏/精简。")
+        mode_hint.setStyleSheet("color: #888888;")
+        mode_hint.setWordWrap(True)
+
         lang_form = QFormLayout()
         lang_form.addRow("界面语言:", self.language_combo)
+        lang_form.addRow("界面模式:", self.ui_mode_combo)
 
         # ---------- AI 区 ----------
         ai_title = QLabel("AI 助手")
@@ -89,6 +103,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(dir_hint)
         layout.addLayout(lang_form)
         layout.addWidget(lang_hint)
+        layout.addWidget(mode_hint)
         layout.addWidget(ai_title)
         layout.addWidget(self.ai_form)
         layout.addWidget(ai_hint)
@@ -113,6 +128,7 @@ class SettingsDialog(QDialog):
         self.settings["version_isolation"] = self.isolation_check.isChecked()
         self.settings["game_dir"] = self.game_dir_edit.text().strip()
         self.settings["language"] = self.language_combo.currentData()
+        self.settings["ui_mode"] = self.ui_mode_combo.currentData()
         self.settings.update(self.ai_form.values())
         save_settings(self.settings)
         i18n.set_language(self.settings["language"])
