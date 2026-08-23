@@ -220,31 +220,40 @@ class GrammarToolEngine:
         self.stop()
 
     # ---- 调用 ----
-    def _chat_prompt(self, user_text: str) -> str:
-        return ("<|im_start|>system\n" + self.system_prompt + "<|im_end|> \n"
+    def _chat_prompt(self, user_text: str, context: str = "") -> str:
+        system = self.system_prompt
+        if context:
+            system = system + "\n\n" + context
+        return ("<|im_start|>system\n" + system + "<|im_end|> \n"
                 f"<|im_start|>user\n{user_text}<|im_end|> \n"
                 "<|im_start|>assistant\n")
 
-    def tool_call(self, user_text: str, timeout: int = 120) -> dict:
+    def tool_call(self, user_text: str, timeout: int = 120, context: str = "") -> dict:
         """让模型输出一次工具调用,grammar 保证可解析。返回 {"name":..,"arguments":..}
-        若输出被截断/卡住(必填参数未填完),自动重试一次并提示补全。"""
+        context: 真实启动器上下文(如实例清单/设置),注入 system prompt(规划 §7.3 最轻量 RAG)。
+        若输出被截断/卡住(必填参数未填完),自动重试:
+          1. 把已输出的半截 JSON 作为前缀续写(模型只需补缺失字段,不从头重吐)
+          2. 仍失败则报错,上层落云端(§1.4)"""
         attempt = 0
+        last_content = ""
         while True:
-            prompt = self._chat_prompt(user_text)
-            if attempt > 0:
-                prompt = self._chat_prompt(
-                    user_text + "\n(上次输出不完整:arguments 缺少必填参数,请补全后再输出)")
-            body = {"prompt": prompt, "n_predict": 600,
+            if attempt == 0:
+                prompt = self._chat_prompt(user_text, context=context)
+            else:
+                # 续写:把上次半截输出拼进 prompt 末尾(模型接着补完,grammar 从当前位置继续约束)
+                prompt = (self._chat_prompt("", context=context).rstrip() + "\n" +
+                          last_content + "\n(继续:请补齐剩余必填参数后结束)")
+            body = {"prompt": prompt, "n_predict": 1024,
                     "temperature": 0.0, "stop": ["<|im_end|>", "</s>"],
                     "grammar": self.gbnf}
             r = requests.post(f"{self.base}/completion", json=body, timeout=timeout)
             r.raise_for_status()
-            content = r.json()["content"].strip()
+            last_content = r.json()["content"].strip()
             try:
-                return json.loads(content)
+                return json.loads(last_content)
             except json.JSONDecodeError:
-                if attempt >= 1:
-                    raise ValueError(f"grammar 输出解析失败:{content[:200]}")
+                if attempt >= 2:
+                    raise ValueError(f"grammar 输出解析失败:{last_content[:200]}")
                 attempt += 1
                 continue
 
@@ -252,15 +261,75 @@ class GrammarToolEngine:
         descs = "\n".join(f"- {n}:{d}" for n, d in TOOL_DESCRIPTIONS.items())
         return ("你是 Agent Minecraft 启动器的 AI 助手。需要调用工具时,只输出 JSON:"
                 '{"name": 工具名, "arguments": {参数}}。工具清单:\n' + descs +
-                "\n可用实例:neoforge-21.1.248, fabric-1.21.1, vanilla-1.20.1。"
-                "参数里需要实例 id 时从可用实例中选择。"
+                "\n参数里需要实例 id 时,从 system 提示的可用实例中选择;"
+                "没给出实例信息时,用 list_instances 先查。"
                 "**重要:arguments 必须包含该工具的全部必填参数,一个都不能少;"
                 "缺参数会导致调用失败,请确保输出完整后再结束。**")
+
+
+def build_launcher_context(game_dir: str = None) -> str:
+    """构建启动器真实上下文(规划 §7.3 最轻量 RAG):
+    已装实例清单 + 关键设置,注入本地模型的 system prompt,避免模型乱编实例 id。
+    无 GUI 依赖,CLI / 测试 / 前端共用。"""
+    lines = []
+    try:
+        from agent_tools import list_instances
+        insts = list_instances(game_dir)
+        lines.append(f"当前已安装实例:\n{insts}")
+    except Exception:
+        pass
+    try:
+        from settings import load_settings
+        s = load_settings()
+        lines.append(f"启动器设置:游戏名 {s.get('username', 'Player')},"
+                     f"内存 {s.get('memory_gb', 2)}G")
+    except Exception:
+        pass
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    # CLI 用法:
+    #   python local_ai.py              冒烟:6 条典型指令
+    #   python local_ai.py --regress    回归:31 条测试集(§7.4),模型/规则更新后自动跑(3 次平均,注入真实上下文)
+    if len(sys.argv) > 1 and sys.argv[1] == "--regress":
+        import ai_testset
+        runs = 3
+        if "--runs" in sys.argv:
+            try:
+                runs = int(sys.argv[sys.argv.index("--runs") + 1])
+            except (IndexError, ValueError):
+                pass
+        print(f"回归测试:{len(ai_testset.CASES)} 条用例 ×{runs} 次平均(注入真实上下文)…\n")
+        with GrammarToolEngine() as eng:
+            context = build_launcher_context()
+            per = {}
+            for _r in range(runs):
+                for case in ai_testset.CASES:
+                    try:
+                        call = eng.tool_call(case["user"], context=context)
+                        score = ai_testset.evaluate_output(
+                            case, call.get("name", ""), call.get("arguments", {}))
+                    except Exception as e:
+                        score = {"name_ok": 0.0, "args_score": 0.0,
+                                 "detail": f"FAIL {type(e).__name__}"}
+                    per.setdefault(case["id"], []).append(score)
+            name_hits = args_hits = total = 0
+            for case in ai_testset.CASES:
+                total += 1
+                sc = per[case["id"]]
+                n_ok = sum(x["name_ok"] for x in sc) / len(sc)
+                a_ok = sum(x["args_score"] for x in sc) / len(sc)
+                name_hits += n_ok
+                args_hits += a_ok
+                tag = "✓" if n_ok == 1.0 else "✗"
+                print(f"  {tag} {case['id']} 期望={case['expect_tool']} "
+                      f"name={n_ok:.2f} args={a_ok:.2f}")
+        print(f"\n回归汇总:工具名 {name_hits/total:.1%} 参数 {args_hits/total:.1%} "
+              f"综合 {(name_hits+args_hits)/(2*total):.1%}")
+        raise SystemExit
     cases = [
         "看看我有哪些实例",
         "给 neoforge-21.1.248 装 钠 和 锂 两个mod",

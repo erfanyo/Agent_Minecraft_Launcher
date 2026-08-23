@@ -1183,7 +1183,13 @@ class AIChatDock(QDockWidget):
         try:
             engine = self._get_local_engine()
             engine.start()   # 幂等:已启动则直接返回
-            call = engine.tool_call(text)
+            # 注入真实启动器上下文(§7.3 最轻量 RAG):实例清单 + 设置,避免模型乱编实例 id
+            try:
+                from local_ai import build_launcher_context
+                context = build_launcher_context()
+            except Exception:
+                context = ""
+            call = engine.tool_call(text, context=context)
             name = call.get("name", "")
             args = call.get("arguments", {})
             if not name:
