@@ -470,6 +470,64 @@ class AISettingsDialog(QDialog):
         super().accept()
 
 
+class SendWithRing(QWidget):
+    """发送按钮 + 外圈上下文占用环(表示方式与下载指示器一致):
+    发送按钮缩小居中,外圈环形显示上下文已用比例,绿→黄→红。"""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._used = 0
+        self._limit = 1
+        self._color = "#4CAF50"
+        self.setFixedSize(40, 40)
+        self.setToolTip("发送(Enter) | 上下文: 0%")
+        self.setStyleSheet("background: transparent;")
+        self.btn = QPushButton("↑", self)
+        self.btn.setFixedSize(26, 26)
+        self.btn.move(7, 7)
+        self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn.setStyleSheet(
+            "QPushButton{border-radius:13px; background:#3E7CB1; color:white;"
+            " font-size:15px; font-weight:bold; border:none;}"
+            "QPushButton:hover{background:#5B8DEF;}"
+            "QPushButton:pressed{background:#2E5A85;}")
+        self.btn.clicked.connect(self.clicked.emit)
+
+    def click(self):
+        self.btn.click()
+
+    def set_usage(self, used: int, limit: int):
+        self._used = max(used, 0)
+        self._limit = max(limit, 1)
+        ratio = min(1.0, self._used / self._limit)
+        if ratio < 0.6:
+            self._color = "#4CAF50"
+        elif ratio < 0.85:
+            self._color = "#F59E0B"
+        else:
+            self._color = "#E53935"
+        self.setToolTip(f"发送(Enter) | 上下文: 已用 {self._used:,} / "
+                        f"{self._limit:,} tokens ({ratio * 100:.0f}%)")
+        self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        # 背景环
+        p.setPen(QPen(QColor(190, 190, 190, 120), 2))
+        p.drawEllipse(rect)
+        # 上下文占用弧
+        ratio = min(1.0, self._used / self._limit)
+        if ratio > 0:
+            span = max(int(360 * ratio), 2)
+            p.setPen(QPen(QColor(self._color), 2, cap=Qt.PenCapStyle.RoundCap))
+            p.drawArc(rect, 90 * 16, -span * 16)
+        p.end()
+
+
 class _ChatInput(QPlainTextEdit):
     """AI 输入框:多行 + 自带滚动条,Enter 发送、Shift+Enter 换行;
     右下角内置圆形 ↑ 发送按钮 + 🛠 工具测试按钮 + 📷 图片按钮(挨着发送)。
@@ -485,15 +543,9 @@ class _ChatInput(QPlainTextEdit):
         super().__init__(parent)
         self.setMinimumHeight(56)
         self.setMaximumHeight(160)
-        self.send_btn = QPushButton("↑", self)
-        self.send_btn.setFixedSize(30, 30)
-        self.send_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # 发送按钮缩小居中,外圈环绕上下文占用环(与下载指示器同款表示)
+        self.send_btn = SendWithRing(self)
         self.send_btn.setToolTip("发送(Enter)")
-        self.send_btn.setStyleSheet(
-            "QPushButton{border-radius:15px; background:#3E7CB1; color:white;"
-            " font-size:16px; font-weight:bold; border:none;}"
-            "QPushButton:hover{background:#5B8DEF;}"
-            "QPushButton:pressed{background:#2E5A85;}")
         self.send_btn.clicked.connect(self.sendClicked.emit)
         # 工具测试:挨着发送按钮
         self.test_btn = QPushButton("🛠", self)
@@ -528,9 +580,9 @@ class _ChatInput(QPlainTextEdit):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 圆形按钮钉在输入框右下角(发送在最后,🛠 在它左边,📷 再左边,🖼 最左)
+        # 圆形按钮钉在输入框右下角(发送环在最后,🛠 在它左边,📷 再左边,🖼 最左)
         m = 6
-        bw = self.send_btn.width()
+        bw = self.send_btn.width()   # 发送环 40px(含外圈上下文环)
         self.send_btn.move(self.width() - bw - m, self.height() - bw - m)
         self.test_btn.move(self.width() - bw * 2 - m * 2, self.height() - bw - m)
         self.img_btn.move(self.width() - bw * 3 - m * 3, self.height() - bw - m)
@@ -615,20 +667,17 @@ class AIChatDock(QDockWidget):
         row = QHBoxLayout()
         row.addWidget(self.input, 1)
 
-        # 图片行:输入框上方 —— 左侧待发图片缩略图,右侧上下文占用圆环
+        # 图片行:输入框上方 —— 左侧待发图片缩略图(上下文环已移到发送按钮外圈)
         self.pending_images = []     # [{"path": ...}] 待发送的图片
         self._thumb_widgets = []     # 与 pending_images 一一对应的缩略图 widget
         self.thumb_row = QHBoxLayout()
         self.thumb_row.setContentsMargins(0, 0, 0, 0)
         self.thumb_row.setSpacing(6)
-        self.ctx_ring = ContextRing()
-        self.ctx_ring.set_usage(0, int(self.settings.get("context_window", 65536) or 65536))
         img_row_widget = QWidget()
         irl = QHBoxLayout(img_row_widget)
         irl.setContentsMargins(2, 2, 2, 0)
         irl.addLayout(self.thumb_row)
         irl.addStretch()
-        irl.addWidget(self.ctx_ring)
         self.img_row_widget = img_row_widget
 
         container = QWidget()
@@ -711,7 +760,7 @@ class AIChatDock(QDockWidget):
         self._update_ctx_ring()
 
     def _update_ctx_ring(self):
-        """按当前对话流估算已用上下文 tokens,更新圆环(绿→黄→红)"""
+        """按当前对话流估算已用上下文 tokens,更新发送按钮外圈的占用环(绿→黄→红)"""
         used = 0
         for e in self._entries:
             kind = e[0]
@@ -725,7 +774,7 @@ class AIChatDock(QDockWidget):
                 used += estimate_tokens(json.dumps(args, ensure_ascii=False))
                 used += estimate_tokens(result or "")
         limit = int(self.settings.get("context_window", 65536) or 65536)
-        self.ctx_ring.set_usage(used, limit)
+        self.input.send_btn.set_usage(used, limit)
 
     def _show_tool(self, name: str, args: dict, result: str):
         """把一次工具调用记入历史。结果太长默认折叠,点 [展开] 看全文。"""

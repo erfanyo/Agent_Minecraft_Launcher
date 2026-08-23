@@ -4,8 +4,8 @@
 - 下载中:显示并实时画进度弧
 - 点击:弹出下载详情对话框(本次下载的状态消息流 + 进度)
 """
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtCore import QPointF, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 
 class DownloadIndicator(QWidget):
-    """圆形下载按钮:中间 ⬇ 箭头,外圈环形进度条"""
+    """圆形下载按钮:中间向下箭头(矢量绘制),外圈环形进度条"""
 
     clicked = Signal()
 
@@ -52,17 +52,22 @@ class DownloadIndicator(QWidget):
         # 进度弧(从 12 点方向顺时针)
         if self._maximum > 0:
             ratio = max(0.0, min(1.0, self._value / self._maximum))
-            span = int(360 * ratio)
-            if span > 0:
+            span = max(int(360 * ratio), 2)   # 至少画 2°,小进度也能看见
+            if ratio > 0:
                 pen = QPen(QColor("#3E7CB1"), 4, cap=Qt.PenCapStyle.RoundCap)
                 p.setPen(pen)
                 p.drawArc(rect, 90 * 16, -span * 16)
-        # 中间 ⬇ 箭头
-        p.setPen(QPen(QColor("#3E7CB1"), 1))
-        font = p.font()
-        font.setPixelSize(17)
-        p.setFont(font)
-        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "⬇")
+        # 中间向下箭头(QPainter 矢量绘制,不依赖 emoji 字体,任何系统都正常显示)
+        cx = self.width() / 2
+        cy = self.height() / 2
+        arrow = QPolygonF([
+            QPointF(cx, cy + 7),
+            QPointF(cx - 6, cy - 1),
+            QPointF(cx + 6, cy - 1),
+        ])
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#3E7CB1"))
+        p.drawPolygon(arrow)
         p.end()
 
     def mousePressEvent(self, e):
