@@ -19,11 +19,12 @@ from datetime import datetime
 
 import requests
 
-from PySide6.QtCore import Qt, QSize, QTimer
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject, Qt, QSize, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -47,6 +48,8 @@ from PySide6.QtWidgets import (
 )
 
 from downloader import download_with_mirror  # 下载工具:镜像 + 进度 + sha1 校验
+import updater  # 自动更新(检查 GitHub 新版本 / 下载 / 替换)
+from bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
 from assistant import AIChatDock, permission_instructions  # AI 助手(右侧停靠对话栏)
 from download_indicator import DownloadDetailDialog, DownloadIndicator  # 左下角下载指示器
 from download_tab import DownloadTab  # 下载新实例选项卡(左侧菜单 + 分类面板)
@@ -82,6 +85,135 @@ RECOMMENDED_MODS = [
 def _legacy_scan(game_dir: str = GAME_DIR) -> list:
     """兼容别名:scan_instances 已移到 instances.py"""
     return scan_instances(game_dir)
+
+
+class _UpdateSignals(QObject):
+    checked = Signal()        # 版本检查完成(主线程刷新界面)
+    progress = Signal(int, int)
+    downloaded = Signal()
+    failed = Signal(str)
+
+
+class UpdateDialog(QDialog):
+    """检查更新:AMCL 启动器 + bridge-mod(从 GitHub Releases 拉取)"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("检查更新", "Check for Updates"))
+        self.setMinimumWidth(440)
+        self.sig = _UpdateSignals()
+        self.sig.checked.connect(self._refresh)
+        self.sig.progress.connect(self._on_progress)
+        self.sig.downloaded.connect(self._on_downloaded)
+        self.sig.failed.connect(self._on_failed)
+        self.result = {"launcher": None, "bridge": None, "error": ""}
+
+        self.launcher_label = QLabel("AMCL 启动器: 正在检查...")
+        self.bridge_label = QLabel("bridge-mod: 正在检查...")
+        self.launcher_btn = QPushButton(t("下载并更新", "Download & Update"))
+        self.launcher_btn.setVisible(False)
+        self.launcher_btn.clicked.connect(self._do_launcher_update)
+        self.bridge_btn = QPushButton(t("查看发布页", "Open Release Page"))
+        self.bridge_btn.setVisible(False)
+        self.bridge_btn.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl(updater.RELEASES_API)))
+        close_btn = QPushButton(t("关闭", "Close"))
+        close_btn.clicked.connect(self.accept)
+
+        row = QHBoxLayout()
+        row.addWidget(close_btn)
+        row.addStretch()
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(t("AMCL 启动器", "AMCL Launcher")))
+        layout.addWidget(self.launcher_label)
+        layout.addWidget(self.launcher_btn)
+        layout.addSpacing(10)
+        layout.addWidget(QLabel(t("bridge-mod(游戏内指令口 / 数据导出)", "bridge-mod")))
+        layout.addWidget(self.bridge_label)
+        layout.addWidget(self.bridge_btn)
+        layout.addSpacing(10)
+        layout.addLayout(row)
+
+        threading.Thread(target=self._check, daemon=True).start()
+
+    def _check(self):
+        try:
+            self.result["launcher"] = updater.check_launcher_update()
+            self.result["bridge"] = updater.check_bridge_mod_update()
+        except Exception as e:
+            self.result["error"] = str(e)
+        self.sig.checked.emit()
+
+    def _refresh(self):
+        err = self.result.get("error")
+        if err:
+            self.launcher_label.setText(f"检查失败: {err[:120]}")
+            self.bridge_label.setText("—")
+            return
+        # AMCL
+        upd = self.result.get("launcher")
+        cur = updater.VERSION
+        if upd:
+            new_ver = upd["version"]
+            if updater.parse_version(new_ver) <= updater.parse_version(cur):
+                self.launcher_label.setText(f"AMCL 启动器: 已是最新 (v{cur}) ✅")
+            else:
+                self.launcher_label.setText(
+                    f"AMCL 启动器: 当前 v{cur} → 发现新版本 {new_ver}")
+                self.launcher_btn.setVisible(True)
+        else:
+            self.launcher_label.setText(
+                f"AMCL 启动器: 当前 v{cur}(未能获取最新版本,请检查网络)")
+        # bridge-mod
+        br = self.result.get("bridge")
+        if br:
+            self.bridge_label.setText(
+                f"bridge-mod: 本地 {BRIDGE_MOD_VERSION} → GitHub {br['version']}")
+            self.bridge_btn.setVisible(True)
+        else:
+            self.bridge_label.setText(
+                f"bridge-mod: 本地 {BRIDGE_MOD_VERSION}(未能获取最新版本)")
+
+    def _do_launcher_update(self):
+        info = self.result.get("launcher")
+        if not info:
+            return
+        self.launcher_btn.setEnabled(False)
+        self.launcher_btn.setText("下载中 0%")
+        exe_path = (sys.executable if getattr(sys, "frozen", False)
+                    else os.path.join(paths.BASE_DIR, updater.LAUNCHER_ASSET))
+        update_dir = os.path.join(paths.BASE_DIR, "AMCL", "update")
+        new_exe = os.path.join(update_dir, updater.LAUNCHER_ASSET)
+        threading.Thread(target=self._download_and_apply,
+                         args=(info["url"], new_exe, exe_path),
+                         daemon=True).start()
+
+    def _download_and_apply(self, url, new_exe, exe_path):
+        try:
+            updater.download_to(url, new_exe, progress_callback=self.sig.progress.emit)
+            bat = os.path.join(os.path.dirname(new_exe), "update.bat")
+            updater.make_update_bat(exe_path, new_exe, bat)
+            updater.run_update_bat(bat)
+            self.sig.downloaded.emit()
+        except Exception as e:
+            self.sig.failed.emit(str(e))
+
+    def _on_progress(self, done, total):
+        pct = int(done * 100 / total) if total else 0
+        self.launcher_btn.setText(f"下载中 {pct}%")
+
+    def _on_downloaded(self):
+        QMessageBox.information(
+            self, t("更新", "Update"),
+            t("新版本已下载,程序将退出并自动替换重启。", "Update downloaded; the app will restart."))
+        QTimer.singleShot(300, QApplication.instance().quit)
+
+    def _on_failed(self, msg):
+        self.launcher_btn.setEnabled(True)
+        self.launcher_btn.setText(t("下载并更新", "Download & Update"))
+        QMessageBox.warning(self, t("更新失败", "Update Failed"),
+                            f"下载/替换失败:{msg[:200]}")
 
 
 class MainWindow(QMainWindow):
@@ -134,6 +266,10 @@ class MainWindow(QMainWindow):
         self._ai_show_action.toggled.connect(self._toggle_ai)
         # AI 设置入口已移除(进设置对话框);技能管理入口已移到 AI 子窗口顶部;
         # 「发送游戏指令…」入口已隐藏:由指令中心 skill 与 bridge-mod 的新通道替代
+
+        # ---- 帮助:检查更新(AMCL 启动器 + bridge-mod) ----
+        help_menu = menubar.addMenu(t("帮助", "Help"))
+        help_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
 
         # ---- 联机方案中心(灵感 #2):按场景推荐联机方案 ----
         online_menu = menubar.addMenu(t("联机", "Multiplayer"))
@@ -379,6 +515,11 @@ class MainWindow(QMainWindow):
             self.skill_mgr.settings = dlg.settings   # 技能启停状态同步
             self.refresh_instances()   # 游戏目录可能被改了,重新扫描
             self.statusBar().showMessage("设置已保存")
+
+    def open_update_dialog(self):
+        """帮助 → 检查更新:AMCL 启动器 + bridge-mod"""
+        dlg = UpdateDialog(self)
+        dlg.exec()
 
     # ---- AI 助手 ----
     def _toggle_ai(self, checked: bool):

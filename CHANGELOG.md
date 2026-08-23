@@ -10,6 +10,13 @@
 
 首个公开版本。AI 助手型启动器,面向社区/朋友尝鲜。
 
+### 📦 自动更新
+- 帮助 → 检查更新:对比 GitHub Releases,发现新版本可一键下载并自动替换重启
+- 同时检查 bridge-mod 的发布情况
+- **发版规范**:AMCL 每次发版打 `vX.Y.Z` tag + Release(附 `AgentMinecraftLauncher.exe`);
+  bridge-mod 单独 tag(如 `v0.1.0`),附 `agentmc-bridge-fabric/neoforge-*.jar` 资产
+  —— 启动器的"检查更新"靠这个规范工作
+
 ### 🚀 新增(AI 助手)
 - AI 停靠面板:与 DeepSeek / Ollama / LM Studio 对话,工具调用驱动操作
 - **工具调用**:列出/搜索实例与 Mod、读日志与崩溃报告、装 Mod、建实例、备份、改设置、

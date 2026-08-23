@@ -125,6 +125,13 @@ python cli.py log neoforge-21.1.248
 
 见 [CHANGELOG.md](CHANGELOG.md)。
 
+## 🔄 自动更新
+
+启动器内置更新检查(**帮助 → 检查更新**):从 GitHub Releases 拉取最新版本对比,
+发现新版可一键下载并自动替换重启;同时显示 bridge-mod 的发布情况。
+**发版规范**:AMCL 打 `vX.Y.Z` tag + Release(附 `AgentMinecraftLauncher.exe`);
+bridge-mod 单独 tag(如 `v0.1.0`),附 `agentmc-bridge-fabric/neoforge-*.jar` 资产。
+
 ## 📜 规划
 
 后续规划见 [ROADMAP.md](ROADMAP.md)(配方数据新鲜度、直接读 mod jar 配方、MCP server、崩溃日志分析技能等)。
