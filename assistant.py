@@ -272,7 +272,9 @@ class ContextRing(QWidget):
         ratio = min(1.0, self._used / self._limit)
         if ratio > 0:
             span = int(360 * ratio)
-            p.setPen(QPen(QColor(self._color), 3, cap=Qt.PenCapStyle.RoundCap))
+            pen = QPen(QColor(self._color), 3)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
             p.drawArc(rect, 90 * 16, -span * 16)
         # 中心百分比
         p.setPen(QColor(self._color))
@@ -525,7 +527,9 @@ class SendWithRing(QWidget):
         ratio = min(1.0, self._used / self._limit)
         if ratio > 0:
             span = max(int(360 * ratio), 2)
-            p.setPen(QPen(QColor(self._color), 2, cap=Qt.PenCapStyle.RoundCap))
+            pen = QPen(QColor(self._color), 2)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            p.setPen(pen)
             p.drawArc(rect, 90 * 16, -span * 16)
         p.end()
 

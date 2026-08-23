@@ -54,7 +54,8 @@ class DownloadIndicator(QWidget):
             ratio = max(0.0, min(1.0, self._value / self._maximum))
             span = max(int(360 * ratio), 2)   # 至少画 2°,小进度也能看见
             if ratio > 0:
-                pen = QPen(QColor("#3E7CB1"), 4, cap=Qt.PenCapStyle.RoundCap)
+                pen = QPen(QColor("#3E7CB1"), 4)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 p.setPen(pen)
                 p.drawArc(rect, 90 * 16, -span * 16)
         # 中间向下箭头(QPainter 矢量绘制,不依赖 emoji 字体,任何系统都正常显示)
