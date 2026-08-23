@@ -551,6 +551,15 @@ class AISettingsForm(QWidget):
         ll.addWidget(self.local_mode)
         ll.addWidget(self.local_builtin_row)
         ll.addWidget(self.local_server_row)
+        self.local_explainer = QLabel(
+            "内置本地模型怎么工作?\n"
+            "- 简单指令(装 Mod / 查配方 / 改设置 / 看日志)→ 本地模型直接处理,离线可用;\n"
+            "- 固定问答(怎么下载 / 怎么联机)→ 内置规则库直接回答,最快;\n"
+            "- 复杂任务(深度诊断 / 代码分析 / 多步规划)→ 超出本地模型能力,需要联网的云端模型,\n"
+            "  会提示你切换到云端服务(如 DeepSeek),或用本地能处理的方式重新提问。")
+        self.local_explainer.setWordWrap(True)
+        self.local_explainer.setStyleSheet("color: #888888;")
+        ll.addWidget(self.local_explainer)
 
         # ---------- 通用 ----------
         self.permission = QComboBox()
