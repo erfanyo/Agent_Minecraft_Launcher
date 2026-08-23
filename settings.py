@@ -24,6 +24,7 @@ DEFAULTS = {
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
     "ai_permission": "readonly",   # AI 文件权限:readonly / workspace_write
+    "context_window": 65536,       # AI 上下文窗口上限(tokens),DeepSeek-chat 为 64K
 }
 
 

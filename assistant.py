@@ -6,24 +6,38 @@ AI 助手:停靠在主窗口右侧的对话栏(类似 VS Code 的 AI 侧栏)。
 - 对话在后台线程跑,回复经信号回到主线程,不卡界面
 - 主窗口通过 ai_context() 提供上下文(选中的实例、启动器设置等)作为系统提示
 """
+import base64
 import html
 import json
+import mimetypes
+import os
+import tempfile
 import threading
 
 import requests
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QTextCursor
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDockWidget,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -205,6 +219,64 @@ def _esc(text: str) -> str:
     return html.escape(text).replace("\n", "<br>")
 
 
+def estimate_tokens(text: str) -> int:
+    """近似估算 token 数:中文≈1字/token,英文≈4字符/token,再算消息开销。
+    只用于上下文占用环的显示,不追求精确(不引入分词库)。"""
+    if not text:
+        return 4
+    cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
+    other = len(text) - cjk
+    return max(1, cjk + other // 4) + 4
+
+
+class ContextRing(QWidget):
+    """小圆环:显示上下文占用比例(绿→黄→红),悬停显示具体数字。
+    样式与下载指示器(DownloadIndicator)一致,只是更小、中心显示百分比。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._used = 0
+        self._limit = 1
+        self._color = "#4CAF50"
+        self.setFixedSize(30, 30)
+        self.setToolTip("上下文占用")
+        self.setStyleSheet("background: transparent;")
+
+    def set_usage(self, used: int, limit: int):
+        self._used = max(used, 0)
+        self._limit = max(limit, 1)
+        ratio = min(1.0, self._used / self._limit)
+        if ratio < 0.6:
+            self._color = "#4CAF50"
+        elif ratio < 0.85:
+            self._color = "#F59E0B"
+        else:
+            self._color = "#E53935"
+        self.setToolTip(f"上下文: 已用 {self._used:,} / {self._limit:,} tokens ({ratio * 100:.0f}%)")
+        self.update()
+
+    def paintEvent(self, _e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(2, 2, -2, -2)
+        # 背景环
+        p.setPen(QPen(QColor(190, 190, 190, 120), 3))
+        p.drawEllipse(rect)
+        # 占用弧(从 12 点方向顺时针)
+        ratio = min(1.0, self._used / self._limit)
+        if ratio > 0:
+            span = int(360 * ratio)
+            p.setPen(QPen(QColor(self._color), 3, cap=Qt.PenCapStyle.RoundCap))
+            p.drawArc(rect, 90 * 16, -span * 16)
+        # 中心百分比
+        p.setPen(QColor(self._color))
+        font = p.font()
+        font.setPixelSize(7)
+        p.setFont(font)
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, f"{ratio * 100:.0f}%")
+        p.end()
+
+
 class AISettingsForm(QWidget):
     """AI 服务设置表单(可嵌入对话框 / 首次引导页):服务商 / 接口 / 密钥 / 模型 / 权限"""
 
@@ -225,6 +297,12 @@ class AISettingsForm(QWidget):
         cur = settings.get("ai_permission", "readonly")
         idx = self.permission.findData(cur)
         self.permission.setCurrentIndex(idx if idx >= 0 else 0)
+        self.context_window = QSpinBox()
+        self.context_window.setRange(1000, 1000000)
+        self.context_window.setSingleStep(1024)
+        self.context_window.setValue(int(settings.get("context_window", 65536) or 65536))
+        self.context_window.setSuffix(" tokens")
+        self.context_window.setToolTip("模型上下文窗口上限,用于对话框里的占用圆环显示")
 
         form = QFormLayout(self)
         form.addRow("服务:", self.provider)
@@ -232,6 +310,7 @@ class AISettingsForm(QWidget):
         form.addRow("API 密钥:", self.api_key)
         form.addRow("模型:", self.model)
         form.addRow("文件权限:", self.permission)
+        form.addRow("上下文窗口:", self.context_window)
 
         self.provider.currentIndexChanged.connect(self._fill_defaults)
         self._fill_defaults()
@@ -257,6 +336,7 @@ class AISettingsForm(QWidget):
             "ai_api_key": self.api_key.text().strip(),
             "ai_model": self.model.text().strip(),
             "ai_permission": self.permission.currentData(),
+            "context_window": self.context_window.value(),
         }
 
 
@@ -276,6 +356,7 @@ class AISettingsDialog(QDialog):
         self.api_key = self.form.api_key
         self.model = self.form.model
         self.permission = self.form.permission
+        self.context_window = self.form.context_window
 
         hint = QLabel("DeepSeek 需要 API key(platform.deepseek.com 申请,极便宜);\n"
                       "Ollama / LM Studio 都是本地 llama.cpp,无需密钥:\n"
@@ -301,11 +382,13 @@ class AISettingsDialog(QDialog):
 
 class _ChatInput(QPlainTextEdit):
     """AI 输入框:多行 + 自带滚动条,Enter 发送、Shift+Enter 换行;
-    右下角内置圆形 ↑ 发送按钮 + 🛠 工具测试按钮(挨着发送)。
-    兼容旧 QLineEdit 接口(setText/text),方便测试与外部代码。"""
+    右下角内置圆形 ↑ 发送按钮 + 🛠 工具测试按钮 + 📷 图片按钮(挨着发送)。
+    支持粘贴图片(触发 imagePasted)。兼容旧 QLineEdit 接口(setText/text),方便测试与外部代码。"""
     returnPressed = Signal()
     sendClicked = Signal()
     testClicked = Signal()
+    imageClicked = Signal()
+    imagePasted = Signal(QImage)   # 从剪贴板粘贴了图片
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -331,14 +414,34 @@ class _ChatInput(QPlainTextEdit):
             " font-size:14px; border:none;}"
             "QPushButton:hover{background:rgba(128,128,128,160);}")
         self.test_btn.clicked.connect(self.testClicked.emit)
+        # 图片:挨着 🛠(最左边),也支持 Ctrl+V 粘贴
+        self.img_btn = QPushButton("📷", self)
+        self.img_btn.setFixedSize(30, 30)
+        self.img_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.img_btn.setToolTip("添加图片(也支持 Ctrl+V 粘贴截图)")
+        self.img_btn.setStyleSheet(
+            "QPushButton{border-radius:15px; background:rgba(128,128,128,90);"
+            " font-size:14px; border:none;}"
+            "QPushButton:hover{background:rgba(128,128,128,160);}")
+        self.img_btn.clicked.connect(self.imageClicked.emit)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 圆形按钮钉在输入框右下角(发送在最后,🛠 在它左边)
+        # 圆形按钮钉在输入框右下角(发送在最后,🛠 在它左边,📷 再左边)
         m = 6
         bw = self.send_btn.width()
         self.send_btn.move(self.width() - bw - m, self.height() - bw - m)
         self.test_btn.move(self.width() - bw * 2 - m * 2, self.height() - bw - m)
+        self.img_btn.move(self.width() - bw * 3 - m * 3, self.height() - bw - m)
+
+    def canInsertFromMimeData(self, source):
+        return source.hasImage() or super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source):
+        if source.hasImage():
+            self.imagePasted.emit(source.imageData())
+            return
+        super().insertFromMimeData(source)
 
     def keyPressEvent(self, e):
         if (e.key() == Qt.Key.Key_Return or e.key() == Qt.Key.Key_Enter) \
@@ -373,10 +476,12 @@ class AIChatDock(QDockWidget):
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
         self.input = _ChatInput()
-        self.input.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行)")
+        self.input.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)")
         self.input.returnPressed.connect(self.send)
         self.input.sendClicked.connect(self.send)
         self.input.testClicked.connect(self.self_test_tools)   # 🛠 已移进输入框,挨着发送
+        self.input.imageClicked.connect(self._pick_images)
+        self.input.imagePasted.connect(self._add_image_data)
         # 浮动/停靠使用 QDockWidget 标题栏右上角自带的浮动按钮(与系统行为整合)
 
         # 顶部:技能管理入口(相对靠上,一眼可见)
@@ -407,11 +512,28 @@ class AIChatDock(QDockWidget):
         row = QHBoxLayout()
         row.addWidget(self.input, 1)
 
+        # 图片行:输入框上方 —— 左侧待发图片缩略图,右侧上下文占用圆环
+        self.pending_images = []     # [{"path": ...}] 待发送的图片
+        self._thumb_widgets = []     # 与 pending_images 一一对应的缩略图 widget
+        self.thumb_row = QHBoxLayout()
+        self.thumb_row.setContentsMargins(0, 0, 0, 0)
+        self.thumb_row.setSpacing(6)
+        self.ctx_ring = ContextRing()
+        self.ctx_ring.set_usage(0, int(self.settings.get("context_window", 65536) or 65536))
+        img_row_widget = QWidget()
+        irl = QHBoxLayout(img_row_widget)
+        irl.setContentsMargins(2, 2, 2, 0)
+        irl.addLayout(self.thumb_row)
+        irl.addStretch()
+        irl.addWidget(self.ctx_ring)
+        self.img_row_widget = img_row_widget
+
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.addLayout(top_row)          # 顶部:技能管理入口
         layout.addWidget(self.history, 1)   # 历史区上下弹性伸缩
         layout.addLayout(perm_row)
+        layout.addWidget(self.img_row_widget)   # 图片缩略图 + 上下文环
         layout.addLayout(row)
         self.setWidget(container)
         self.setMinimumWidth(320)
@@ -483,12 +605,99 @@ class AIChatDock(QDockWidget):
                         f'<p style="color:#888888;">🔧 工具 {name}({_esc(args_text)})'
                         f'<br>&nbsp;&nbsp;→ {_esc(preview)} '
                         f'<a href="tool:{tid}">[展开]</a></p>')
+        self._update_ctx_ring()
+
+    def _update_ctx_ring(self):
+        """按当前对话流估算已用上下文 tokens,更新圆环(绿→黄→红)"""
+        used = 0
+        for e in self._entries:
+            kind = e[0]
+            if kind == "system":
+                used += estimate_tokens(e[1])
+            elif kind in ("user", "ai"):
+                used += estimate_tokens(e[1])
+            elif kind == "tool":
+                _k, _tid, name, args, result = e
+                used += estimate_tokens(name)
+                used += estimate_tokens(json.dumps(args, ensure_ascii=False))
+                used += estimate_tokens(result or "")
+        limit = int(self.settings.get("context_window", 65536) or 65536)
+        self.ctx_ring.set_usage(used, limit)
 
     def _show_tool(self, name: str, args: dict, result: str):
         """把一次工具调用记入历史。结果太长默认折叠,点 [展开] 看全文。"""
         self._tool_id += 1
         self._entries.append(("tool", self._tool_id, name, args, result))
         self._render_all()
+
+    # ---- 图片输入 ----
+    def _pick_images(self):
+        """📷 按钮:打开文件选择框,可多选图片"""
+        paths, _f = QFileDialog.getOpenFileNames(
+            self, "添加图片", "",
+            "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp);;所有文件 (*)")
+        for p in paths:
+            self._add_image_path(p)
+
+    def _add_image_data(self, img: QImage):
+        """从剪贴板粘贴的图片:存成临时 png 再走统一添加流程"""
+        if img.isNull():
+            return
+        fd, tmp = tempfile.mkstemp(suffix=".png", prefix="aml_img_")
+        os.close(fd)
+        if img.save(tmp, "PNG"):
+            self._add_image_path(tmp)
+
+    def _add_image_path(self, path: str):
+        if not path or not os.path.isfile(path):
+            return
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        if size > 8 * 1024 * 1024:
+            self._append_system(f"⚠️ 图片超过 8MB,未添加:{os.path.basename(path)}")
+            return
+        ext = os.path.splitext(path)[1].lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
+            self._append_system(f"⚠️ 不支持的图片格式:{ext or '(无扩展名)'},支持 png/jpg/webp/gif/bmp")
+            return
+        self.pending_images.append({"path": path})
+        self._rebuild_thumb_row()
+        self._append_system(f"📷 已添加图片:{os.path.basename(path)}(发送时随问题一起发给 AI)")
+
+    def _rebuild_thumb_row(self):
+        """重建缩略图列表(每张图 42px 缩略图 + 右上角 × 删除)"""
+        for w in self._thumb_widgets:
+            w.deleteLater()
+        self._thumb_widgets = []
+        for i, item in enumerate(self.pending_images):
+            wrap = QWidget()
+            hl = QHBoxLayout(wrap)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(2)
+            thumb = QLabel()
+            pix = QPixmap(item["path"])
+            thumb.setPixmap(pix.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation))
+            thumb.setFixedSize(42, 42)
+            thumb.setStyleSheet("border:1px solid #888; border-radius:3px;")
+            thumb.setToolTip(os.path.basename(item["path"]))
+            x = QPushButton("×")
+            x.setFixedSize(16, 16)
+            x.setStyleSheet("QPushButton{background:#E53935;color:white;border:none;"
+                            "border-radius:8px;font-size:10px;font-weight:bold;}")
+            x.setToolTip("移除这张图片")
+            x.clicked.connect(lambda _c, idx=i: self._remove_image(idx))
+            hl.addWidget(thumb)
+            hl.addWidget(x)
+            self.thumb_row.addWidget(wrap)
+            self._thumb_widgets.append(wrap)
+
+    def _remove_image(self, idx: int):
+        if 0 <= idx < len(self.pending_images):
+            self.pending_images.pop(idx)
+            self._rebuild_thumb_row()
 
     def _on_anchor(self, url: QUrl):
         """点击对话流里的链接:tool:N 展开/收起工具结果;http(s) 用系统浏览器打开"""
@@ -514,7 +723,8 @@ class AIChatDock(QDockWidget):
 
     def send(self):
         text = self.input.text().strip()
-        if not text:
+        images = list(self.pending_images)
+        if not text and not images:
             return
         self.input.clear()
         if text.startswith("/"):
@@ -523,11 +733,30 @@ class AIChatDock(QDockWidget):
             result = send_command(text, self.main)
             self._append_system(f"🎮 {result}")
             return
-        self._append_user(text)
+        self._append_user(text + (f"  [📷×{len(images)}]" if images else ""))
         self._append_system("⏳ 正在请求 AI...")
+        # 无图片时 content 保持纯字符串(省 token、兼容老接口);有图片才用多模态 list
+        # (OpenAI 兼容 data URL 格式;模型不支持视觉会报错提示)
+        content = text
+        if images:
+            content = []
+            if text:
+                content.append({"type": "text", "text": text})
+            for item in images:
+                try:
+                    with open(item["path"], "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode()
+                except OSError as e:
+                    self._append_system(f"⚠️ 读取图片失败:{os.path.basename(item['path'])} ({e})")
+                    continue
+                mime = mimetypes.guess_type(item["path"])[0] or "image/png"
+                content.append({"type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{b64}"}})
+        self.pending_images = []
+        self._rebuild_thumb_row()
         messages = [
             {"role": "system", "content": self.main.ai_context()},
-            {"role": "user", "content": text},
+            {"role": "user", "content": content},
         ]
         s = self.settings
         executor = build_executor(s)
