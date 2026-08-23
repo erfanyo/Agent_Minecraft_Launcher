@@ -117,14 +117,16 @@ TOOLS = [
           ["instance", "query"]),
     _tool("get_recipe_path", "查询物品合成配方,支持中文名(如 终极感应供应器)。"
           "默认返回精简版(只列直接配方一层,省 token);需要完整套娃展开时把 brief 设为 false,"
-          "会返回合成树(每步标注用哪台机器/加工设备)+材料总账。"
+          "会返回 EMI 风格结果:该物品的全部合成方式(工作台/熔炉/机器等,recipe_index 可切换展开第 N 种)"
+          "+ 合成树(每步标注用哪台机器/加工设备)+ 材料总账。"
           "instance 可选,缺省自动用最新导出的配方数据。"
           "注意:若返回开头是『还没有…配方数据』,说明该实例没进过游戏导出配方,"
           "不要反复试其他工具,直接告诉用户:启动对应实例进一次世界即可(bridge-mod 会自动导出)",
           {"item": {"type": "string", "description": "物品名,支持中文/英文/id,如 终极感应供应器 或 mekanism:ultimate_induction_provider"},
            "count": {"type": "integer", "description": "要合成几个,默认 1"},
            "instance": {"type": "string", "description": "实例 id(可选;不传自动用最新数据)"},
-           "brief": {"type": "boolean", "description": "true=精简(默认), false=完整套娃展开+材料总账"}},
+           "brief": {"type": "boolean", "description": "true=精简(默认), false=完整配方+合成树+材料总账"},
+           "recipe_index": {"type": "integer", "description": "用第几种配方展开(0=第一种,默认 0);完整结果会列出全部配方供选择"}},
           ["item"]),
     _tool("compare_items", "比较物品参数(武器伤害/护甲/护甲韧性/攻速/挖掘等级),返回最强的 N 个",
           {"attribute": {"type": "string", "description": "武器伤害 / 护甲 / 挖掘等级 等"},

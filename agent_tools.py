@@ -225,10 +225,13 @@ def get_key_bindings(instance: str, query: str, game_dir: str = None) -> str:
 
 
 def get_recipe_path(item: str, count: int = 1, instance: str = None,
-                    game_dir: str = None, brief: bool = True) -> str:
+                    game_dir: str = None, brief: bool = True,
+                    recipe_index: int = 0) -> str:
     """查询合成配方。默认返回精简版(只列直接配方一层,省 token);
-    brief=False 时返回套娃展开的完整合成树(每步标注机器) + 材料总账。
-    item 支持中文名(如 终极感应供应器)。instance 缺省时自动用最新导出的数据。"""
+    brief=False 时返回 EMI 风格完整配方:先列出该物品全部合成方式
+    (工作台/熔炉/机器,recipe_index 选第 N 种,默认第 1 种),
+    再套娃展开合成树 + 材料总账。item 支持中文名(如 终极感应供应器)。
+    instance 缺省时自动用最新导出的数据。"""
     import recipe_graph
     gd = _gd(game_dir)
     rd = recipe_graph.load_bridge_data(gd, instance)
@@ -245,7 +248,7 @@ def get_recipe_path(item: str, count: int = 1, instance: str = None,
     head = f"【数据:{rd.source_instance},导出于 {rd.exported_at}】\n"
     if brief:
         return head + rd.quick_recipe(item)
-    return head + rd.describe_full(item, count)
+    return head + rd.describe_recipe(item, count, recipe_index=recipe_index)
 
 
 def compare_items(attribute: str, top_n: int = 10, game_dir: str = None) -> str:

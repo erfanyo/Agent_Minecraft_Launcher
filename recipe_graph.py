@@ -64,6 +64,40 @@ MACHINE_CN = {
 # 语言 key 前缀 → 物品 id 解析(如 item.mekanism.alloy_atomic → mekanism:alloy_atomic)
 _LANG_PREFIXES = ("item.", "block.")
 
+# Minecraft 自带基础物品的中文名兜底表:minecraft.jar 不在实例 mods 目录,
+# 语言文件扫不到,这里内置一份常用表(mod 有翻译时会被覆盖)
+MC_CN_ITEMS = {
+    "minecraft:gold_ingot": "金锭", "minecraft:iron_ingot": "铁锭",
+    "minecraft:copper_ingot": "铜锭", "minecraft:netherite_ingot": "下界合金锭",
+    "minecraft:diamond": "钻石", "minecraft:emerald": "绿宝石",
+    "minecraft:coal": "煤炭", "minecraft:charcoal": "木炭",
+    "minecraft:redstone": "红石粉", "minecraft:lapis_lazuli": "青金石",
+    "minecraft:stick": "木棍", "minecraft:planks": "木板",
+    "minecraft:oak_planks": "橡木木板", "minecraft:oak_log": "橡木原木",
+    "minecraft:stone": "石头", "minecraft:cobblestone": "圆石",
+    "minecraft:obsidian": "黑曜石", "minecraft:sand": "沙子",
+    "minecraft:glass": "玻璃", "minecraft:crafting_table": "工作台",
+    "minecraft:furnace": "熔炉", "minecraft:chest": "箱子",
+    "minecraft:gold_ore": "金矿石", "minecraft:iron_ore": "铁矿石",
+    "minecraft:deepslate_gold_ore": "深层金矿石",
+    "minecraft:deepslate_iron_ore": "深层铁矿石",
+    "minecraft:coal_ore": "煤矿石", "minecraft:diamond_ore": "钻石矿石",
+    "minecraft:raw_gold": "粗金", "minecraft:raw_iron": "粗铁",
+    "minecraft:raw_gold_block": "粗金块", "minecraft:raw_iron_block": "粗铁块",
+    "minecraft:gold_block": "金块", "minecraft:iron_block": "铁块",
+    "minecraft:diamond_block": "钻石块", "minecraft:gold_nugget": "金粒",
+    "minecraft:iron_nugget": "铁粒", "minecraft:netherite_scrap": "下界合金碎片",
+    "minecraft:nether_gold_ore": "下界金矿石",
+    "minecraft:apple": "苹果", "minecraft:bread": "面包",
+    "minecraft:string": "线", "minecraft:leather": "皮革",
+    "minecraft:feather": "羽毛", "minecraft:gunpowder": "火药",
+    "minecraft:paper": "纸", "minecraft:book": "书",
+    "minecraft:ender_pearl": "末影珍珠", "minecraft:blaze_rod": "烈焰棒",
+    "minecraft:bone": "骨头", "minecraft:arrow": "箭",
+    "minecraft:bow": "弓", "minecraft:diamond_pickaxe": "钻石镐",
+    "minecraft:iron_pickaxe": "铁镐", "minecraft:diamond_sword": "钻石剑",
+}
+
 
 def _lang_key_to_item(key: str) -> str | None:
     """把语言文件 key(item.<ns>.<path> 或 block.<ns>.<path>)转成物品 id"""
@@ -103,7 +137,9 @@ def build_zh_index(mods_dir: str) -> tuple:
     sig = _mods_signature(mods_dir)
     if mods_dir in _zh_cache and _zh_cache[mods_dir][0] == sig:
         return _zh_cache[mods_dir][1]
-    zh_to_id, en_to_id, id_to_zh = {}, {}, {}
+    zh_to_id = {v: k for k, v in MC_CN_ITEMS.items()}
+    id_to_zh = dict(MC_CN_ITEMS)
+    en_to_id = {}
     if os.path.isdir(mods_dir):
         try:
             files = sorted(os.listdir(mods_dir))
@@ -279,17 +315,55 @@ class RecipeData:
                                   len(nonempty(r))))
         return cands[0]
 
-    # ---------- 完整合成树 + 材料总账 ----------
-    def describe_full(self, item: str, count: int = 1, max_lines: int = 45) -> str:
-        """完整套娃展开:合成树(每步标注机器/加工设备)+ 材料总账。
+    def recipes_for(self, item: str) -> list:
+        """物品的所有配方(EMI 风格:一个物品可能工作台/熔炉/机器都能做,全部列出)。
+        返回 [{machine, type, ingredients:[显示文本], recipe}] 按"非拆块/非空/原料少"排序。"""
+        target = self.resolve_item(item)
+        if target is None:
+            return []
+        cands = self.by_output.get(target) or []
+
+        def nonempty(r):
+            return [i for i in r.get("ingredients", [])
+                    if i.get("item") and not i["item"].startswith("(")]
+
+        cands.sort(key=lambda r: (1 if self._is_unpack(r) else 0,
+                                  0 if nonempty(r) else 1,
+                                  len(nonempty(r))))
+        out = []
+        for r in cands:
+            rtype = r.get("type") or ""
+            mach = MACHINE_CN.get(rtype, rtype or "特殊工序")
+            ings = [f"{self.display(i['item'])}×{i.get('count', 1)}" for i in nonempty(r)]
+            out.append({"machine": mach, "type": rtype, "ingredients": ings, "recipe": r})
+        return out
+
+    # ---------- 完整合成树 + 材料总账(EMI 风格) ----------
+    def describe_recipe(self, item: str, count: int = 1, recipe_index: int = 0,
+                        depth: int = 8, max_lines: int = 50) -> str:
+        """EMI 风格完整配方:先列出该物品的全部合成方式(工作台/熔炉/机器...),
+        再用选中的配方(默认第 1 种,可 recipe_index=N 切换)套娃展开合成树 + 材料总账。
         item 支持中文名。树里每个数字 = 总共需要合成/获得的数量(已按一炉产出向上取整)。"""
         target = self.resolve_item(item)
         if target is None:
             return f"无法识别物品:{item}"
-        tree = self._tree_node(target, count, 8, set())
-        if tree is None:
+        all_rec = self.recipes_for(target)
+        if not all_rec:
             return f"找不到 {target} 的合成配方(可能自然生成/挖掘获取)"
-        lines = [f"合成 {count} 个 {self.display(target)} 的完整流程(数字=总共需要):"]
+        idx = max(0, min(recipe_index, len(all_rec) - 1))
+
+        lines = [f"{self.display(target)}  — 共 {len(all_rec)} 种配方:"]
+        for i, r in enumerate(all_rec):
+            mark = "  ◀ 当前展开" if i == idx else ""
+            ing_txt = " + ".join(r["ingredients"]) or "(特殊工序,原料未导出,需游戏内确认)"
+            lines.append(f"  [{i + 1}] {r['machine']}: {ing_txt}{mark}")
+        if len(all_rec) > 1:
+            lines.append("(换配方展开:下次查询加 recipe_index=N, N 为上面的编号-1)")
+
+        tree = self._tree_node(target, count, depth, set(),
+                               forced_recipe=all_rec[idx]["recipe"])
+        lines.append("")
+        lines.append(f"【合成树 · 用第 {idx + 1} 种配方】(数字=总共需要):")
         self._fmt_tree(tree, lines, "", True, max_lines)
         # 材料总账:聚合所有叶子(不可再展开/特殊工序/达上限)的原材料
         acc = {}
@@ -300,22 +374,29 @@ class RecipeData:
             lines.append(f"  {self.display(it)} ×{n}")
         return "\n".join(lines)
 
-    def _tree_node(self, item: str, need: int, depth: int, seen: set) -> dict | None:
-        recipe = self._pick_recipe(item)
-        if recipe is None or self._is_unpack(recipe):
+    def describe_full(self, item: str, count: int = 1, max_lines: int = 45) -> str:
+        """兼容旧接口:完整套娃展开(等效 describe_recipe 用第 1 种配方)"""
+        return self.describe_recipe(item, count, recipe_index=0, max_lines=max_lines)
+
+    def _tree_node(self, item: str, need: int, depth: int, seen: set,
+                   forced_recipe: dict | None = None) -> dict | None:
+        recipe = forced_recipe if forced_recipe is not None else self._pick_recipe(item)
+        if recipe is None or (forced_recipe is None and self._is_unpack(recipe)):
             # 无配方 / 拆块配方(1 block→9 item):当作可获得的原材料(叶子)
             return {"item": item, "need": need, "machine": None, "leaf": True,
-                    "children": [], "note": None}
+                    "children": [], "note": None, "n_recipes": 0}
         rtype = recipe.get("type") or ""
         machine = MACHINE_CN.get(rtype, rtype or "特殊工序")
+        n_recipes = len(self.by_output.get(item) or [])   # 该物品共有几种配方(EMI 提示)
         if item in seen or depth <= 0:
             return {"item": item, "need": need, "machine": machine, "leaf": True,
-                    "children": [], "note": "…(已达展开上限)"}
+                    "children": [], "note": "…(已达展开上限)", "n_recipes": n_recipes}
         ings = [i for i in recipe.get("ingredients", [])
                 if i.get("item") and not i["item"].startswith("(")]
         if not ings:
             return {"item": item, "need": need, "machine": machine, "leaf": True,
-                    "children": [], "note": "(特殊工序/原料未导出,需游戏内确认)"}
+                    "children": [], "note": "(特殊工序/原料未导出,需游戏内确认)",
+                    "n_recipes": n_recipes}
         out_count = recipe.get("output", {}).get("count", 1) or 1
         batches = -(-need // out_count)
         children = []
@@ -326,7 +407,8 @@ class RecipeData:
             children.append(self._tree_node(iid, ing.get("count", 1) * batches,
                                             depth - 1, seen | {item}))
         return {"item": item, "need": need, "machine": machine, "leaf": False,
-                "children": children, "count": out_count, "batches": batches}
+                "children": children, "count": out_count, "batches": batches,
+                "n_recipes": n_recipes}
 
     def _fmt_tree(self, node, lines, prefix, is_last, max_lines, depth=0, _cut=None):
         if _cut is None:
@@ -335,13 +417,14 @@ class RecipeData:
             _cut[0] = True
             return
         label = self.display(node["item"])
+        multi = f"  ({node.get('n_recipes', 0)} 种配方)" if node.get("n_recipes", 0) > 1 else ""
         mach = f"  ← {node['machine']}" if node.get("machine") else ""
         note = f"  {node['note']}" if node.get("note") else ""
         if depth == 0:
-            lines.append(f"{label} ×{node['need']}{mach}{note}")
+            lines.append(f"{label} ×{node['need']}{multi}{mach}{note}")
         else:
             branch = "└─ " if is_last else "├─ "
-            lines.append(f"{prefix}{branch}{label} ×{node['need']}{mach}{note}")
+            lines.append(f"{prefix}{branch}{label} ×{node['need']}{multi}{mach}{note}")
             prefix += "   " if is_last else "│  "
         kids = node.get("children", [])
         for i, c in enumerate(kids):
