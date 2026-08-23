@@ -1417,6 +1417,27 @@ class AIChatDock(QDockWidget):
         finally:
             self.signals.local_status.emit(self._local_status_text())
 
+    def _local_chat(self, text: str):
+        """本地简单对话(寒暄/基础介绍/功能简介):引擎 chat() 自由回答,不走工具。
+        返回 (reply 文本, 是否成功);失败时上层落云端(§1.4)。"""
+        self.signals.local_status.emit("本地模型:推理中…")
+        try:
+            engine = self._get_local_engine()
+            engine.start()
+            try:
+                from local_ai import build_launcher_context
+                context = build_launcher_context()
+            except Exception:
+                context = ""
+            reply = engine.chat(text, context=context)
+            if not reply.strip():
+                return ("(本地模型没有回答)", False)
+            return (reply, True)
+        except Exception as e:
+            return (f"(本地对话失败:{type(e).__name__}: {e})", False)
+        finally:
+            self.signals.local_status.emit(self._local_status_text())
+
     # ---- 本地模型下载(懒加载 §2):首次用到且未下载 → 后台下载带进度,期间走云端 ----
     def _start_local_download(self):
         """主线程:创建下载进度弹窗,后台线程下载模型(镜像优先),完成后关闭弹窗。"""
@@ -1634,6 +1655,30 @@ class AIChatDock(QDockWidget):
                         self.signals.reply.emit(reply)
                         self._update_ctx_ring()
                         return
+                    if decision["target"] == "chat":
+                        # 简单对话/寒暄/基础介绍:本地自由回答(不需要工具)
+                        if self._local_model_ready():
+                            reply, ok = self._local_chat(text)
+                            if ok:
+                                self.signals.reply.emit(reply)
+                                self._update_ctx_ring()
+                                return
+                            # 本地 chat 失败 → 有云端则落云端,否则友好提示
+                            if self._cloud_available():
+                                self._append_system("本地对话未成功,已转云端处理…")
+                            else:
+                                self.signals.reply.emit(self._cloud_unavailable_hint())
+                                self._update_ctx_ring()
+                                return
+                        else:
+                            self._append_system("本地模型未下载,先走云端…")
+                            self.signals.local_dl_start.emit()
+                            if not self._cloud_available():
+                                self.signals.reply.emit(
+                                    "本地模型还没下载,而且当前没有可用的云端服务。"
+                                    "模型正在后台下载,下载完成后就能离线用了。")
+                                self._update_ctx_ring()
+                                return
                     if decision["target"] == "local":
                         if self._local_model_ready():
                             reply, ok = self._local_tool_call(text, executor, on_tool)

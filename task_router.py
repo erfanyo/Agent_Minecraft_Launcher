@@ -72,6 +72,22 @@ def looks_tool_callable(text: str) -> bool:
     return False
 
 
+# 简单对话/寒暄:本地模型自由回答即可(不需要工具,也不需要云端)。
+# 命中 → target="chat",走本地 chat()(规划 §1.1:简单任务本地干)。
+CHAT_KEYWORDS = ["你好", "您好", "hello", "hi ", "嗨", "谢谢", "多谢", "再见", "拜拜",
+                 "辛苦了", "在吗", "你叫什么", "你是谁", "介绍", "有什么功能",
+                 "是干什么", "是什么", "这软件", "这个启动器", "能用它做什么",
+                 "能干什么", "有什么用", "咋用", "怎么用"]
+
+
+def looks_simple_chat(text: str) -> bool:
+    """是否为本地模型可直接回答的简单对话/基础介绍(寒暄、功能简介等)。"""
+    t = text.strip().lower()
+    if len(t) <= 4:   # "你好""hi""谢谢" 等超短句
+        return True
+    return any(kw in t for kw in CHAT_KEYWORDS)
+
+
 # ================= 规则引擎(§4.8 FAQ 模糊匹配) =================
 
 # 固定问答库:最稳、零成本。命中即答,不再上模型。
@@ -141,7 +157,8 @@ def _ask_options_for(text: str) -> list:
 
 def route(text: str, *, have_cloud: bool = True, have_local: bool = True) -> dict:
     """决定任务走哪一层。返回 {"target": ..., "reason": ...}。
-    target: "rule"(规则引擎直接答) / "local"(本地小模型) / "ask"(问用户) / "cloud"(云端)。
+    target: "rule"(规则引擎直接答) / "chat"(本地简单对话) / "local"(本地工具) /
+            "ask"(问用户) / "cloud"(云端)。
 
     优先级设计(关键):
       0. 歧义请求(推荐/该装哪些)→ 直接 ask_user,不让模型瞎猜
@@ -152,7 +169,14 @@ def route(text: str, *, have_cloud: bool = True, have_local: bool = True) -> dic
     # 0. 歧义请求:需要用户选择 → ask_user(模型层面 + 路由层面双保险)
     if looks_ambiguous(text):
         return {"target": "ask", "reason": "歧义请求,需要问用户"}
-    # 0b. 含工具动词 = 明确的操作请求 → 优先本地工具(即使 FAQ 也命中)
+    # 0b. 简单对话/寒暄/基础介绍 → 本地自由回答(不需要工具,也不需要云端)
+    if looks_simple_chat(text):
+        if classify_difficulty(text) == "difficult":
+            return {"target": "cloud" if have_cloud else "chat",
+                    "reason": "看似闲聊实为复杂问题,转云端"}
+        return {"target": "chat" if have_local else "cloud",
+                "reason": "简单对话/介绍,本地可答"}
+    # 0c. 含工具动词 = 明确的操作请求 → 优先本地工具(即使 FAQ 也命中)
     if looks_tool_callable(text):
         # 但若同时是"困难任务"(如"帮我分析怎么装mod")→ 云端
         if classify_difficulty(text) == "difficult":

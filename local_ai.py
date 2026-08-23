@@ -220,13 +220,33 @@ class GrammarToolEngine:
         self.stop()
 
     # ---- 调用 ----
-    def _chat_prompt(self, user_text: str, context: str = "") -> str:
-        system = self.system_prompt
+    def _chat_prompt(self, user_text: str, context: str = "", system: str = None) -> str:
+        sys_text = system if system is not None else self.system_prompt
         if context:
-            system = system + "\n\n" + context
-        return ("<|im_start|>system\n" + system + "<|im_end|> \n"
+            sys_text = sys_text + "\n\n" + context
+        return ("<|im_start|>system\n" + sys_text + "<|im_end|> \n"
                 f"<|im_start|>user\n{user_text}<|im_end|> \n"
                 "<|im_start|>assistant\n")
+
+    def chat(self, user_text: str, timeout: int = 120, context: str = "") -> str:
+        """本地自由对话(无 grammar 约束):寒暄/基础介绍/简单问答。
+        与 tool_call 互补 —— 本地小模型既能"干活"(工具调用)也能"说话"(简单对话)。
+        返回回复文本;失败抛异常,上层可落云端(§1.4)。"""
+        chat_system = ("你是 Agent Minecraft Launcher 启动器的 AI 助手,用中文简洁友好地回答。"
+                       "你可以介绍启动器的功能(下载/启动游戏、装 Mod、查配方、发指令、诊断日志等)。"
+                       "回答要简短(3 句话以内),不知道的就直说。")
+        body = {"prompt": self._chat_prompt(user_text, context=context, system=chat_system),
+                "n_predict": 256, "temperature": 0.3,
+                "stop": ["<|im_end|>", "</s>"]}
+        r = requests.post(f"{self.base}/completion", json=body, timeout=timeout)
+        r.raise_for_status()
+        content = r.json()["content"].strip()
+        # 剥掉思考块(Qwen 推理模型的 <think>...</think> 输出对用户无意义)
+        if content.startswith("<think>"):
+            end = content.find("</think>")
+            if end >= 0:
+                content = content[end + len("</think>"):].strip()
+        return content
 
     def tool_call(self, user_text: str, timeout: int = 120, context: str = "") -> dict:
         """让模型输出一次工具调用,grammar 保证可解析。返回 {"name":..,"arguments":..}
