@@ -54,9 +54,9 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
     返回 (正式版数, 快照数, 远古数, 愚人节数)。"""
     tree.setColumnCount(2)
     tree.setHeaderLabels(["版本", "发布年月"])
-    # 版本列加宽且可拖,年月列固定靠右——不让年月遮挡版本信息
+    # 版本列加宽且可拖;年月列固定宽度(够完整显示"2025-06"+表头,右对齐但留出右缘边距)
     tree.setColumnWidth(0, 440)
-    tree.setColumnWidth(1, 76)
+    tree.setColumnWidth(1, 100)
     header = tree.header()
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
     header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
