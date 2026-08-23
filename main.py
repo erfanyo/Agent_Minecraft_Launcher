@@ -361,6 +361,12 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.dl_indicator, 0)   # 状态栏最左 = 窗口左下角
         self.dl_indicator.hide()
 
+        # 运行中的实例指示:最外层显示"已有 x 个运行中的实例",悬停看具体是哪个
+        self._running_instances = set()
+        self._running_label = QLabel()
+        self.statusBar().addPermanentWidget(self._running_label)   # 状态栏最右
+        self._update_running_label()
+
     # ---- 设置 ----
     def open_settings(self):
         """打开设置对话框,确定后刷新本窗口的设置"""
@@ -579,6 +585,18 @@ class MainWindow(QMainWindow):
         self.load_versions()
         self.refresh_instances()
 
+    def _update_running_label(self):
+        """刷新状态栏的"已有 x 个运行中的实例"(悬停显示具体实例)"""
+        n = len(self._running_instances)
+        if n:
+            self._running_label.setText(f"🟢 已有 {n} 个运行中的实例")
+            self._running_label.setToolTip("运行中的实例:\n" + "\n".join(sorted(self._running_instances)))
+            self._running_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        else:
+            self._running_label.setText("⚪ 已有 0 个运行中的实例")
+            self._running_label.setToolTip("启动实例后这里会显示运行中的游戏")
+            self._running_label.setStyleSheet("color: #888888;")
+
     def _busy_download(self, busy: bool):
         self.download_tab.set_busy(busy)
         self.launch_btn.setEnabled(not busy)
@@ -765,18 +783,35 @@ class MainWindow(QMainWindow):
         if not self.log_view.isVisible():
             self.log_toggle_btn.setChecked(True)  # 触发 _toggle_log 展开
         self.log_view.appendPlainText("> " + " ".join(cmd))
-        self.statusBar().showMessage("游戏启动中...")
+        # 首次运行提示:还没生成过完整游戏目录(saves/配置)时告诉用户
+        if not os.path.isdir(os.path.join(game_dir, "saves")):
+            self.statusBar().showMessage(
+                f"首次运行 {d['id']}:将生成完整游戏目录(存档/配置在 {game_dir})")
+        else:
+            self.statusBar().showMessage("游戏启动中...")
         self.launch_btn.setEnabled(False)
+
+        # Java 用 javaw(无控制台窗口,避免弹出黑框);启动进程本身也不开新窗口
+        java_dir = os.path.dirname(java_exe)
+        javaw = os.path.join(java_dir, "javaw.exe")
+        if os.path.isfile(javaw):
+            cmd = [javaw] + cmd[1:]
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
         try:
             self.game_process = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", cwd=game_dir,
+                creationflags=creationflags,
             )
         except Exception as e:
             self.statusBar().showMessage(f"启动失败: {e}")
             self.launch_btn.setEnabled(True)
             return
+
+        # 运行实例指示:登记并刷新底部标签
+        self._running_instances.add(d["id"])
+        self._update_running_label()
 
         # 通知技能系统:游戏已启动(崩溃守护等技能开始工作)
         self.skill_mgr.on_game_start(self.game_process, self._running_instance_id)
@@ -806,6 +841,11 @@ class MainWindow(QMainWindow):
                 code = self.game_process.poll()
                 self.launch_btn.setEnabled(True)
                 self.statusBar().showMessage(f"游戏进程已退出(退出码 {code})")
+                # 运行实例指示:注销并刷新底部标签
+                inst_id = getattr(self, "_running_instance_id", None)
+                if inst_id:
+                    self._running_instances.discard(inst_id)
+                self._update_running_label()
                 # 通知技能系统:游戏退出(自动重启/备份提醒等技能在这里触发)
                 self.skill_mgr.on_game_stop(code)
                 if code not in (0, None):
@@ -866,7 +906,9 @@ class MainWindow(QMainWindow):
 
         status_cb(f"开始下载实例 {version} ...")
 
-        # 1) 原版本体
+        # 1) 原版本体(加载器版本必须依赖它,先提示避免"怎么多下个原版"的困惑)
+        if loader_key:
+            status_cb(f"准备基础原版 {version}({loader_key} 加载器依赖它,必须一并下载)...")
         if not self.install_version(version, status_cb=status_cb, progress_cb=progress_cb):
             return
 
@@ -905,7 +947,9 @@ class MainWindow(QMainWindow):
                                   version_number=want,
                                   status_cb=status_cb, progress_cb=progress_cb)
 
-        status_cb(f"实例就绪:{instance_id} ✅")
+        status_cb(f"实例就绪:{instance_id} ✅ "
+                  f"(游戏目录:{self.game_dir_for(instance_id)};"
+                  f"首次运行会生成完整目录——存档/配置/日志)")
 
     def _install_mod(self, slug: str, game_version: str, loader: str,
                      mods_dir: str, kind: str, version_number: str | None = None,
@@ -1068,9 +1112,16 @@ class MainWindow(QMainWindow):
         inst = self._selected_mod_inst
         custom = getattr(self, "_custom_mods_dir", None)
         if inst is None and not custom:
-            QMessageBox.information(self, "推荐 Mod",
-                                    "请先选目标实例(展开「目标实例」选一个),或选「无」用文件管理器指定目录")
-            return
+            # 没选实例:自动挑第一个有加载器的实例,避免用户卡在"未选择实例"
+            inst = next((i for i, _c in self._mod_inst_cards
+                         if i["loader"] in ("fabric", "forge", "neoforge")), None)
+            if inst is None:
+                QMessageBox.information(self, "推荐 Mod",
+                                        "还没有可装 Mod 的实例。请先在「我的版本」创建一个"
+                                        "Fabric/Forge/NeoForge 实例,再来装推荐 Mod。")
+                return
+            self._select_mod_instance(inst)
+            self.statusBar().showMessage(f"已自动选择实例 {inst['id']} 安装推荐 Mod")
         gv = inst["base"] if inst else self.filter_version.currentText().strip()
         loader = inst["loader"] if inst else self.filter_loader.currentData()
         if loader not in ("fabric", "forge", "neoforge"):

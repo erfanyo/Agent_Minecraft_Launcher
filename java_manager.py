@@ -43,12 +43,15 @@ def parse_java_major(output: str) -> int:
 
 
 def java_major(java_exe: str) -> int:
-    """运行 java -version 并解析大版本;失败返回 0。"""
+    """运行 java -version 并解析大版本;失败返回 0。
+    检测时不弹控制台黑窗口(CREATE_NO_WINDOW)。"""
     try:
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         ver_file = os.path.join(tempfile.gettempdir(), "aml_java_ver.txt")
         with open(ver_file, "wb") as f:
             subprocess.run([java_exe, "-version"], stdout=f,
-                           stderr=subprocess.STDOUT, timeout=15)
+                           stderr=subprocess.STDOUT, timeout=15,
+                           creationflags=creationflags)
         with open(ver_file, "rb") as f:
             text = f.read().decode("utf-8", "replace")
         os.remove(ver_file)
