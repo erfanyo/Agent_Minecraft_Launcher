@@ -584,8 +584,10 @@ class MainWindow(QMainWindow):
         self.launch_btn.setEnabled(not busy)
 
     def _set_progress(self, done: int, total: int):
-        self.progress_bar.setMaximum(max(total, 1))
-        self.progress_bar.setValue(done)
+        """通用进度回调(实例下载 / Java 下载共用):显示在左下角圆环指示器上"""
+        self.dl_indicator.set_progress(done, total)
+        self.dl_indicator.setToolTip("下载中,点击查看详情")
+        self.dl_indicator.show()
 
     def game_dir_for(self, version_id: str) -> str:
         """PCL2 风格:versions/<版本ID>/ 就是该版本的实例(游戏目录)。
@@ -733,14 +735,16 @@ class MainWindow(QMainWindow):
         self._running_instance_id = d["id"]   # 供退出后自动 debug 定位日志
 
         def on_progress(done, total):
-            self.progress_bar.setMaximum(max(total, 1))
-            self.progress_bar.setValue(done)
+            self.dl_indicator.set_progress(done, total)
+            self.dl_indicator.setToolTip("下载中,点击查看详情")
+            self.dl_indicator.show()
 
         try:
             # 1) 保证有合适的 Java(没有就自动下载)
             java_exe = ensure_java(paths.RUNTIME_DIR, required_java,
                                    progress_callback=on_progress,
                                    status_callback=self.statusBar().showMessage)
+            self.dl_indicator.hide()   # Java 检测/下载完成,收起圆环
             # 2) 把版本 JSON 翻译成启动命令
             #    运行目录按隔离策略来;安装目录和资源目录是所有版本共享的
             game_dir = self.game_dir_for(d["id"])
@@ -752,6 +756,7 @@ class MainWindow(QMainWindow):
                 install_dir=paths.GAME_DIR,
             )
         except Exception as e:
+            self.dl_indicator.hide()
             self.statusBar().showMessage(f"启动准备失败: {e}")
             return
 
