@@ -42,7 +42,29 @@ def _pick_base_dir() -> str:
 
 
 BASE_DIR = _pick_base_dir()
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+# 配置文件收进 AMCL 子目录:exe 旁边只留 .minecraft/runtime 等"看着就像数据"的文件夹,
+# 避免用户把 config.json 当垃圾误删;AMCL 目录自动创建
+CONFIG_DIR = os.path.join(BASE_DIR, "AMCL")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+_LEGACY_CONFIG = os.path.join(BASE_DIR, "config.json")   # 旧版直接放根目录的配置
+
+
+def _ensure_config_dir() -> None:
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+    except OSError:
+        pass
+
+
+_ensure_config_dir()
+# 首次迁移:旧位置(项目/exe 旁的 config.json)复制进 AMCL,用户已有设置不丢
+if not os.path.exists(CONFIG_PATH) and os.path.exists(_LEGACY_CONFIG):
+    try:
+        import shutil
+        shutil.copy2(_LEGACY_CONFIG, CONFIG_PATH)
+    except OSError:
+        pass
+
 DEFAULT_GAME_DIR = os.path.join(BASE_DIR, ".minecraft")
 
 
