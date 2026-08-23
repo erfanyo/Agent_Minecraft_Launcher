@@ -414,6 +414,10 @@ class AISettingsForm(QWidget):
         self.provider.addItem("DeepSeek(推荐,便宜)", "deepseek")
         self.provider.addItem("Ollama 本地(免费离线)", "ollama")
         self.provider.addItem("LM Studio(本地 llama.cpp)", "lmstudio")
+        self.provider.addItem("OpenRouter(聚合,含视觉模型)", "openrouter")
+        self.provider.addItem("硅基流动 SiliconFlow(国内)", "siliconflow")
+        self.provider.addItem("智谱 GLM(国内)", "zhipu")
+        self.provider.addItem("通义千问 DashScope(国内)", "dashscope")
         self.provider.addItem("自定义(OpenAI 兼容)", "custom")
         self.base_url = QLineEdit(settings.get("ai_base_url", ""))
         self.api_key = QLineEdit(settings.get("ai_api_key", ""))
@@ -455,6 +459,18 @@ class AISettingsForm(QWidget):
             self.base_url.setText("http://localhost:1234/v1")
             self.model.clear()
             self.model.setPlaceholderText("输入你已在 LM Studio 加载的模型名")
+        elif idx == "openrouter":
+            self.base_url.setText("https://openrouter.ai/api/v1")
+            self.model.setText("deepseek/deepseek-chat-v3-0324:free")
+        elif idx == "siliconflow":
+            self.base_url.setText("https://api.siliconflow.cn/v1")
+            self.model.setText("Qwen/Qwen2.5-7B-Instruct")
+        elif idx == "zhipu":
+            self.base_url.setText("https://open.bigmodel.cn/api/paas/v4")
+            self.model.setText("glm-4-flash")
+        elif idx == "dashscope":
+            self.base_url.setText("https://dashscope.aliyuncs.com/compatible-mode/v1")
+            self.model.setText("qwen-plus")
 
     def values(self) -> dict:
         """收集表单内容为设置字段"""

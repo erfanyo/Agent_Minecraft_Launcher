@@ -225,16 +225,12 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()  # 启动器配置(用户名/内存/版本隔离)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
-        # ---- 顶部:最新版本信息 + 刷新按钮 ----
-        self.label_latest = QLabel(t("最新正式版: --", "Latest release: --"))
-        self.label_snapshot = QLabel(t("最新快照版: --", "Latest snapshot: --"))
+        # ---- 顶部:刷新按钮 + 设置(最新版本信息已移到「下载新资源」首页) ----
         refresh_btn = QPushButton(t("刷新列表", "Refresh"))
         refresh_btn.clicked.connect(self.load_versions)  # 信号槽:点按钮 → 执行函数
 
         top_bar = QHBoxLayout()
-        top_bar.addWidget(self.label_latest)
-        top_bar.addWidget(self.label_snapshot)
-        top_bar.addStretch()  # 占位伸缩,把按钮挤到右边
+        top_bar.addStretch()
         settings_btn = QPushButton(t("设置", "Settings"))
         settings_btn.clicked.connect(self.open_settings)
         top_bar.addWidget(settings_btn)
@@ -308,11 +304,17 @@ class MainWindow(QMainWindow):
         a_layout.addLayout(a_row)
         a_layout.addWidget(self.instance_list)
 
-        # ---- Tab「下载新实例」:左侧菜单 + 右侧分类面板 ----
-        self.download_tab = DownloadTab()
-        self.download_tab.bind_start(self.start_instance_download)
+        # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
+        from resource_center import ResourceCenter
+        self.resource_center = ResourceCenter()
+        # 兼容旧引用:download_tab 是资源中心内的实例向导
+        self.download_tab = self.resource_center.download_tab
+        self.resource_center.set_hooks(
+            instance_dir=self.game_dir_for,
+            on_download=self._resource_download,
+            on_start_instance=self.start_instance_download)
 
-        # ---- Tab「下载 Mod」:目标实例 + 全局筛选 + 搜索结果卡片 ----
+        # ---- Tab「下载 Mod」(旧,保留构建以兼容测试/旧逻辑,不再显示)----
         tab_b = QWidget()
         # 目标实例:卡片列表(点击选中 + 箭头展开看已装 Mod)
         self.instance_cards_box = QWidget()
@@ -439,11 +441,11 @@ class MainWindow(QMainWindow):
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu)
 
-        # ---- 主选项卡(我的版本 / 下载新实例 / 下载 Mod) ----
+        # ---- 主选项卡(我的版本 / 下载新资源) ----
         self.main_tabs = QTabWidget()
         self.main_tabs.addTab(tab_a, t("我的版本", "Versions"))
-        self.main_tabs.addTab(self.download_tab, t("下载新实例", "New Instance"))
-        self.main_tabs.addTab(tab_b, t("下载 Mod", "Mods"))
+        self.main_tabs.addTab(self.resource_center, t("下载新资源", "Resources"))
+        self._legacy_mod_tab = tab_b   # 旧 Mod 页保留引用(防 GC 回收其子控件,兼容旧逻辑/测试)
 
         # ---- 底部:可折叠的游戏日志(默认收起) ----
         self.log_toggle_btn = QPushButton(t("▶ 游戏日志", "▶ Game Log"))
@@ -773,15 +775,18 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"获取失败: {e}")
             return
 
-        self.label_latest.setText(f"最新正式版: {manifest['latest']['release']}")
-        self.label_snapshot.setText(f"最新快照版: {manifest['latest']['snapshot']}")
+        self.resource_center.set_latest_versions(manifest['latest']['release'],
+                                                 manifest['latest']['snapshot'])
         self.download_tab._load_tree()
 
-        # 填充"下载 Mod"页的版本筛选下拉(最近的一些正式版)
+        # 填充筛选下拉(最近的一些正式版):旧 tab_b + 资源中心的 Mod 浏览器
         if self.filter_version.count() == 0:
             recent = [v["id"] for v in manifest["versions"]
                       if v["type"] == "release"][:40]
             self.filter_version.addItems(recent)
+        for br in self.resource_center.browsers.values():
+            if br.filter_version.count() == 0:
+                br.filter_version.addItems(recent)
 
         self.statusBar().showMessage(f"加载完成(最新正式版 {manifest['latest']['release']})")
 
@@ -1134,6 +1139,35 @@ class MainWindow(QMainWindow):
 
         # 3) 打小抄(实例清单备忘,可手动编辑)
         self.write_cheat_sheet(shown)
+
+        # 4) 资源中心的目标实例卡片(Mod/光影/数据包浏览器)
+        self.resource_center.refresh_browser_instances(shown)
+
+    def _resource_download(self, hit, version, inst, target_dir, sub_dir):
+        """资源中心下载回调:把项目下载到目标实例的对应目录(mods/shaderpacks/...)"""
+        slug = hit["slug"]
+        if not target_dir:
+            self.statusBar().showMessage("未选择安装位置")
+            return
+        gv = (inst["base"] if inst else self.filter_version.currentText().strip()) or "1.21.1"
+        loader = (inst["loader"] if inst else self.filter_loader.currentData())
+        # Mod 按加载器过滤;光影/数据包/资源包一般不区分加载器
+        use_loader = loader if sub_dir == "mods" else None
+
+        def worker(status, progress):
+            from modrinth import download_mod
+            try:
+                filename = download_mod(slug, gv, use_loader, target_dir,
+                                        version_number=version,
+                                        progress_callback=progress)
+                if filename:
+                    status(f"✅ 已下载 {filename} → {sub_dir}")
+                else:
+                    status(f"⚠️ {slug} 没有 {gv}{'+' + use_loader if use_loader else ''} 的可用版本")
+            except Exception as e:
+                status(f"❌ 下载失败: {e}")
+
+        self._run_download(worker)
 
     def _tidy_base_versions(self):
         """把"被加载器继承、且没有自己存档"的纯基础原版,收进 versions/_versions/ 版本仓库。
