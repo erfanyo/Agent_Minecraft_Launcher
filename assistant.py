@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QSpinBox,
     QTextBrowser,
@@ -52,6 +53,9 @@ from ai_actions import PERMISSIONS, PermissionDenied, permission_instructions, r
 from agent_tools import TOOL_FUNCS
 from settings import save_settings
 
+# 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
+LOCAL_PROVIDER = "local_builtin"
+LOCAL_MODEL_ID = "qwen3.5-0.8b-xlam-q4km"
 
 def chat_completion(messages: list, base_url: str, api_key: str, model: str) -> str:
     """调用 OpenAI 兼容的 /chat/completions,返回回复文本"""
@@ -87,10 +91,11 @@ TOOLS = [
     _tool("read_crash_report", "读取某实例最新的崩溃报告(诊断崩溃用)",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("get_settings", "查看启动器当前设置(内存/用户名等)", {}, []),
-    _tool("install_instance", "下载/创建游戏实例(写操作,需要工作区写权限)。"
+    _tool("install_instance", "下载/创建【新】游戏实例(写操作,需要工作区写权限)。"
           "可创建原版,或带加载器的实例(fabric/forge/neoforge)。"
           "加载器版本留空=自动用最新;可选装 Fabric API / 光影 / 优化 Mod。"
-          "注意:加载器实例会自动下载它依赖的基础原版;整个下载可能要几分钟,"
+          "注意:这是创建新实例,不是启动已有实例!用户说'建一个/下载一个/创建实例'时用它。"
+          "加载器实例会自动下载它依赖的基础原版;整个下载可能要几分钟,"
           "期间请等待,不要重复调用;完成后会返回实例 id",
           {"version": {"type": "string", "description": "游戏版本,如 1.21.1 / 1.20.1 / 26.3-snapshot-8"},
            "loader": {"type": "string", "description": "加载器:fabric/forge/neoforge,留空=原版"},
@@ -99,14 +104,18 @@ TOOLS = [
            "optimize": {"type": "boolean", "description": "是否装优化 Mod(钠/锂等),默认 false"},
            "fabric_api_version": {"type": "string", "description": "可选,Fabric API 版本(留空不装)"}},
           ["version"]),
-    _tool("ask_user", "拿不准用户想要什么时调用:向用户弹出选择框(可多选,可输入补充),"
-          "用户的选择会作为结果返回给你。用于任务拆分中途确认方向/确认选项,"
+    _tool("ask_user", "重要!当用户指令有歧义、缺少关键信息、或需要用户选择时调用:"
+          "向用户弹出选择框(可多选,可输入补充),用户的选择会作为结果返回给你。"
+          "规则:拿不准用户想要什么时【必须】用这个,不要擅自猜测!例如用户说'帮我推荐mod/该装哪些'"
+          "但没说具体装什么时,用这个问用户。用于任务拆分中途确认方向/确认选项,"
           "不要用一次调用问太多问题",
           {"question": {"type": "string", "description": "问题,如 你想装哪些 Mod?"},
            "options": {"type": "array", "items": {"type": "string"},
                        "description": "候选选项,用户可多选(如 [\"钠\",\"锂\",\"玉\",\"JEI\"])"}},
           ["question"]),
-    _tool("launch_game", "启动某实例的游戏(写操作,需要工作区写权限)。"
+    _tool("launch_game", "启动【已存在】的实例游戏(写操作,需要工作区写权限)。"
+          "用户说'启动XX/打开游戏/开始玩/进游戏'时用它。注意:只启动,不创建!"
+          "实例不存在时改用 install_instance 或先查 list_instances。"
           "这样启动的进程启动器不跟踪日志/退出,关闭游戏窗口即退出",
           {"instance": {"type": "string", "description": "实例 id(用 list_instances 查)"}},
           ["instance"]),
@@ -152,8 +161,9 @@ TOOLS = [
            "brief": {"type": "boolean", "description": "true=精简(默认), false=完整配方+合成树+材料总账"},
            "recipe_index": {"type": "integer", "description": "用第几种配方展开(0=第一种,默认 0);完整结果会列出全部配方供选择"}},
           ["item"]),
-    _tool("compare_items", "比较物品参数(武器伤害/护甲/护甲韧性/攻速/挖掘等级),返回最强的 N 个",
-          {"attribute": {"type": "string", "description": "武器伤害 / 护甲 / 挖掘等级 等"},
+    _tool("compare_items", "比较物品参数(武器伤害/护甲/护甲韧性/攻速/挖掘等级),返回最强的 N 个。"
+          "注意:attribute 必须用中文(武器伤害/护甲/攻速/挖掘等级),不要用英文 damage/armor!",
+          {"attribute": {"type": "string", "description": "中文属性名:武器伤害 / 护甲 / 护甲韧性 / 攻速 / 挖掘等级"},
            "top_n": {"type": "integer", "description": "返回前几名,默认 10"}},
           ["attribute"]),
 ]
@@ -258,6 +268,9 @@ class _Signals(QObject):
     self_test = Signal(bool)
     tool_called = Signal(str, dict, str)   # 工具调用过程展示(从 worker 线程 emit,主线程渲染)
     user_ask = Signal(str, list, object, object)   # (问题, 选项, 结果列表引用, 事件) 主线程弹窗
+    local_dl_start = Signal()              # 需要开始下载本地模型 → 主线程开下载(带进度弹窗)
+    local_dl_progress = Signal(int, int)   # 本地模型下载进度(done, total)(跨线程)
+    local_dl_done = Signal(str)            # 本地模型下载完成/失败的消息(跨线程)
 
 
 def _esc(text: str) -> str:
@@ -272,6 +285,40 @@ def estimate_tokens(text: str) -> int:
     cjk = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
     other = len(text) - cjk
     return max(1, cjk + other // 4) + 4
+
+
+# 已知会"看图"(多模态)的模型名关键词。命中才认为支持多模态,否则默认不显示图片功能。
+_VISION_MODEL_HINTS = (
+    "vision", "vl", "vl-", "4o", "gpt-4", "gpt-4o", "o1", "gemini", "claude-3", "claude-4",
+    "llava", "qwen-vl", "qwen2.5-vl", "qwen2-vl", "glm-4v", "internvl", "intern-vl",
+    "minicpm-v", "pixtral", "moondream", "cogvlm", "yi-vl", "step-1v", "deepseek-vl",
+)
+
+
+def model_supports_vision(provider: str | None, model: str | None) -> bool | None:
+    """粗判某模型是否支持看图(多模态)。
+
+    返回:
+    - True  : 支持看图(命中已知视觉模型或 provider 预设 openrouter)→ 显示图片相关按钮;
+    - False : 明确不支持看图(内置本地模型、DeepSeek 官方 chat/reasoner)→ 隐藏;
+    - None  : 无法判断(本地/自定义/未知模型)→ 交由用户手动开关 ai_multimodal 决定。
+
+    依据:先看 provider 预设(local_builtin 不支持 / openrouter 默认支持),再看模型名关键词
+    (含 vision/vl 等,或 gpt-4o/gemini/claude 等已知视觉系列)。
+    """
+    name = (model or "").strip().lower()
+    if provider == "local_builtin":
+        return False          # 内置本地模型(目前 xLAM/Qwen3.5)不支持图片
+    if provider == "openrouter":
+        return True           # OpenRouter 聚合多模型,默认按支持看图处理(用户可取消勾选覆盖)
+    if provider == "deepseek" and "vl" not in name and "vision" not in name:
+        return False          # DeepSeek 官方 chat/reasoner 不支持图片
+    if not name:
+        return None
+    for hint in _VISION_MODEL_HINTS:
+        if hint in name:
+            return True
+    return None               # 未知模型:保守,交给手动开关
 
 
 class ContextRing(QWidget):
@@ -416,17 +463,19 @@ class AISettingsForm(QWidget):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self.provider = QComboBox()
-        self.provider.addItem("DeepSeek(推荐,便宜)", "deepseek")
-        self.provider.addItem("Ollama 本地(免费离线)", "ollama")
-        self.provider.addItem("LM Studio(本地 llama.cpp)", "lmstudio")
-        self.provider.addItem("OpenRouter(聚合,含视觉模型)", "openrouter")
-        self.provider.addItem("硅基流动 SiliconFlow(国内)", "siliconflow")
-        self.provider.addItem("智谱 GLM(国内)", "zhipu")
-        self.provider.addItem("通义千问 DashScope(国内)", "dashscope")
-        self.provider.addItem("自定义(OpenAI 兼容)", "custom")
+        # 列表标注 云端/本地、是否免费,方便新手理解;OpenRouter 特别注明"部分模型会看图"
+        self.provider.addItem("DeepSeek(推荐 · 云端 · 便宜好用)", "deepseek")
+        self.provider.addItem("内置本地模型(免费 · 无密钥,需下载约500MB)", "local_builtin")
+        self.provider.addItem("Ollama(本地 · 免费离线)", "ollama")
+        self.provider.addItem("LM Studio(本地 · 免费离线)", "lmstudio")
+        self.provider.addItem("OpenRouter(云端 · 一家账号用多家,部分模型会看图)", "openrouter")
+        self.provider.addItem("硅基流动(云端 · 国内速度快)", "siliconflow")
+        self.provider.addItem("智谱 GLM(云端 · 国内)", "zhipu")
+        self.provider.addItem("通义千问(云端 · 国内)", "dashscope")
+        self.provider.addItem("自定义(云端或本地 · 自己填接口)", "custom")
         self.base_url = QLineEdit(settings.get("ai_base_url", ""))
         self.api_key = QLineEdit(settings.get("ai_api_key", ""))
-        self.api_key.setPlaceholderText("留空 = 无需密钥(Ollama 本地)")
+        self.api_key.setPlaceholderText("留空 = 不需要密钥(本地服务)")
         self.model = QLineEdit(settings.get("ai_model", ""))
         self.permission = QComboBox()
         for label, value in PERMISSIONS:
@@ -440,23 +489,65 @@ class AISettingsForm(QWidget):
         self.context_window.setValue(int(settings.get("context_window", 65536) or 65536))
         self.context_window.setSuffix(" tokens")
         self.context_window.setToolTip("模型上下文窗口上限,用于对话框里的占用圆环显示")
+        # 发图片(多模态):勾选后 AI 对话框才显示 📷/🖼 按钮。
+        # 关键前提:必须你选的模型本身会"看图",否则勾了也没用(发送图片会报错)。
+        self.vision_check = QCheckBox("允许给 AI 发图片(需要你选的模型本身支持看图)")
+        self.vision_check.setChecked(bool(settings.get("ai_multimodal", False)))
+        self.vision_check.setToolTip(
+            "图片功能不是想开就开:要看你选的模型本身会不会\"看图\"(多模态)。\n"
+            "不确定的话保持关闭最稳妥;勾了但模型不支持,发图片时会报错。")
+
+        # 游戏内 AI 通道:决定游戏启动时本地模型去留(off/cloud 卸载省内存给游戏)
+        self.ai_in_game = QComboBox()
+        self.ai_in_game.addItem("关闭(游戏内不用 AI,推荐)", "off")
+        self.ai_in_game.addItem("云端(游戏内用云端 AI)", "cloud")
+        self.ai_in_game.addItem("本地(游戏内用内置本地模型)", "local")
+        ig = settings.get("ai_in_game", "off")
+        idx = self.ai_in_game.findData(ig)
+        self.ai_in_game.setCurrentIndex(idx if idx >= 0 else 0)
+        self.ai_in_game.setToolTip(
+            "游戏运行时是否保留本地模型:\n"
+            "· off/cloud → 游戏启动时卸载本地模型,省内存给游戏;\n"
+            "· local → 游戏启动时保持本地模型加载(游戏内 AI 通道,规划中)。")
 
         form = QFormLayout(self)
-        form.addRow("服务:", self.provider)
+        form.addRow("AI 服务商:", self.provider)
         form.addRow("接口地址:", self.base_url)
         form.addRow("API 密钥:", self.api_key)
         form.addRow("模型:", self.model)
         form.addRow("文件权限:", self.permission)
         form.addRow("上下文窗口:", self.context_window)
+        form.addRow("图片输入:", self.vision_check)
+        form.addRow("游戏内 AI:", self.ai_in_game)
 
         self.provider.currentIndexChanged.connect(self._fill_defaults)
+        self.provider.currentIndexChanged.connect(self._auto_vision)
+        self.model.textChanged.connect(self._auto_vision)
         self._fill_defaults()
+
+    def _auto_vision(self):
+        """切服务商/模型时,按模型是否能看图自动设定「图片输入」开关。
+
+        模型名可判定 → 自动开/关;无法判定(本地/自定义)→ 保留用户手动选择。"""
+        vis = model_supports_vision(self.provider.currentData(), self.model.text())
+        if vis is True:
+            self.vision_check.setChecked(True)
+            self.vision_check.setToolTip("该模型看起来支持看图(多模态),已自动开启。")
+        elif vis is False:
+            self.vision_check.setChecked(False)
+            self.vision_check.setToolTip("该模型不支持看图(多模态),图片功能已自动关闭。")
 
     def _fill_defaults(self):
         idx = self.provider.currentData()
         if idx == "deepseek":
             self.base_url.setText("https://api.deepseek.com/v1")
             self.model.setText("deepseek-chat")
+        elif idx == "local_builtin":
+            # 内置本地模型:无需接口/密钥,模型名固定;首次用会后台下载
+            self.base_url.setText("")
+            self.base_url.setPlaceholderText("内置本地模型(无需接口地址)")
+            self.api_key.setText("")
+            self.model.setText(LOCAL_MODEL_ID)
         elif idx == "ollama":
             self.base_url.setText("http://localhost:11434/v1")
             self.model.setText("qwen2.5:7b")
@@ -486,6 +577,8 @@ class AISettingsForm(QWidget):
             "ai_model": self.model.text().strip(),
             "ai_permission": self.permission.currentData(),
             "context_window": self.context_window.value(),
+            "ai_multimodal": self.vision_check.isChecked(),
+            "ai_in_game": self.ai_in_game.currentData(),
         }
 
 
@@ -507,10 +600,14 @@ class AISettingsDialog(QDialog):
         self.permission = self.form.permission
         self.context_window = self.form.context_window
 
-        hint = QLabel("DeepSeek 需要 API key(platform.deepseek.com 申请,极便宜);\n"
-                      "Ollama / LM Studio 都是本地 llama.cpp,无需密钥:\n"
-                      "LM Studio 默认接口 http://localhost:1234/v1,模型填你已加载的名字。\n"
-                      "文件权限:只读 = AI 不能改任何文件;工作区可写 = AI 只能改启动器目录内的文件")
+        hint = QLabel(
+            "怎么选:\n"
+            "· 云端(DeepSeek / OpenRouter / 硅基流动 / 智谱 / 通义):去对应官网注册,\n"
+            "  拿到 API 密钥填在上面(DeepSeek 最便宜);\n"
+            "· 本地(Ollama / LM Studio):在自己电脑上跑,免费离线,密钥留空即可;\n"
+            "· 发图片:和用哪家无关,取决于你选的模型本身会不会\"看图\"。\n"
+            "  模型不会看的话,图片功能就别开。\n"
+            "文件权限:只读 = AI 只能看文件;工作区可写 = AI 只能在启动器目录里改文件。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888888;")
 
@@ -679,16 +776,37 @@ class _ChatInput(QPlainTextEdit):
             " font-size:14px; border:none;}"
             "QPushButton:hover{background:rgba(128,128,128,160);}")
         self.recent_btn.clicked.connect(self.recentClicked.emit)
+        # 右下角按钮顺序(从右到左):发送环 → 🛠 → 📷 → 🖼
+        # 📷/🖼 是图片相关按钮,模型不支持多模态时隐藏(见 set_vision_enabled)
+        self._corner_btns = [self.send_btn, self.test_btn, self.img_btn, self.recent_btn]
+        self._vision = True
+
+    def set_vision_enabled(self, on: bool):
+        """按模型是否支持多模态显示/隐藏图片相关按钮(📷 添加图片、🖼 最近截图)"""
+        self._vision = bool(on)
+        self.img_btn.setVisible(self._vision)
+        self.recent_btn.setVisible(self._vision)
+        self.setPlaceholderText(
+            "问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)" if self._vision
+            else "问 AI 任何问题…(Enter 发送, Shift+Enter 换行)")
+        self._layout_corner_buttons()   # 重新摆放右下角按钮
+
+    def vision_enabled(self) -> bool:
+        return self._vision
+
+    def _layout_corner_buttons(self):
+        """把右下角圆形按钮从右到左依次摆放,只排可见的按钮"""
+        m = 6
+        x = self.width() - m
+        for b in reversed(self._corner_btns):
+            if not b.isVisible():
+                continue
+            x -= b.width() + m
+            b.move(x, self.height() - b.height() - m)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        # 圆形按钮钉在输入框右下角(发送环在最后,🛠 在它左边,📷 再左边,🖼 最左)
-        m = 6
-        bw = self.send_btn.width()   # 发送环 40px(含外圈上下文环)
-        self.send_btn.move(self.width() - bw - m, self.height() - bw - m)
-        self.test_btn.move(self.width() - bw * 2 - m * 2, self.height() - bw - m)
-        self.img_btn.move(self.width() - bw * 3 - m * 3, self.height() - bw - m)
-        self.recent_btn.move(self.width() - bw * 4 - m * 4, self.height() - bw - m)
+        self._layout_corner_buttons()
 
     def canInsertFromMimeData(self, source):
         return source.hasImage() or super().canInsertFromMimeData(source)
@@ -730,9 +848,15 @@ class AIChatDock(QDockWidget):
         self.signals.tool_called.connect(self._show_tool)
         # ask_user 交互:worker 线程请求 → 主线程弹窗 → 结果回传
         self.signals.user_ask.connect(self._on_user_ask_ui)
+        # 本地模型下载(跨线程发信号,主线程更新进度弹窗,避免跨线程碰 UI)
+        self.signals.local_dl_start.connect(self._start_local_download)
+        self.signals.local_dl_progress.connect(self._on_local_dl_progress)
+        self.signals.local_dl_done.connect(self._on_local_dl_done)
 
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
+        self.history.setStyleSheet(
+            "QTextBrowser { background: transparent; border: none; }")
         self.input = _ChatInput()
         self.input.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)")
         self.input.returnPressed.connect(self.send)
@@ -743,13 +867,23 @@ class AIChatDock(QDockWidget):
         self.input.recentClicked.connect(self._pick_recent_screenshots)
         # 浮动/停靠使用 QDockWidget 标题栏右上角自带的浮动按钮(与系统行为整合)
 
-        # 顶部:技能管理入口(相对靠上,一眼可见)
+        # 顶部:标题 + 当前模型/多模态徽标 + 技能管理入口
+        title = QLabel("AI 助手")
+        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.model_label = QLabel("")
+        self.model_label.setToolTip("当前使用的模型,以及是否支持看图(多模态)")
         skills_btn = QPushButton("技能管理…")
         skills_btn.setToolTip("管理游戏运行时辅助技能(指令指南/崩溃守护等)")
         skills_btn.clicked.connect(self.open_skill_manager)
+        skills_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"
+            " border-radius: 6px; padding: 3px 8px; }"
+            "QPushButton:hover { color: #ffffff; border-color: #5B8DEF; }")
         top_row = QHBoxLayout()
         top_row.setContentsMargins(2, 0, 2, 0)
-        top_row.addWidget(QLabel("AI 助手"))
+        top_row.addWidget(title)
+        top_row.addSpacing(6)
+        top_row.addWidget(self.model_label)
         top_row.addStretch()
         top_row.addWidget(skills_btn)
 
@@ -759,6 +893,10 @@ class AIChatDock(QDockWidget):
         perm_btn.setToolTip("在 只读 / 工作区可写 之间切换\n"
                             "只读 = AI 不能改任何文件;工作区可写 = AI 只能改启动器目录内的文件")
         perm_btn.clicked.connect(self._cycle_permission)
+        perm_btn.setStyleSheet(
+            "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"
+            " border-radius: 6px; padding: 3px 8px; }"
+            "QPushButton:hover { color: #ffffff; border-color: #5B8DEF; }")
         self.perm_label = QLabel("")
         perm_row = QHBoxLayout()
         perm_row.setContentsMargins(2, 0, 2, 0)
@@ -799,8 +937,51 @@ class AIChatDock(QDockWidget):
         self._entries = []             # 历史条目(kind, ...),展开时整体重渲染
         self._expanded_tools = set()   # 已展开的工具编号
         self._chat_messages = []       # 真正的对话历史(喂给 LLM 的消息,不含 system)
+        self._local_engine = None      # 本地推理引擎(懒加载单例,见 _get_local_engine)
+        self._local_downloading = False   # 本地模型下载中标志
+        self._local_dlg = None            # 下载进度弹窗
         self._append_system("AI 助手就绪。选中实例后提问,我会带上实例上下文;"
                             "我还能调用工具(列实例/搜 Mod/读日志等),写操作需要\"工作区可写\"权限。")
+        self.update_vision_ui()        # 按模型是否支持多模态显示/隐藏图片按钮
+
+    def update_vision_ui(self):
+        """按所选模型是否支持看图(多模态)显示/隐藏图片相关按钮。
+
+        优先依据模型名判定(见 model_supports_vision);无法判定的本地/自定义模型
+        才回退到用户手动的 ai_multimodal 开关。设置对话框保存后也会调用。"""
+        vis = model_supports_vision(self.settings.get("ai_provider"),
+                                    self.settings.get("ai_model"))
+        if vis is None:
+            on = bool(self.settings.get("ai_multimodal", False))
+        else:
+            on = vis
+        self.input.set_vision_enabled(on)
+        # 模型不支持图片时,清掉还没发送的图片(按钮已隐藏,防止残留)
+        if not on and self.pending_images:
+            self.pending_images = []
+            self._rebuild_thumb_row()
+            self._append_system("当前模型不支持图片输入,已清除待发送的图片。")
+        self._update_model_badge(vis)
+
+    def _update_model_badge(self, vis):
+        """顶部模型徽标:显示当前模型名 + 是否支持看图。"""
+        if not hasattr(self, "model_label"):
+            return
+        model = self.settings.get("ai_model") or "未设置模型"
+        if len(model) > 22:
+            model = model[:20] + "…"
+        if vis is True:
+            badge, color = "🖼 支持看图", "#2E7D32"
+        elif vis is False:
+            badge, color = "🖼 不支持看图", "#8a8f98"
+        else:
+            cur = bool(self.settings.get("ai_multimodal", False))
+            badge, color = ("🖼 手动·开" if cur else "🖼 手动·关"), "#B26A00"
+        self.model_label.setText(f"{model} · {badge}")
+        self.model_label.setStyleSheet(f"color: {color}; background: transparent;")
+
+    def _vision_on(self) -> bool:
+        return bool(self.settings.get("ai_multimodal", False))
 
     # ---- 文件权限:输入框附近一键切换 ----
     def _update_permission_label(self):
@@ -879,14 +1060,18 @@ class AIChatDock(QDockWidget):
     # ---- 图片输入 ----
     def _pick_images(self):
         """📷 按钮:打开文件选择框,可多选图片"""
-        paths, _f = QFileDialog.getOpenFileNames(
+        if not self._vision_on():
+            return   # 模型不支持多模态:按钮已隐藏,这里只是兜底
+        paths_, _f = QFileDialog.getOpenFileNames(
             self, "添加图片", "",
             "图片 (*.png *.jpg *.jpeg *.webp *.gif *.bmp);;所有文件 (*)")
-        for p in paths:
+        for p in paths_:
             self._add_image_path(p)
 
     def _pick_recent_screenshots(self):
         """🖼 最近照片:列出 .minecraft 里的游戏截图,选中的添加进输入"""
+        if not self._vision_on():
+            return   # 模型不支持多模态:按钮已隐藏,这里只是兜底
         import paths as _paths
         dlg = RecentScreenshotsDialog(_paths.GAME_DIR, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -903,6 +1088,9 @@ class AIChatDock(QDockWidget):
             self._add_image_path(tmp)
 
     def _add_image_path(self, path: str):
+        if not self._vision_on():
+            self._append_system("⚠️ 当前模型不支持图片输入(设置 → AI 助手 → 多模态 可开启)")
+            return
         if not path or not os.path.isfile(path):
             return
         try:
@@ -969,6 +1157,112 @@ class AIChatDock(QDockWidget):
         elif href.startswith(("http://", "https://")):
             QDesktopServices.openUrl(url)
 
+    # ---- 本地推理(§8.1 拍板 xLAM 模型,grammar 约束) ----
+    def _local_enabled(self) -> bool:
+        """当前 provider 是否为内置本地模型"""
+        return self.settings.get("ai_provider") == LOCAL_PROVIDER
+
+    def _get_local_engine(self):
+        """懒加载本地推理引擎单例(首次用到才起;窗口关闭/游戏启动时 stop)"""
+        if self._local_engine is None:
+            from local_ai import GrammarToolEngine
+            self._local_engine = GrammarToolEngine(model_id=LOCAL_MODEL_ID)
+        return self._local_engine
+
+    def _local_model_ready(self) -> bool:
+        """模型文件是否已下载且校验通过(§2 懒加载:没下就提示+走云端)"""
+        try:
+            import model_registry
+            return model_registry.is_downloaded(LOCAL_MODEL_ID)
+        except Exception:
+            return False
+
+    def _local_tool_call(self, text: str, executor, on_tool):
+        """本地路径:grammar 工具调用 → 复用 executor 执行。
+        返回 (reply 文本, 是否成功);失败时上层落云端(§1.4)。"""
+        try:
+            engine = self._get_local_engine()
+            engine.start()   # 幂等:已启动则直接返回
+            call = engine.tool_call(text)
+            name = call.get("name", "")
+            args = call.get("arguments", {})
+            if not name:
+                return ("(本地模型未给出明确动作)", False)
+            if on_tool:
+                on_tool(name, args, "(本地推理)")
+            result = executor(name, args)
+            # 工具结果作为回复展示(本地单轮,不做多轮,规划 §0)
+            text_result = str(result)
+            reply = f"✅ 已执行「{name}」:\n{text_result}"
+            return (reply, True)
+        except PermissionDenied:
+            return ("权限拒绝:当前是只读权限,不能修改文件(可在 AI 设置中改为\"工作区可写\")", True)
+        except Exception as e:
+            return (f"(本地推理失败:{type(e).__name__}: {e})", False)
+
+    # ---- 本地模型下载(懒加载 §2):首次用到且未下载 → 后台下载带进度,期间走云端 ----
+    def _start_local_download(self):
+        """主线程:创建下载进度弹窗,后台线程下载模型(镜像优先),完成后关闭弹窗。"""
+        if self._local_downloading:
+            return
+        if not bool(self.settings.get("ai_local_auto_download", True)):
+            return
+        self._local_downloading = True
+        dlg = QProgressDialog("正在下载本地模型(约500MB,镜像优先)…", None, 0, 0, self)
+        dlg.setWindowTitle("下载本地模型")
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        dlg.setMinimumDuration(0)
+        dlg.setCancelButton(None)
+        dlg.setAutoClose(False)
+        dlg.show()
+        self._local_dlg = dlg
+
+        def dl():
+            try:
+                import model_registry
+                model_registry.download(
+                    LOCAL_MODEL_ID,
+                    progress_callback=lambda d, t: self.signals.local_dl_progress.emit(d, t))
+                self.signals.local_dl_done.emit("✅ 本地模型下载完成,之后可用内置本地模型。")
+            except Exception as e:
+                self.signals.local_dl_done.emit(
+                    f"❌ 本地模型下载失败:{type(e).__name__}: {str(e)[:200]}(可稍后重新触发)")
+
+        threading.Thread(target=dl, daemon=True).start()
+
+    def _on_local_dl_progress(self, done, total):
+        """主线程:更新下载进度弹窗(跨线程信号已搬回主线程)。"""
+        if self._local_dlg is None:
+            return
+        self._local_dlg.setMaximum(max(total, 1))
+        self._local_dlg.setValue(done)
+        if total:
+            self._local_dlg.setLabelText(
+                f"下载本地模型…  {done/1024/1024:.0f} / {total/1024/1024:.0f} MB")
+
+    def _on_local_dl_done(self, msg):
+        """主线程:下载结束,关弹窗 + 提示。"""
+        self._local_downloading = False
+        if self._local_dlg is not None:
+            self._local_dlg.close()
+            self._local_dlg = None
+        self._append_system(msg)
+
+    # ---- 本地引擎生命周期:游戏启动/窗口关闭时卸载(省内存/无残留进程) ----
+    def stop_local_engine(self):
+        """卸载本地模型引擎(llama-server 进程)。off/cloud 时游戏启动会调用;窗口关闭也会调用。"""
+        eng = getattr(self, "_local_engine", None)
+        if eng is not None:
+            try:
+                eng.stop()
+            except Exception:
+                pass
+            self._local_engine = None     # 下次要用会重新懒加载
+
+    def shutdown(self):
+        """窗口关闭时调用:卸载本地模型,确保无残留进程。"""
+        self.stop_local_engine()
+
     # ---- 发送(后台线程,带工具调用,过程实时显示) ----
     def ask(self, text: str):
         """直接发起一次 AI 对话(自动 debug 等场景用)"""
@@ -978,6 +1272,12 @@ class AIChatDock(QDockWidget):
     def send(self):
         text = self.input.text().strip()
         images = list(self.pending_images)
+        if images and not self._vision_on():
+            # 模型不支持多模态的兜底:忽略待发图片
+            self._append_system("⚠️ 当前模型不支持图片输入,已忽略待发送的图片。")
+            images = []
+            self.pending_images = []
+            self._rebuild_thumb_row()
         if not text and not images:
             return
         if not self._confirm_if_heavy(text):
@@ -1020,6 +1320,7 @@ class AIChatDock(QDockWidget):
         s = self.settings
         executor = build_executor(s)
         tools_called = []
+        is_local = self._local_enabled()
 
         def on_tool(name, args, result):
             tools_called.append(name)
@@ -1027,6 +1328,32 @@ class AIChatDock(QDockWidget):
 
         def worker():
             try:
+                # 路由分流(§1):本地 provider 时先判规则/难度/歧义
+                if is_local and not images:
+                    from task_router import route, match_rule
+                    decision = route(text)
+                    if decision["target"] == "rule":
+                        reply = match_rule(text) or "(没想好怎么答,稍后再试试)"
+                        self.signals.reply.emit(reply)
+                        self._update_ctx_ring()
+                        return
+                    if decision["target"] == "local":
+                        if self._local_model_ready():
+                            reply, ok = self._local_tool_call(text, executor, on_tool)
+                            if ok:
+                                if tools_called:
+                                    self.signals.no_tool.emit()
+                                self.signals.reply.emit(reply)
+                                self._update_ctx_ring()
+                                return
+                            # 本地失败 → 落到云端(§1.4 失败链路)
+                            self._append_system("本地推理未成功,已转云端处理…")
+                        else:
+                            # 模型未下载(§2 懒加载):提示后走云端;同时后台触发下载(带进度弹窗)
+                            self._append_system("本地模型未下载,先走云端(设置里可关本地模型)。"
+                                                "首次使用会在后台下载约 500MB…")
+                            self.signals.local_dl_start.emit()
+                    # decision==ask 或模型未就绪:都落云端(ask 由云端循环触发 ask_user 交互)
                 result = chat_with_tools(messages, s, TOOLS, executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
                                          return_messages=True)
@@ -1164,4 +1491,5 @@ class AIChatDock(QDockWidget):
             self.settings = dlg.settings
             self.main.settings = dlg.settings
             save_settings(dlg.settings)
+            self.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
             self._append_system("AI 设置已保存")

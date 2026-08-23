@@ -479,12 +479,25 @@ class RecipeData:
         attribute 支持中文别名:武器伤害→attack_damage, 护甲→armor, 护甲韧性→armor_toughness。
         结果按 (attribute, top_n) 缓存。"""
         alias = {
+            # 中文
             "武器伤害": "attack_damage", "伤害": "attack_damage",
             "攻击伤害": "attack_damage", "护甲": "armor",
             "护甲韧性": "armor_toughness", "攻速": "attack_speed",
             "挖掘等级": "mining_level",
+            # 英文(小模型常输出英文,直接映射,不依赖模型表现)
+            "damage": "attack_damage", "attack_damage": "attack_damage",
+            "armor": "armor", "armor_toughness": "armor_toughness",
+            "attack_speed": "attack_speed", "speed": "attack_speed",
+            "mining_level": "mining_level", "mining": "mining_level",
+            "toughness": "armor_toughness",
         }
         attr = alias.get(attribute, attribute)
+        if attr != attribute:
+            attr = attr  # 已映射
+        elif isinstance(attribute, str):
+            # 未命中映射:去空格/小写后再试一次英文(容错 " Damage " 之类)
+            cleaned = attribute.strip().lower()
+            attr = alias.get(cleaned, cleaned)
         key = (attr, top_n)
         if key in self._cmp_cache:
             return self._cmp_cache[key]

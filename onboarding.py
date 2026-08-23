@@ -76,7 +76,8 @@ class OnboardingDialog(QDialog):
                        "以后随时在菜单 设置 / AI 设置 里修改。")
         desc2.setWordWrap(True)
         self.ai_form = AISettingsForm(self.settings)
-        hint = QLabel("没有 DeepSeek 账号?可以先用 Ollama / LM Studio 本地模型,完全免费离线。")
+        hint = QLabel("没有 DeepSeek 账号?可以先用 Ollama / LM Studio 本地模型,完全免费离线。\n"
+                      "注意:发图片需要模型本身会\"看图\",本地模型通常不支持,不确定就别勾。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888888;")
 

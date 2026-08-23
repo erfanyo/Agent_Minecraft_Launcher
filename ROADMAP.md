@@ -4,6 +4,12 @@
 
 ## ✅ 已完成
 
+- [x] **AI 本地模型选型拍板(§8.1 模型验证)** — 2026-08-23
+  - 下载 Qwen3.5-0.8B 通用版 + xLAM 微调版 GGUF(均 Q4_K_M,sha256 校验,存 AMCL/models/ + manifest.json 资源清单)
+  - 建回归测试集 `ai_testset.py`(31 条典型指令 + 期望工具调用),走 LM Studio llama.cpp(CUDA)实测
+  - 结果:xLAM 微调版胜出(综合 71.8% vs 51.6%),最终模型 = `qwen3.5-0.8b-function-calling-xlam.q4_k_m.gguf`
+  - 报告:`.tmp/eval_out/compare.md`;详情见 AI规划.md §8.1
+
 - [x] **配方查询修复 + 套娃展开(A+B+C)** — 2026-08
   - 数据定位:get_recipe_path 支持 `instance` 参数,缺省自动探测所有实例,取最新导出的 `.bridge/recipes.json`(修复"数据已导出却查不到")
   - 完整合成树:brief=false 返回 合成树(每步标注机器/加工设备,如 工作台/冶金灌注机/富集仓)+ 材料总账(展开到原材料,自动按一炉产出向上取整)
@@ -12,6 +18,37 @@
   - 验证:.tmp/test_recipe_zh.py 9 项 + 全量回归(18+29+CLI+设置)全 PASS
 
 ## 🔜 规划中(按需启用)
+
+- [x] **本地推理模块原型:grammar 约束解码(§8.1 续接②先行项)** — 2026-08-23
+  - `local_ai.py` GrammarToolEngine:从工具 schema 自动生成 GBNF(工具分支绑定 + required 强制)
+  - 自带 llama.cpp server(b10590)加载 xLAM Q4_K_M,实测结构 100% 合法 JSON
+  - 效果:31 条测试集 ×3 次平均,参数准确率 79.0% vs 原生 tools 69.4%(+9.6%);详见 AI规划.md §8.2
+  - 踩坑已记录:GBNF 规则名禁下划线、name-args 需绑定、必填卡顿自动重试
+
+- [x] **任务路由与失败链路(§1 落地)** — 2026-08-23
+  - `task_router.py`:难度判定(诊断/代码/规划=难,翻译/摘要/分类=易)+ FAQ 规则引擎 + 失败链路
+  - 优先级:工具动词→本地 / 纯问答→规则 / 困难→云端 / 歧义→ask / 未知→云端兜底
+  - `run_with_fallback`:本地 → 规则 → 云端 → 诚实认输,端到端联调验证通过
+  - schema 单一来源:`local_ai` 从 `assistant.TOOLS` 自动生成 GBNF,新增工具只改 assistant.py 一处
+
+- [x] **§8.1 已知问题修复** — 2026-08-23
+  - ask_user 触发不灵 → 路由层架构级兜底(歧义请求直接构造 ask_user,不依赖 0.8B 模型自觉)
+  - compare_items 英文参数 → 描述强化 + recipe_graph 英文别名映射(大小写/空格容错)
+  - 启动实例误解 → install_instance(创建)/launch_game(启动)描述区分,本地云端同步
+  - 修复后 grammar 全量回归 78.5%,无回归
+
+- [ ] **本地推理模块原型(继续)**
+  - ✅ W3 聊天循环接入路由:assistant.py 按 route() 分流(rule/local/cloud),本地失败落云端(§1.4)
+  - ⏳ W1 设置层加 provider / W2 多模态按模型自动隐藏 / W4 状态展示 / W5 引导 / W6 性能提示
+  - ⏳ W7 游戏内 AI 通道设置(`ai_in_game`:off/cloud/local,决定游戏启动时模型去留,见 AI规划.md §5.1)
+  - 📋 **前端(GUI)部分已写成任务书**:`任务书-本地模型前端接入.md`,
+    待交给多模态模型执行;后端模块(local_ai/task_router/model_registry)已完成,禁止改动
+
+- [ ] **bridge-mod 游戏内 AI 交互入口(日程,未来)**
+  - 在 bridge-mod 里提供游戏内 AI 入口(聊天栏/快捷键 → 向启动器提问 → 回显游戏内)
+  - 通道由启动器设置 `ai_in_game` 决定:off(不用)/ cloud(走云端,游戏内辅助复杂场景)/ local(本地模型)
+  - 启动器侧需要:接收游戏内请求的本地通道(bridge 指令口扩展),后端待定
+  - 卸载联动已定:off/cloud 时游戏启动卸载本地模型;local 时常驻(见 AI规划.md §5.1)
 
 - [ ] **D. 配方数据新鲜度**
   - 返回信息里带"数据来自 X 实例、导出于 YYYY-MM-DD HH:MM"(目前 describe_full 头部已有,可再扩展)

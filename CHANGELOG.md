@@ -97,7 +97,73 @@
 
 ## [未发布 / Unreleased]
 
+### 🎨 界面与体验
+- 「我的版本」首页仿 PCL2 重做:左 1/3 登录卡片(头像/昵称/登录方式 + 更改登录入口)与
+  当前实例卡片、启动游戏大按钮、版本选择/版本设置按钮
+- 右 2/3 改为标签页:版本选择 / **启动器更新日志**(解析 CHANGELOG.md)/ MC 社区动态(占位)
+- 登录方式入口:目前仅离线(可改昵称),正版/外置登录为规划占位
+- 设置入口收敛:启动游戏下方改为「启动器设置」+「管理 ▾」,后者整合实例管理/整体设置/版本选择
+- 整体 UI 视觉打磨:主题自适应配色、圆角卡片、渐变启动按钮、列表圆角高亮
+- 默认离线游戏名改为 Steve
+- 「下载新资源」逻辑与界面重构:目标实例全局共享(各分类页一并生效)、
+  搜索/项目详情/版本列表异步化(不再卡 UI)、详情面板版本/加载器下拉填活(真正驱动下载)、
+  主题自适应视觉统一
+- 「下载新资源」目标实例卡片改为可滚动区域:实例再多展开也不把筛选/搜索挤出界面
+- 首页分类卡片改响应式流式布局:窄窗口自动换行,不再重叠
+- AI 助手停靠栏:顶部新增当前模型 + 是否支持看图徽标;按所选模型是否多模态自动显隐
+  📷/🖼 图片按钮(可判定的模型自动开/关,本地/自定义未知模型保留手动开关)
+- AI 助手停靠栏视觉打磨(标题栏、模型徽标、历史区、权限/技能按钮统一圆角样式)
+- **本地 AI 模型前端接入**:设置新增「内置本地模型」provider(local_builtin,无密钥,模型 qwen3.5-0.8b-xlam-q4km);
+  首次用到且未下载时后台自动下载(镜像优先)+进度弹窗,期间转云端不报错;
+  多模态按 provider 自动预设(local_builtin→关 / openrouter→开,可覆盖);
+  新增 `ai_in_game` 下拉(off/cloud/local),游戏启动时 off/cloud 卸载本地模型、local 保留;
+  窗口关闭卸载本地模型,无残留 llama-server 进程
+- 移除死亡代码:旧「下载 Mod」页(tab_b)及其专属成员,AI 助手不依赖它
+
+### 🧠 游戏内 AI 通道设计(§5.1,2026-08-23 决策)
+- 新增设置项设计 `ai_in_game`(off/cloud/local),决定游戏启动时本地模型去留:
+  off/cloud → 卸载(省内存给游戏);local → 常驻服务游戏内 AI(bridge-mod 未来入口,日程见 ROADMAP)
+- 已写入 AI规划.md §5.1 + 任务书 W7,前端实现待多模态模型执行
+
+### 🧠 聊天循环接入本地路由(W3,§1 落地)
+- `assistant.py` AIChatDock 新增 `_local_enabled` / `_get_local_engine`(懒加载单例)/
+  `_local_model_ready` / `_local_tool_call`(grammar 调用 + 复用 executor 执行)
+- `send()` 的 worker 按 `task_router.route()` 分流:rule 直接答 / local 走本地(失败落云端 §1.4)/
+  其余走云端 chat_with_tools(未动)
+- 默认 provider=deepseek → 本地路径不启用,现有云端行为零影响
+- 集成验证:rule/local/cloud/ask 全链路通过,本地真实执行 list_instances / set_setting 成功
+
+### 🧠 任务路由与失败链路(规划 §1)
+- 新增 `task_router.py`:难度判定(诊断/代码/规划=难,翻译/摘要/分类=易)+ FAQ 规则引擎 + 失败链路
+- 优先级:工具动词→本地 / 纯问答→规则 / 困难→云端 / 歧义→ask / 未知→云端兜底
+- `run_with_fallback`:本地 → 规则引擎 → 云端 → 诚实认输,每层失败自动落下一层(§1.4)
+- 歧义请求(推荐/该装哪些/你决定)架构层强制 ask_user:直接构造问题+候选选项,不依赖小模型自觉
+- schema 单一来源:`local_ai` 从 `assistant.TOOLS` 自动生成 GBNF —— 新增工具只改 assistant.py 一处
+
+### 🧠 已知问题修复(§8.1 实测反馈)
+- **ask_user 触发不灵** → 路由层架构级兜底(见上)
+- **compare_items 英文参数** → 描述强化 + `recipe_graph.compare_items` 英文别名映射(damage/armor/toughness/speed,大小写/空格容错)
+- **"启动实例"误解** → install_instance(创建)/launch_game(启动)描述区分,本地 TOOL_DESCRIPTIONS 与云端 TOOLS 同步
+- 修复后 grammar 全量回归 78.5%(修复前 76.6%),无回归
+
+### 🧠 AI 本地推理模块原型(规划 §7.1 / §8.2)
+- 新增 `local_ai.py`:GrammarToolEngine —— 自动从工具 schema 生成 GBNF grammar,
+  用自带 llama.cpp server(b10590)加载 xLAM Q4_K_M,输出结构 100% 合法 JSON
+- **grammar 约束解码实测有效**:31 条测试集 ×3 次平均,参数准确率 79.0% vs 原生 tools 69.4%(+9.6%),
+  验证"结构上必对"——required 字段强制必填
+- 踩坑记录已写入 AI规划.md §8.2(GBNF 规则名禁下划线 / name-args 需绑定 / 必填卡顿需重试)
+- 内置 llama.cpp 完整二进制(AMCL/runtime/llama-cpp,CPU 兜底;有 LM Studio 时可走其 CUDA 后端)
+
+### 🧠 AI 本地模型验证(规划 §8.1)
+- **模型选型已拍板**:xLAM 微调版 Qwen3.5-0.8B Q4_K_M 胜出
+  (31 条回归测试集 ×3 次贪心解码,LM Studio llama.cpp CUDA:综合 71.8% vs 通用版 51.6%)
+- 新增 `model_registry.py`:资源清单 manifest.json + sha256 校验 + 镜像优先下载(hf-mirror → HF)
+- 新增 `ai_testset.py`:AI 回归测试集(31 条典型启动器指令 + 期望工具调用,规划 §7.4)
+- 评测链路:`.tmp/eval_models.py`(LM Studio API,温度 0 可复现)+ `.tmp/eval_driver.py`
+- 模型文件存 `AMCL/models/`(通用版 508.9MB + xLAM 版 504.8MB,均 Q4_K_M,sha256 钉住)
+
 规划中的内容见 [ROADMAP.md](ROADMAP.md):
+- 本地推理模块原型(grammar 约束解码先行)
 - 配方数据新鲜度提示
 - 直接读 mod jar 配方(无需进游戏导出)
 - MCP server、AI 崩溃日志分析技能

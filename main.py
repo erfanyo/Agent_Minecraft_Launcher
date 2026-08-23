@@ -63,23 +63,13 @@ from java_manager import ensure_java  # Java 检测与自动安装
 from launcher import build_launch_command, resolve_inherited_json  # 版本 JSON → 启动命令
 from loaders import install_loader  # Fabric / Forge 加载器安装
 from modpack import import_modpack as import_modpack_file  # 整合包导入
-from modrinth import download_mod, search_mods_cn  # Modrinth 搜索与下载(含中文名支持)
+from modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
 import paths  # 游戏目录(可配置,设置/引导里可改)
 from paths import GAME_DIR, RUNTIME_DIR  # 兼容旧引用(测试用);内部统一用 paths.GAME_DIR
 from settings import load_settings, save_settings  # 启动器配置
 from skill_manager import SkillManager, SkillManagerDialog  # 技能(运行时辅助)系统
-from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style
 from version_tree import fill_version_tree  # 版本树构建(与下载选项卡共用)
 
-# 推荐 Mod(下载 Mod 页「推荐 Mod ▾」):优化/管理/指令类,一键装到目标实例
-RECOMMENDED_MODS = [
-    ("钠 (Sodium) - 渲染优化", "sodium"),
-    ("锂 (Lithium) - 服务端优化", "lithium"),
-    ("玉 (Jade) - 方块信息", "jade"),
-    ("JEI - 配方查看", "jei"),
-    ("铁氧体磁芯 (FerriteCore) - 内存优化", "ferrite-core"),
-    ("Lan Server Properties - 自动开 RCON", "lan-server-properties"),
-]
 
 
 def _legacy_scan(game_dir: str = GAME_DIR) -> list:
@@ -253,6 +243,9 @@ class MainWindow(QMainWindow):
         settings_menu = menubar.addMenu(t("设置", "Settings"))
         settings_menu.addAction(t("设置对话框…", "Settings…"), self.open_settings)
         settings_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
+        settings_menu.addSeparator()
+        settings_menu.addAction(t("镜像源…", "Mirror Sources…"),
+                                lambda: self.open_settings(tab="mirror"))
 
         # ---- AI 助手:顶级菜单(和"查看"同级,更显眼) ----
         ai_menu = menubar.addMenu("AI")
@@ -261,48 +254,27 @@ class MainWindow(QMainWindow):
         self._ai_show_action.toggled.connect(self._toggle_ai)
         # AI 设置入口已移除(进设置对话框);技能管理入口已移到 AI 子窗口顶部;
         # 「发送游戏指令…」入口已隐藏:由指令中心 skill 与 bridge-mod 的新通道替代
-
-        # ---- 帮助:检查更新(AMCL 启动器 + bridge-mod) ----
-        help_menu = menubar.addMenu(t("帮助", "Help"))
-        help_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
+        # 帮助菜单已移除:其中"检查更新"与设置菜单里的重复(设置 → 检查更新…)
 
         # ---- 联机方案中心(灵感 #2):按场景推荐联机方案 ----
         online_menu = menubar.addMenu(t("联机", "Multiplayer"))
         online_menu.addAction(t("联机方案中心…", "Multiplayer Center…"), self.open_online_center)
 
-        # ---- Tab「我的版本」:扫描 versions 文件夹,显示已有实例 ----
-        tab_a = QWidget()
-        self.instance_list = QListWidget()
-        self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)  # 双击启动
-        self.launch_btn = QPushButton(t("启动所选实例", "Launch Selected"))
-        self.launch_btn.setStyleSheet(primary_btn_style())   # 蓝底白字(深浅色各一版)
+        # ---- Tab「我的版本」:仿 PCL2 首页(左 1/3 登录+实例设置+启动按钮,右 2/3 版本/更新日志/动态) ----
+        from version_home import VersionHome
+        tab_a = VersionHome()
+        self.home_panel = tab_a                     # 保留引用,便于刷新登录显示等
+        self.instance_list = tab_a.instance_list    # 版本列表(兼容旧引用:右键/视图/双击)
+        self.launch_btn = tab_a.launch_btn          # 启动游戏大按钮
+        self.refresh_inst_btn = tab_a.refresh_btn   # 右列「版本」里的刷新按钮
+        # 旧行为保留:双击启动 + 启动按钮 + 刷新
+        self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)
         self.launch_btn.clicked.connect(self.launch_selected_instance)
-        refresh_inst_btn = QPushButton(t("刷新", "Refresh"))
-        refresh_inst_btn.clicked.connect(self.refresh_instances)
-        # 一键配置:对当前选中的实例操作(下拉菜单,未来扩展更多配置项)
-        cfg_btn = QToolButton()
-        cfg_btn.setText(t("一键配置 ▾", "One-click ▾"))
-        cfg_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        cfg_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        cfg_menu = QMenu(cfg_btn)
-        # 正式方案:bridge-mod(本地指令口,无需对局域网开放)
-        cfg_menu.addAction("一键配置 bridge-mod(本地指令口,推荐)", self._one_click_bridge_current)
-        # 临时方案:RCON(需要 Lan Server Properties + 对局域网开放)
-        rcon_action = cfg_menu.addAction("一键配置 RCON(临时方案)", self._one_click_rcon_current)
-        rcon_action.setToolTip(
-            "临时方案(正式方案为 bridge-mod):\n"
-            "1) 需要安装 Lan Server Properties mod\n"
-            "2) 进世界后按 ESC → 点「对局域网开放」\n"
-            "之后 RCON 才会监听端口,才能发指令。")
-        cfg_btn.setMenu(cfg_menu)
-        a_row = QHBoxLayout()
-        a_row.addWidget(self.launch_btn)
-        a_row.addWidget(cfg_btn)
-        a_row.addWidget(refresh_inst_btn)
-        a_row.addStretch()
-        a_layout = QVBoxLayout(tab_a)
-        a_layout.addLayout(a_row)
-        a_layout.addWidget(self.instance_list)
+        self.refresh_inst_btn.clicked.connect(self.refresh_instances)
+        # 新首页抛出的信号 → 启动器处理
+        tab_a.open_instance_manager_requested.connect(self._home_open_instance_manager)
+        tab_a.open_settings_requested.connect(self.open_settings)
+        tab_a.login_changed.connect(self._on_login_changed)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
         from resource_center import ResourceCenter
@@ -315,128 +287,6 @@ class MainWindow(QMainWindow):
             on_download=self._resource_download,
             on_start_instance=self.start_instance_download)
 
-        # ---- Tab「下载 Mod」(旧,保留构建以兼容测试/旧逻辑,不再显示)----
-        tab_b = QWidget()
-        # 目标实例:卡片列表(点击选中 + 箭头展开看已装 Mod)
-        self.instance_cards_box = QWidget()
-        self.instance_cards_layout = QVBoxLayout(self.instance_cards_box)
-        self.instance_cards_layout.setContentsMargins(0, 0, 0, 0)
-        self._mod_inst_cards = []      # [(inst, card)]
-        self._selected_mod_inst = None
-
-        # 全局筛选:游戏版本 + 加载器(决定搜索范围,也是卡片内部筛选的默认值)
-        self.filter_version = QComboBox()
-        self.filter_version.setEditable(True)
-        self.filter_version.setToolTip("筛选的游戏版本,可自行输入(影响搜索和卡片默认值)")
-        self.filter_loader = QComboBox()
-        for label, value in [("全部加载器", None), ("Fabric", "fabric"),
-                             ("Forge", "forge"), ("NeoForge", "neoforge"),
-                             ("Quilt", "quilt")]:
-            self.filter_loader.addItem(label, value)
-
-        self.mod_search_edit = QLineEdit()
-        self.mod_search_edit.setPlaceholderText("搜 Mod,如 sodium / 钠 / 想找的模组名(回车搜索)")
-        self.mod_search_edit.returnPressed.connect(self.on_search_mods)  # 回车执行搜索
-        search_btn = QPushButton("搜索")
-        search_btn.clicked.connect(self.on_search_mods)
-
-        # 搜索结果:左侧列表(一级菜单),右侧详情面板(二级菜单:版本/加载器筛选 + 下载)
-        self.mod_result_list = QListWidget()
-        self.mod_result_list.currentItemChanged.connect(self._on_mod_selected)
-
-        self.mod_panel = QWidget()
-        # 详情面板:不再是固定宽度——窗口太小时不再挤压列表,可拖动分隔条调节
-        self.mod_panel.setMinimumWidth(250)
-        self.mod_panel.setMaximumWidth(480)
-        self.mod_panel_empty = QLabel("← 在左侧选择一个 Mod\n展开它的版本 / 加载器选项")
-        self.mod_panel_empty.setStyleSheet(hint_style())
-        self.mod_panel_empty.setWordWrap(True)
-        self.mod_icon = QLabel()
-        self.mod_icon.setFixedSize(48, 48)
-        self.mod_icon.setStyleSheet(inner_style())
-        self.mod_title = QLabel("")
-        self.mod_title.setWordWrap(True)
-        self.mod_desc = QLabel("")
-        self.mod_desc.setWordWrap(True)
-        self.mod_desc.setStyleSheet(hint_style())
-        self.mod_gv_combo = QComboBox()
-        self.mod_loader_combo = QComboBox()
-        self.mod_ver_combo = QComboBox()
-        self.mod_dl_btn = QPushButton("下载到目标实例")
-        self.mod_dl_btn.clicked.connect(self._mod_panel_download)
-        self.mod_gv_combo.currentIndexChanged.connect(self._mod_panel_refresh_versions)
-        self.mod_loader_combo.currentIndexChanged.connect(self._mod_panel_refresh_versions)
-
-        panel_layout = QVBoxLayout(self.mod_panel)
-        panel_layout.addWidget(self.mod_icon)
-        panel_layout.addWidget(self.mod_title)
-        panel_layout.addWidget(self.mod_desc)
-        panel_layout.addWidget(QLabel("游戏版本:"))
-        panel_layout.addWidget(self.mod_gv_combo)
-        panel_layout.addWidget(QLabel("加载器:"))
-        panel_layout.addWidget(self.mod_loader_combo)
-        panel_layout.addWidget(QLabel("Mod 版本:"))
-        panel_layout.addWidget(self.mod_ver_combo)
-        panel_layout.addWidget(self.mod_dl_btn)
-        panel_layout.addWidget(self.mod_panel_empty)
-        panel_layout.addStretch()
-        # 初始只显示占位提示
-        for wdg in (self.mod_icon, self.mod_title, self.mod_desc, self.mod_gv_combo,
-                    self.mod_loader_combo, self.mod_ver_combo, self.mod_dl_btn):
-            wdg.setVisible(False)
-
-        # 列表 + 详情:QSplitter 分隔条可拖动,小窗口下不会互相挤压
-        self.results_split = QSplitter(Qt.Orientation.Horizontal)
-        self.results_split.addWidget(self.mod_result_list)
-        # 详情面板放进垂直滚动区:窗口太矮时内容不会被压缩,改为滚动
-        self.mod_panel_scroll = QScrollArea()
-        self.mod_panel_scroll.setWidgetResizable(True)
-        self.mod_panel_scroll.setWidget(self.mod_panel)
-        self.results_split.addWidget(self.mod_panel_scroll)
-        self.results_split.setChildrenCollapsible(False)
-        self.results_split.setSizes([420, 300])
-
-        b_layout = QVBoxLayout(tab_b)
-        # 目标实例:默认折叠(省空间,界面不拥挤);展开可选实例,或选"无"手动指定位置
-        self.inst_cards_toggle = QPushButton("▸ 目标实例: 未选择")
-        self.inst_cards_toggle.setCheckable(True)
-        self.inst_cards_toggle.setChecked(False)   # 默认折叠
-        self.inst_cards_toggle.clicked.connect(self._toggle_inst_cards)
-        b_layout.addWidget(self.inst_cards_toggle)
-        b_layout.addWidget(self.instance_cards_box)   # 初始隐藏,见 _toggle_inst_cards
-
-        # 手动选择安装位置(直接用 Windows 文件管理器挑目录,比如其他启动器的 mods 文件夹)
-        self._custom_mods_dir = None
-        self.pick_dir_btn = QPushButton("选择安装位置…(打开文件管理器)")
-        self.pick_dir_btn.clicked.connect(self._pick_mods_dir)
-        self.custom_dir_label = QLabel("")
-        self.custom_dir_label.setStyleSheet(hint_style())
-        self.custom_dir_label.setWordWrap(True)
-        b_layout.addWidget(self.pick_dir_btn)
-        b_layout.addWidget(self.custom_dir_label)
-        for wdg in (self.instance_cards_box, self.pick_dir_btn, self.custom_dir_label):
-            wdg.setVisible(False)
-
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(QLabel("筛选:"))
-        filter_row.addWidget(self.filter_version)
-        filter_row.addWidget(self.filter_loader)
-        search_row = QHBoxLayout()
-        search_row.addWidget(self.mod_search_edit)
-        search_row.addWidget(search_btn)
-        # 推荐 Mod:一键安装到当前目标实例(常用优化/管理/指令类)
-        self.recommend_btn = QToolButton()
-        self.recommend_btn.setText("推荐 Mod ▾")
-        self.recommend_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.recommend_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        rec_menu = QMenu(self.recommend_btn)
-        for label, slug in RECOMMENDED_MODS:
-            rec_menu.addAction(label, lambda _c=False, s=slug, l=label: self._install_recommended_mod(s, l))
-        self.recommend_btn.setMenu(rec_menu)
-        search_row.addWidget(self.recommend_btn)
-        b_layout.addLayout(filter_row)
-        b_layout.addLayout(search_row)
-        b_layout.addWidget(self.results_split, 1)
 
         # 右键菜单:实例(启动/打开目录/删除)
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -446,7 +296,6 @@ class MainWindow(QMainWindow):
         self.main_tabs = QTabWidget()
         self.main_tabs.addTab(tab_a, t("我的版本", "Versions"))
         self.main_tabs.addTab(self.resource_center, t("下载新资源", "Resources"))
-        self._legacy_mod_tab = tab_b   # 旧 Mod 页保留引用(防 GC 回收其子控件,兼容旧逻辑/测试)
 
         # ---- 底部:可折叠的游戏日志(默认收起) ----
         self.log_toggle_btn = QPushButton(t("▶ 游戏日志", "▶ Game Log"))
@@ -480,8 +329,6 @@ class MainWindow(QMainWindow):
         self.game_process = None
         self.log_queue = queue.Queue()
         self.log_timer = None
-        self._icon_queue = queue.Queue()   # Mod 封面图下载队列(线程 → 定时器)
-        self._icon_timer = None
         self._dl_queue = queue.Queue()     # 下载任务的状态/进度队列(线程 → 定时器)
         self._dl_timer = None
 
@@ -507,23 +354,34 @@ class MainWindow(QMainWindow):
         self._update_running_label()
 
     # ---- 设置 ----
-    def open_settings(self):
-        """打开设置对话框,确定后刷新本窗口的设置"""
+    def open_settings(self, tab: str | None = None):
+        """打开设置对话框,确定后刷新本窗口的设置。
+        tab 可选 "mirror":直接切到镜像源页(设置菜单 → 镜像源…)"""
         from settings_dialog import SettingsDialog
 
-        dlg = SettingsDialog(self.settings, self)
+        dlg = SettingsDialog(self.settings, self, tab=tab)
         if dlg.exec():
             self.settings = dlg.settings
             self.ai_dock.settings = dlg.settings
+            self.ai_dock.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
             self.skill_mgr.settings = dlg.settings   # 技能启停状态同步
             self.resource_center.set_ui_mode(dlg.settings.get("ui_mode", "beginner"))
             self.refresh_instances()   # 游戏目录可能被改了,重新扫描
             self.statusBar().showMessage("设置已保存")
 
     def open_update_dialog(self):
-        """帮助 → 检查更新:AMCL 启动器 + bridge-mod"""
+        """设置 → 检查更新:AMCL 启动器 + bridge-mod(帮助菜单已移除,入口并入设置菜单)"""
         dlg = UpdateDialog(self)
         dlg.exec()
+
+    def closeEvent(self, event):
+        """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
+        if hasattr(self, "ai_dock"):
+            try:
+                self.ai_dock.shutdown()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     # ---- AI 助手 ----
     def _toggle_ai(self, checked: bool):
@@ -567,9 +425,9 @@ class MainWindow(QMainWindow):
             f" 内存 {self.settings.get('memory_gb', 2)}G,"
             f" 版本隔离 {'开' if self.settings.get('version_isolation', True) else '关'}",
         ]
-        inst = self._selected_mod_inst
+        inst = None
         item = self.instance_list.currentItem()
-        if inst is None and item is not None:
+        if item is not None:
             inst = item.data(Qt.ItemDataRole.UserRole)
         if inst:
             lines.append(f"当前选中的实例: {inst['id']}"
@@ -781,11 +639,9 @@ class MainWindow(QMainWindow):
                                                  manifest['latest']['snapshot'])
         self.download_tab._load_tree()
 
-        # 填充筛选下拉(最近的一些正式版):旧 tab_b + 资源中心的 Mod 浏览器
-        if self.filter_version.count() == 0:
-            recent = [v["id"] for v in manifest["versions"]
-                      if v["type"] == "release"][:40]
-            self.filter_version.addItems(recent)
+        # 填充筛选下拉(最近的一些正式版):各资源浏览器
+        recent = [v["id"] for v in manifest["versions"]
+                  if v["type"] == "release"][:40]
         for br in self.resource_center.browsers.values():
             if br.filter_version.count() == 0:
                 br.filter_version.addItems(recent)
@@ -941,6 +797,12 @@ class MainWindow(QMainWindow):
         if os.path.isfile(javaw):
             cmd = [javaw] + cmd[1:]
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+        # 游戏内 AI 通道:off/cloud → 游戏启动前卸载本地模型(llama-server),把内存让给游戏;
+        # local → 保持本地模型加载(游戏内 AI 通道,规划中)
+        ai_in_game = self.settings.get("ai_in_game", "off")
+        if ai_in_game != "local":
+            self.ai_dock.stop_local_engine()
 
         try:
             self.game_process = subprocess.Popen(
@@ -1135,9 +997,8 @@ class MainWindow(QMainWindow):
             if icon:
                 item.setIcon(icon)
             self.instance_list.addItem(item)
-
-        # 2) 下载 Mod 的目标实例:卡片列表(点击选中,箭头展开看已装 Mod)
-        self._rebuild_instance_cards(shown)
+        # 同步到首页面板(实例数量 + 当前选择态)
+        self.home_panel.set_current_instances(shown)
 
         # 3) 打小抄(实例清单备忘,可手动编辑)
         self.write_cheat_sheet(shown)
@@ -1151,8 +1012,8 @@ class MainWindow(QMainWindow):
         if not target_dir:
             self.statusBar().showMessage("未选择安装位置")
             return
-        gv = (inst["base"] if inst else self.filter_version.currentText().strip()) or "1.21.1"
-        loader = (inst["loader"] if inst else self.filter_loader.currentData())
+        gv = (inst["base"] if inst else "1.21.1") or "1.21.1"
+        loader = (inst["loader"] if inst else None)
         # Mod 按加载器过滤;光影/数据包/资源包一般不区分加载器
         use_loader = loader if sub_dir == "mods" else None
 
@@ -1194,166 +1055,6 @@ class MainWindow(QMainWindow):
                     shutil.move(inst_dir, dest)
             except OSError:
                 pass
-
-    # ---- 目标实例卡片(与加载器选择同款,深浅色主题兼容) ----
-
-    def _rebuild_instance_cards(self, instances: list):
-        for _inst, card in self._mod_inst_cards:
-            card.deleteLater()
-        self._mod_inst_cards = []
-        if getattr(self, "_none_card", None):
-            self._none_card.deleteLater()
-        self._selected_mod_inst = None
-
-        # "无"选项(默认):不指定实例,用「选择安装位置…」手动挑目录
-        none_card = QPushButton("无 —— 手动选择安装位置")
-        none_card.setCheckable(True)
-        none_card.setMinimumHeight(40)
-        none_card.setStyleSheet(card_style())
-        none_card.setChecked(True)
-        none_card.clicked.connect(self._select_no_instance)
-        self._none_card = none_card
-        self.instance_cards_layout.addWidget(none_card)
-
-        for inst in instances:
-            card = QPushButton()
-            card.setCheckable(True)
-            card.setMinimumHeight(40)
-            card.setStyleSheet(card_style())
-            card.clicked.connect(lambda _c, i=inst: self._select_mod_instance(i))
-
-            arrow = QPushButton("▸")
-            arrow.setFixedWidth(26)
-            arrow.setStyleSheet(arrow_style())
-            arrow.clicked.connect(lambda _c, i=inst: self._toggle_mod_instance_mods(i))
-
-            name_label = QLabel(inst["label"])
-            name_label.setStyleSheet(inner_style())
-            top = QHBoxLayout()
-            top.setContentsMargins(8, 0, 4, 0)
-            top.addWidget(name_label)
-            top.addStretch()
-            top.addWidget(arrow)
-
-            mods_label = QLabel(self._instance_mods_text(inst))
-            mods_label.setStyleSheet(inner_style())
-            mods_label.setWordWrap(True)
-            mods_label.setVisible(False)
-
-            inner = QVBoxLayout(card)
-            inner.setContentsMargins(0, 6, 0, 8)
-            inner.addLayout(top)
-            inner.addWidget(mods_label)
-
-            self.instance_cards_layout.addWidget(card)
-            self._mod_inst_cards.append((inst, card))
-
-        self.instance_cards_layout.addStretch()
-
-    def _select_mod_instance(self, inst):
-        self._selected_mod_inst = inst
-        for i, card in self._mod_inst_cards:
-            card.setChecked(i["id"] == inst["id"])
-        if getattr(self, "_none_card", None):
-            self._none_card.setChecked(False)
-        # 同步全局筛选到该实例的基础版本 + 加载器(卡片内部默认值也跟着变)
-        self.filter_version.setCurrentText(inst["base"])
-        idx = self.filter_loader.findData(inst["loader"])
-        if idx >= 0:
-            self.filter_loader.setCurrentIndex(idx)
-        self._update_inst_toggle_text()
-        self._toggle_inst_cards(False)   # 选完实例自动折叠,界面清爽(需要时点开)
-        self.statusBar().showMessage(f"目标实例:{inst['id']}({inst['loader'] or '原版'} ← {inst['base']})")
-
-    def _select_no_instance(self):
-        """选"无":不指定实例,改用文件管理器挑安装位置"""
-        self._selected_mod_inst = None
-        for i, card in self._mod_inst_cards:
-            card.setChecked(False)
-        if getattr(self, "_none_card", None):
-            self._none_card.setChecked(True)
-        self._update_inst_toggle_text()
-        self.statusBar().showMessage("目标实例:无 —— 可用「选择安装位置…」指定要装到哪个目录")
-
-    def _toggle_inst_cards(self, checked: bool):
-        """展开/折叠目标实例区(默认折叠,界面不拥挤)。
-        程序调用折叠时同步按钮勾选状态,避免下次点击状态反转"""
-        if self.inst_cards_toggle.isChecked() != checked:
-            self.inst_cards_toggle.setChecked(checked)   # setChecked 不触发 clicked,不会递归
-        for wdg in (self.instance_cards_box, self.pick_dir_btn, self.custom_dir_label):
-            wdg.setVisible(checked)
-        self._update_inst_toggle_text()
-
-    def _update_inst_toggle_text(self):
-        if self._selected_mod_inst is not None:
-            label = self._selected_mod_inst["id"]
-        elif getattr(self, "_custom_mods_dir", None):
-            label = "自定义位置"
-        else:
-            label = "未选择"
-        arrow = "▾" if self.inst_cards_toggle.isChecked() else "▸"
-        self.inst_cards_toggle.setText(f"{arrow} 目标实例: {label}")
-
-    def _pick_mods_dir(self):
-        """用 Windows 文件管理器选一个要装 Mod 的目录(通常是某实例的 mods 文件夹)"""
-        d = QFileDialog.getExistingDirectory(
-            self, "选择要安装 Mod 的目录(通常是某实例的 mods 文件夹)", paths.GAME_DIR)
-        if d:
-            self._custom_mods_dir = d
-            self.custom_dir_label.setText(f"安装到: {d}")
-            self.custom_dir_label.setVisible(True)
-            self._update_inst_toggle_text()
-            self.statusBar().showMessage(f"已选择安装位置:{d}")
-
-    def _install_recommended_mod(self, slug: str, label: str):
-        """推荐 Mod → 下载到当前目标实例(或自定义目录)"""
-        inst = self._selected_mod_inst
-        custom = getattr(self, "_custom_mods_dir", None)
-        if inst is None and not custom:
-            # 没选实例:自动挑第一个有加载器的实例,避免用户卡在"未选择实例"
-            inst = next((i for i, _c in self._mod_inst_cards
-                         if i["loader"] in ("fabric", "forge", "neoforge")), None)
-            if inst is None:
-                QMessageBox.information(self, "推荐 Mod",
-                                        "还没有可装 Mod 的实例。请先在「我的版本」创建一个"
-                                        "Fabric/Forge/NeoForge 实例,再来装推荐 Mod。")
-                return
-            self._select_mod_instance(inst)
-            self.statusBar().showMessage(f"已自动选择实例 {inst['id']} 安装推荐 Mod")
-        gv = inst["base"] if inst else self.filter_version.currentText().strip()
-        loader = inst["loader"] if inst else self.filter_loader.currentData()
-        if loader not in ("fabric", "forge", "neoforge"):
-            QMessageBox.information(self, "推荐 Mod",
-                                    "目标实例没有加载器,无法装 Mod(先装 Fabric/Forge 等)")
-            return
-        mods_dir = custom if inst is None else os.path.join(self.game_dir_for(inst["id"]), "mods")
-        self._run_download(
-            lambda status, progress: self._do_mod_download(
-                {"slug": slug, "title": label}, mods_dir, gv, loader, None, status, progress))
-
-    def _toggle_mod_instance_mods(self, inst):
-        """展开卡片:显示该实例已装的 Mod 文件列表"""
-        for i, card in self._mod_inst_cards:
-            inner = card.layout()
-            mods_label = inner.itemAt(inner.count() - 1).widget()
-            if i["id"] == inst["id"]:
-                show = not mods_label.isVisible()
-                mods_label.setVisible(show)
-                arrow = inner.itemAt(0).layout().itemAt(inner.itemAt(0).layout().count() - 1).widget()
-                arrow.setText("▾" if show else "▸")
-            else:
-                mods_label.setVisible(False)
-
-    @staticmethod
-    def _instance_mods_text(inst: dict) -> str:
-        """该实例 mods 目录里的文件清单(用于卡片展开)"""
-        mods_dir = os.path.join(paths.GAME_DIR, "versions", inst["id"], "mods")
-        if not os.path.isdir(mods_dir):
-            return "(还没有 Mod)"
-        files = sorted(f for f in os.listdir(mods_dir) if f.endswith(".jar"))
-        if not files:
-            return "(mods 目录为空)"
-        return "\n".join("• " + f for f in files)
 
     @staticmethod
     def _instance_icon(instance_id: str):
@@ -1591,6 +1292,23 @@ class MainWindow(QMainWindow):
         dlg = InstanceManagerDialog(inst, paths.GAME_DIR, self)
         dlg.exec()
 
+    def _home_open_instance_manager(self, inst):
+        """「我的版本」首页 → 实例设置/版本设置 需要打开实例管理时调用。
+
+        没选中实例就提示,避免打开一个空管理界面让人困惑。"""
+        if inst is None:
+            QMessageBox.information(self, t("实例设置", "Instance settings"),
+                                    t("请先在右侧「版本」里选中一个实例。",
+                                      "Select an instance on the right first."))
+            return
+        self.open_instance_manager(inst)
+
+    def _on_login_changed(self):
+        """首页登录卡片改了离线昵称 → 重读设置,刷新登录显示。"""
+        self.settings = load_settings()
+        self.home_panel.refresh_login()
+        self.statusBar().showMessage(t("登录信息已更新", "Login info updated"))
+
     def backup_current_instance(self, inst):
         """GUI 备份按钮(灵感 #6 补齐):手动备份一个实例"""
         from backup import backup_instance
@@ -1610,189 +1328,6 @@ class MainWindow(QMainWindow):
         shutil.rmtree(self.game_dir_for(inst["id"]), ignore_errors=True)
         self.statusBar().showMessage(f"实例已删除:{inst['id']}")
         self.refresh_instances()
-
-    def _delete_installed_mod(self, path: str):
-        if QMessageBox.question(self, "确认删除", f"删除 Mod 文件 {os.path.basename(path)}?") \
-                != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            os.remove(path)
-            self.statusBar().showMessage(f"已删除:{os.path.basename(path)}")
-        except Exception as e:
-            self.statusBar().showMessage(f"删除失败: {e}")
-
-    # ================= 下载 Mod:搜索列表(一级) + 详情面板(二级) =================
-    def on_search_mods(self):
-        """按筛选(版本 + 加载器)搜索 Mod,结果填进左侧列表"""
-        query = self.mod_search_edit.text().strip()
-        gv = self.filter_version.currentText().strip()
-        loader = self.filter_loader.currentData()
-        if not query:
-            self.statusBar().showMessage("请输入搜索词")
-            return
-        self.statusBar().showMessage("正在搜索 Mod...")
-        try:
-            hits = search_mods_cn(query, gv, loader)
-        except Exception as e:
-            self.statusBar().showMessage(f"搜索失败: {e}")
-            return
-
-        self.mod_result_list.clear()
-        self._clear_mod_panel()
-        for h in hits:
-            item = QListWidgetItem(f"{h['title']}   ⬇{h['downloads']:,}\n{h['description'][:50]}")
-            item.setData(Qt.ItemDataRole.UserRole, h)
-            self.mod_result_list.addItem(item)
-        self.statusBar().showMessage(f"找到 {len(hits)} 个 Mod(点左侧结果,右侧展开选项)")
-        self._fetch_mod_icons(hits)
-
-    def _clear_mod_panel(self):
-        """详情面板回到占位提示"""
-        self._mod_panel_hit = None
-        for wdg in (self.mod_icon, self.mod_title, self.mod_desc, self.mod_gv_combo,
-                    self.mod_loader_combo, self.mod_ver_combo, self.mod_dl_btn):
-            wdg.setVisible(False)
-        self.mod_panel_empty.setVisible(True)
-
-    def _on_mod_selected(self, current, _prev):
-        """在左侧选中一个 Mod → 右侧详情面板(二级菜单)加载它的筛选选项"""
-        if current is None:
-            return
-        h = current.data(Qt.ItemDataRole.UserRole)
-        if h is None:
-            return
-        self._mod_panel_hit = h
-        self.mod_panel_empty.setVisible(False)
-        for wdg in (self.mod_icon, self.mod_title, self.mod_desc, self.mod_gv_combo,
-                    self.mod_loader_combo, self.mod_ver_combo, self.mod_dl_btn):
-            wdg.setVisible(True)
-        self.mod_title.setText(h["title"])
-        self.mod_desc.setText(h.get("description", "")[:120])
-        self.mod_gv_combo.clear()
-        self.mod_loader_combo.clear()
-        self.mod_ver_combo.clear()
-        self.statusBar().showMessage(f"加载 {h['title']} 的版本信息...")
-        self._load_mod_panel(h)
-
-    def _load_mod_panel(self, h: dict):
-        """按全局筛选填默认值:项目支持的游戏版本/加载器 → 版本列表"""
-        try:
-            from modrinth import get_project
-            proj = get_project(h["slug"])
-            gvs, loaders = proj.get("game_versions", []), proj.get("loaders", [])
-        except Exception:
-            gvs, loaders = [], []
-
-        for gv in reversed(gvs):
-            self.mod_gv_combo.addItem(gv, gv)
-        default_gv = self.filter_version.currentText().strip()
-        idx = self.mod_gv_combo.findData(default_gv) if default_gv else -1
-        self.mod_gv_combo.setCurrentIndex(idx if idx >= 0 else 0)
-
-        for l in loaders:
-            self.mod_loader_combo.addItem(l, l)
-        default_ld = self.filter_loader.currentData()
-        idx = self.mod_loader_combo.findData(default_ld) if default_ld else -1
-        if idx >= 0:
-            self.mod_loader_combo.setCurrentIndex(idx)
-
-        self._mod_panel_refresh_versions()
-
-    def _mod_panel_refresh_versions(self):
-        """按面板里的"游戏版本 + 加载器"刷新 Mod 版本下拉(默认最新)"""
-        gv = self.mod_gv_combo.currentData()
-        loader = self.mod_loader_combo.currentData()
-        self.mod_ver_combo.clear()
-        if not gv or not loader or not getattr(self, "_mod_panel_hit", None):
-            self.mod_ver_combo.addItem("(先选版本和加载器)", None)
-            return
-        try:
-            from modrinth import list_mod_versions
-            versions = list_mod_versions(self._mod_panel_hit["slug"], gv, loader)
-        except Exception:
-            versions = []
-        for v in versions:
-            self.mod_ver_combo.addItem(v, v)
-        self.mod_ver_combo.setEnabled(bool(versions))
-
-    def _mod_panel_download(self):
-        """把面板当前选择的(版本/加载器/Mod版本)下载到目标实例或自定义目录"""
-        inst = self._selected_mod_inst
-        hit = getattr(self, "_mod_panel_hit", None)
-        custom = getattr(self, "_custom_mods_dir", None)
-        if inst is None and not custom:
-            self.statusBar().showMessage("请先选目标实例,或用「选择安装位置…」指定目录")
-            return
-        if hit is None:
-            return
-        if inst is not None and inst["loader"] not in ("fabric", "forge", "neoforge"):
-            self.statusBar().showMessage("该实例不是 Mod 版本,无法安装 Mod")
-            return
-        gv = self.mod_gv_combo.currentData()
-        loader = self.mod_loader_combo.currentData()
-        ver = self.mod_ver_combo.currentData()
-        if not gv or not loader:
-            self.statusBar().showMessage("请先在面板里选游戏版本和加载器")
-            return
-        mods_dir = custom if inst is None else os.path.join(self.game_dir_for(inst["id"]), "mods")
-        self._run_download(
-            lambda status, progress: self._do_mod_download(hit, mods_dir, gv, loader, ver, status, progress))
-
-    def _do_mod_download(self, h, mods_dir, gv, loader, ver, status_cb, _progress_cb):
-        try:
-            filename = download_mod(h["slug"], gv, loader, mods_dir, version_number=ver)
-        except Exception as e:
-            status_cb(f"下载失败: {e}")
-            return
-        if filename:
-            status_cb(f"已安装到 {os.path.basename(mods_dir) or mods_dir}:{filename} ✅")
-        else:
-            status_cb(f"{h['title']} 暂无 {gv}+{loader} 的该版本")
-
-    def _fetch_mod_icons(self, hits: list):
-        """后台线程下载 Mod 封面小图 → 队列 → 定时器贴到列表项(生产-消费)"""
-        if self._icon_timer is None:
-            self._icon_timer = QTimer(self)
-            self._icon_timer.timeout.connect(self._apply_mod_icons)
-            self._icon_timer.start(120)
-
-        def worker():
-            for h in hits:
-                url = h.get("icon_url")
-                if not url:
-                    continue
-                try:
-                    r = requests.get(url, timeout=10)
-                    if r.status_code == 200 and r.content:
-                        self._icon_queue.put((h["slug"], r.content))
-                except Exception:
-                    continue
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _apply_mod_icons(self):
-        """主线程:把下载好的封面贴到左侧列表对应项上"""
-        while True:
-            try:
-                slug, content = self._icon_queue.get_nowait()
-            except queue.Empty:
-                return
-            pixmap = QPixmap()
-            if not pixmap.loadFromData(content):
-                continue
-            icon = QIcon(pixmap)
-            for i in range(self.mod_result_list.count()):
-                item = self.mod_result_list.item(i)
-                h = item.data(Qt.ItemDataRole.UserRole)
-                if h and h.get("slug") == slug:
-                    item.setIcon(icon)
-                    break
-            # 也贴到详情面板
-            if getattr(self, "_mod_panel_hit", None) and self._mod_panel_hit.get("slug") == slug:
-                self.mod_icon.setPixmap(pixmap.scaled(
-                    48, 48, Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation))
-
 
 if __name__ == "__main__":
     print("正在获取版本列表(首次约几秒,请稍等)...")

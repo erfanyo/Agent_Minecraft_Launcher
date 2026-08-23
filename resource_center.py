@@ -8,15 +8,22 @@
   - 实例:下载新实例向导(版本树 → 加载器 → 光影/优化)
   - Mod / 光影包 / 数据包 / 资源包:同一套"资源浏览器"
     (搜索 + 目标实例 + 筛选 + 结果列表 + 详情面板,信息丰富)
+
+设计要点:
+- 目标实例在 ResourceCenter 层全局共享:在一个分类页选了实例,其他分类页一并生效。
+- 搜索 / 项目详情 / 版本列表全部走后台线程(异步),不卡 UI。
+- 「游戏版本 / 加载器 / 版本」三个组合框由项目数据填充,版本真正驱动下载。
 """
 import os
+import queue
 import threading
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -24,13 +31,13 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QStackedWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from i18n import t
-from ui_style import card_style, hint_style, inner_style
+from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
+                      muted_color, panel_style, text_color)
 
 # 资源分类(左侧菜单 + Modrinth project_type + 安装目录子文件夹)
 RESOURCE_CATEGORIES = [
@@ -54,9 +61,71 @@ _RESOURCE_GUIDE = [
 ]
 
 
+class FlowLayout(QLayout):
+    """响应式流式布局:widget 放不下时自动换到下一行(用于首页分类卡片等)。"""
+
+    def __init__(self, parent=None, margin=0, hspacing=10, vspacing=10):
+        super().__init__(parent)
+        self._items = []
+        self._hspace = hspacing
+        self._vspace = vspacing
+        self.setContentsMargins(margin, margin, margin, margin)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line_height = effective.x(), effective.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            if x + hint.width() > effective.right() + 1 and line_height > 0:
+                x = effective.x()
+                y += line_height + self._vspace
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._hspace
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + m.bottom()
+
+
 class ResourceBrowser(QWidget):
     """资源浏览器(Mod / 光影包 / 数据包 / 资源包共用):
-    目标实例(可折叠) + 筛选 + 搜索 + 结果列表(信息丰富) + 详情面板(版本/加载器/下载)"""
+    目标实例(可折叠,全局共享) + 筛选 + 搜索(异步) + 结果列表 + 详情面板(版本/加载器/下载)。"""
 
     def __init__(self, project_type: str, label: str, sub_dir: str,
                  on_download, get_instance_loader, parent=None):
@@ -65,16 +134,33 @@ class ResourceBrowser(QWidget):
         self.label = label
         self.sub_dir = sub_dir            # mods / shaderpacks / ...
         self.on_download = on_download    # (slug, version, inst, custom_dir) -> 结果
-        self.get_instance_loader = get_instance_loader   # (inst) -> loader or None
+        self.get_instance_loader = get_instance_loader
 
+        # 目标实例:镜像全局共享的(inst, custom_dir);真正的单一来源在 ResourceCenter
+        self.selected_inst = None
+        self.custom_dir = None
+        self._target_getter = lambda: (None, None)
+        self._target_setter = lambda inst, dir_: None
+
+        # 异步队列(网络请求不卡 UI),带缓存
+        self._async_q = queue.Queue()
+        self._async_cache = {}
+        self._async_timer = QTimer(self)
+        self._async_timer.timeout.connect(self._drain_async)
+        self._async_timer.start(60)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        # ---- 搜索区 ----
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(
-            t(f"搜索{label},如 sodium / 钠 / 名字(回车搜索)", f"Search {label}..."))
+            t(f"搜索{self.label},如 sodium / 钠 / 名字(回车搜索)", f"Search {self.label}..."))
         self.search_edit.returnPressed.connect(self.do_search)
         search_btn = QPushButton(t("搜索", "Search"))
         search_btn.clicked.connect(self.do_search)
+        search_btn.setStyleSheet(card_btn_style())
 
-        # 排序(默认按下载量)+ 标签筛选
         self.sort_combo = QComboBox()
         for lbl, val in [("按下载量排序", "downloads"),
                          ("按相关度排序", "relevance"),
@@ -85,24 +171,33 @@ class ResourceBrowser(QWidget):
             t("标签筛选,如 performance,utility(逗号分隔,回车生效)", "Tags (comma): performance,utility"))
         self.tag_edit.returnPressed.connect(self.do_search)
 
-        # 目标实例(折叠):装到哪个实例的对应目录
+        # ---- 目标实例(折叠):装到哪个实例的对应目录(全局共享) ----
         self.inst_cards_toggle = QPushButton("▸ 目标实例: 未选择")
         self.inst_cards_toggle.setCheckable(True)
         self.inst_cards_toggle.setChecked(False)
         self.inst_cards_toggle.clicked.connect(self._toggle_cards)
+        self.inst_cards_toggle.setStyleSheet(card_btn_style())
         self.instance_cards_box = QWidget()
         self.instance_cards_layout = QVBoxLayout(self.instance_cards_box)
         self.instance_cards_layout.setContentsMargins(0, 0, 0, 0)
         self.instance_cards_layout.setSpacing(4)
         self._inst_cards = []          # [(inst, card)]
         self._none_card = None
-        self.selected_inst = None
-        self.custom_dir = None
         self.custom_label = QLabel("")
         self.custom_label.setStyleSheet(hint_style())
         self.custom_label.setWordWrap(True)
+        # 实例可能很多:卡片区放进可滚动容器,展开时也不把筛选/搜索挤出界面
+        self.cards_scroll = QScrollArea()
+        self.cards_scroll.setWidgetResizable(True)
+        self.cards_scroll.setWidget(self.instance_cards_box)
+        self.cards_scroll.setMaximumHeight(210)
+        self.cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.cards_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
+        self.cards_scroll.setVisible(False)
 
-        # 筛选
+        # ---- 筛选(游戏版本 + 加载器) ----
         self.filter_version = QComboBox()
         self.filter_version.setEditable(True)
         self.filter_version.setToolTip("筛选的游戏版本,可自行输入")
@@ -112,18 +207,22 @@ class ResourceBrowser(QWidget):
                              ("NeoForge", "neoforge"), ("Quilt", "quilt")]:
             self.filter_loader.addItem(label, value)
 
-        # 结果列表 + 详情面板
+        # ---- 结果列表 + 详情面板 ----
         self.result_list = QListWidget()
         self.result_list.setWordWrap(True)
+        self.result_list.setStyleSheet(list_style())
         self.result_list.currentItemChanged.connect(self._on_selected)
+
         self.panel = QWidget()
+        self.panel.setStyleSheet(panel_style())
         self.panel.setMinimumWidth(260)
         self.panel.setMaximumWidth(500)
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(56, 56)
-        self.icon_label.setStyleSheet(inner_style())
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label = QLabel("")
         self.title_label.setWordWrap(True)
+        self.title_label.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
         self.meta_label = QLabel("")
         self.meta_label.setStyleSheet(hint_style())
         self.meta_label.setWordWrap(True)
@@ -134,20 +233,25 @@ class ResourceBrowser(QWidget):
         self.loader_combo = QComboBox()
         self.ver_combo = QComboBox()
         self.dl_btn = QPushButton(t("下载", "Download"))
+        self.dl_btn.setStyleSheet(launch_btn_style())
         self.dl_btn.clicked.connect(self._download)
         self.gv_combo.currentIndexChanged.connect(self._refresh_versions)
         self.loader_combo.currentIndexChanged.connect(self._refresh_versions)
+
         p = QVBoxLayout(self.panel)
-        p.addWidget(self.icon_label)
+        p.setContentsMargins(14, 14, 14, 14)
+        p.setSpacing(8)
+        p.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignCenter)
         p.addWidget(self.title_label)
         p.addWidget(self.meta_label)
         p.addWidget(self.desc_label)
-        p.addWidget(QLabel(t("游戏版本:", "Game version:")))
-        p.addWidget(self.gv_combo)
-        p.addWidget(QLabel(t("加载器:", "Loader:")))
-        p.addWidget(self.loader_combo)
-        p.addWidget(QLabel(t("版本:", "Version:")))
-        p.addWidget(self.ver_combo)
+        for _lbl, combo in [(t("游戏版本:", "Game version:"), self.gv_combo),
+                            (t("加载器:", "Loader:"), self.loader_combo),
+                            (t("版本:", "Version:"), self.ver_combo)]:
+            row = QHBoxLayout()
+            row.addWidget(QLabel(_lbl))
+            row.addWidget(combo, 1)
+            p.addLayout(row)
         p.addWidget(self.dl_btn)
         self.empty_label = QLabel(t("← 在左侧选择一个项目\n展开它的版本 / 加载器选项",
                                     "← Select a project on the left"))
@@ -170,8 +274,9 @@ class ResourceBrowser(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         layout.addWidget(self.inst_cards_toggle)
-        layout.addWidget(self.instance_cards_box)
+        layout.addWidget(self.cards_scroll)
         layout.addWidget(self.custom_label)
         layout.addLayout(self._row(self.filter_version, self.filter_loader))
         layout.addLayout(self._row(self.sort_combo, self.tag_edit))
@@ -184,85 +289,153 @@ class ResourceBrowser(QWidget):
             r.addWidget(w, 1)
         return r
 
-    # ---- 目标实例 ----
+    # ---- 目标实例(全局共享) ----
+    def _set_target_hooks(self, getter, setter):
+        self._target_getter = getter
+        self._target_setter = setter
+
     def set_instances(self, instances: list):
-        """刷新实例卡片(可选的安装目标)"""
+        """刷新实例卡片(可选的安装目标),并反映当前全局目标。"""
         for _inst, card in self._inst_cards:
             card.deleteLater()
         self._inst_cards = []
         self.instance_cards_layout.takeAt(0)
+        self.instance_cards_layout.takeAt(0)  # 清空"无"卡片
         for inst in instances:
-            card = QPushButton(f"{inst['label']}")
+            card = QPushButton(inst["label"])
             card.setCheckable(True)
-            card.setStyleSheet(card_style())
+            card.setMinimumHeight(40)
+            card.setStyleSheet(card_btn_style())
             card.clicked.connect(lambda _c, i=inst: self._select_inst(i))
             self.instance_cards_layout.addWidget(card)
             self._inst_cards.append((inst, card))
         none_card = QPushButton(t("无(手动选目录)", "None (pick folder)"))
         none_card.setCheckable(True)
-        none_card.setStyleSheet(card_style())
+        none_card.setMinimumHeight(40)
+        none_card.setStyleSheet(card_btn_style())
         none_card.clicked.connect(self._select_none)
         self.instance_cards_layout.addWidget(none_card)
         self._none_card = none_card
+        # 内容区最小高度 = 卡片数×(卡片高40 + 间距4):widgetResizable 不会把 box 压到低于该值,
+        # 内容超出视口(210)时滚动区才真正滚动,而不是把卡片压扁/互相重叠
+        n = len(self._inst_cards) + (1 if self._none_card else 0)
+        self.instance_cards_box.setMinimumHeight(n * 44)
+        self.cards_scroll.updateGeometry()
+
+        self._sync_target_ui()
+
+    def _apply_inst_cards(self, inst_id):
+        """把卡片勾选状态对齐到某个实例(inst_id 为 None 时勾"无")。"""
+        for i, card in self._inst_cards:
+            card.setChecked(i["id"] == inst_id)
+        if self._none_card:
+            self._none_card.setChecked(inst_id is None)
+
+    def _sync_target_ui(self):
+        """把全局目标反映到本浏览器的文案/勾选状态。不触发 setter,避免递归。"""
+        inst, dir_ = self._target_getter()
+        self.selected_inst = inst
+        self.custom_dir = dir_
+        if inst is not None:
+            self.inst_cards_toggle.setText(f"▸ 目标实例: {inst['id']}")
+            self._apply_inst_cards(inst["id"])
+            self.custom_label.setText("")
+        elif dir_:
+            self.inst_cards_toggle.setText("▸ 目标实例: 自定义目录")
+            self._apply_inst_cards(None)
+            self.custom_label.setText(f"{t('安装到', 'Install to')}: {dir_}")
+            self.custom_label.setVisible(True)
+        else:
+            self.inst_cards_toggle.setText("▸ 目标实例: 未选择")
+            self._apply_inst_cards(None)
 
     def _toggle_cards(self):
         show = self.inst_cards_toggle.isChecked()
-        self.instance_cards_box.setVisible(show)
+        self.cards_scroll.setVisible(show)
         self.inst_cards_toggle.setText(
             ("▾ " if show else "▸ ") + self.inst_cards_toggle.text()[2:])
 
     def _select_inst(self, inst):
-        self.selected_inst = inst
-        self.custom_dir = None
-        for i, card in self._inst_cards:
-            card.setChecked(i["id"] == inst["id"])
-        if self._none_card:
-            self._none_card.setChecked(False)
-        self.custom_label.setText("")
-        self.inst_cards_toggle.setText(f"▸ 目标实例: {inst['id']}")
+        """选中某实例:更新本地卡片+筛选,并广播到全局(其他分类页一并生效)。"""
+        self._apply_inst_cards(inst["id"])
+        # 选中后自动折叠目标实例区,界面清爽
         self.inst_cards_toggle.setChecked(False)
-        self.instance_cards_box.setVisible(False)
+        self.cards_scroll.setVisible(False)
         # 筛选同步到该实例的基础版本 + 加载器
         self.filter_version.setCurrentText(inst["base"])
         idx = self.filter_loader.findData(inst["loader"])
         if idx >= 0:
             self.filter_loader.setCurrentIndex(idx)
+        self._target_setter(inst, None)
 
     def _select_none(self):
-        self.selected_inst = None
-        for i, card in self._inst_cards:
-            card.setChecked(False)
-        if self._none_card:
-            self._none_card.setChecked(True)
-        self.inst_cards_toggle.setText("▸ 目标实例: 未选择(手动选目录)")
+        """选"无":改用自定义目录(或稍后手动选位置),并广播全局。"""
+        self._target_setter(None, None)
 
     def pick_custom_dir(self, game_dir: str):
-        """用户用文件管理器选安装位置(装到其他启动器的目录)"""
+        """用户用文件管理器选安装位置(装到其他启动器的目录)。"""
         from PySide6.QtWidgets import QFileDialog
         d = QFileDialog.getExistingDirectory(self, t("选择安装位置", "Pick folder"), game_dir)
         if d:
-            self.custom_dir = d
-            self.custom_label.setText(f"{t('安装到', 'Install to')}: {d}")
-            self.custom_label.setVisible(True)
+            self._target_setter(None, d)
+
+    # ---- 异步基础设施 ----
+    def _async(self, cache_key, fetch, on_done, cache: bool = True):
+        """后台线程跑网络请求 fetch(),完成后回主线程调 on_done(结果)。
+        cache=True 时按 cache_key 缓存,第二次直接同步回调;False 则总是重新请求。"""
+        if cache and cache_key in self._async_cache:
+            on_done(self._async_cache[cache_key])
+            return
+
+        def worker():
+            try:
+                result = fetch()
+            except Exception:
+                result = None
+            self._async_q.put((cache_key, result, on_done, cache))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drain_async(self):
+        """主线程:把后台结果搬回 UI。"""
+        while True:
+            try:
+                cache_key, result, on_done, cache = self._async_q.get_nowait()
+            except queue.Empty:
+                return
+            if cache:
+                self._async_cache[cache_key] = result
+            try:
+                on_done(result)
+            except Exception:
+                pass
 
     # ---- 搜索 ----
     def do_search(self):
         query = self.search_edit.text().strip()
         if not query:
             return
-        import modrinth
-        try:
-            hits = modrinth.search_mods_cn(
-                query, self.filter_version.currentText().strip(),
-                self.filter_loader.currentData(), limit=30,
-                project_type=self.project_type,
-                order_by=self.sort_combo.currentData() or "downloads",
-                tags=self.tag_edit.text().strip())
-        except Exception as e:
-            hits = []
-            self.result_list.clear()
-            QListWidgetItem(f"搜索失败:{e}", self.result_list)
+        gv = self.filter_version.currentText().strip()
+        loader = self.filter_loader.currentData()
+        order = self.sort_combo.currentData() or "downloads"
+        tags = self.tag_edit.text().strip()
         self.result_list.clear()
+        QListWidgetItem(t("搜索中...", "Searching..."), self.result_list)
+
+        def fetch():
+            import modrinth
+            return modrinth.search_mods_cn(
+                query, gv, loader, limit=30, project_type=self.project_type,
+                order_by=order, tags=tags)
+
+        self._async(("search", query, gv, loader, self.project_type, order, tags),
+                    fetch, self._fill_results, cache=False)
+
+    def _fill_results(self, hits):
+        self.result_list.clear()
+        if hits is None:
+            QListWidgetItem(t("搜索失败,请检查网络", "Search failed, check network"), self.result_list)
+            return
         for h in hits:
             author = h.get("author", "")
             dl = f"⬇{h.get('downloads', 0):,}" if h.get("downloads") else ""
@@ -274,6 +447,7 @@ class ResourceBrowser(QWidget):
         if not hits and not self.result_list.count():
             QListWidgetItem(t("(没有找到结果)", "(no results)"), self.result_list)
 
+    # ---- 详情面板 ----
     def _on_selected(self, current, _prev):
         if current is None:
             return
@@ -300,7 +474,11 @@ class ResourceBrowser(QWidget):
         icon_url = h.get("icon_url")
         if icon_url:
             threading.Thread(target=self._load_icon, args=(icon_url,), daemon=True).start()
-        self._refresh_versions()
+        # 异步加载项目支持的版本/加载器,并刷新版本下拉
+        self.gv_combo.clear()
+        self.loader_combo.clear()
+        self.ver_combo.clear()
+        self._load_project(h)
 
     def _load_icon(self, url: str):
         try:
@@ -308,34 +486,73 @@ class ResourceBrowser(QWidget):
             resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
                 from PySide6.QtGui import QPixmap
-                from PySide6.QtCore import QByteArray, QBuffer
                 pix = QPixmap()
                 pix.loadFromData(resp.content)
-                QTimer.singleShot(0, lambda: (self.icon_label.setPixmap(
+                QTimer.singleShot(0, lambda: self.icon_label.setPixmap(
                     pix.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio,
-                               Qt.TransformationMode.SmoothTransformation))))
+                               Qt.TransformationMode.SmoothTransformation)))
         except Exception:
             pass
+
+    def _load_project(self, h):
+        """异步拉项目详情,填充 游戏版本/加载器 两个下拉。"""
+        def fetch():
+            import modrinth
+            return modrinth.get_project(h["slug"])
+        self._async(("proj", h["slug"]), fetch, self._populate_project)
+
+    def _populate_project(self, proj):
+        if not proj:
+            return
+        # Modrinth 的 game_versions 一般是升序,转成最新在前
+        gvs = list(reversed(proj.get("game_versions", [])))
+        loaders = proj.get("loaders", [])
+        self.gv_combo.clear()
+        for gv in gvs:
+            self.gv_combo.addItem(gv, gv)
+        self.loader_combo.clear()
+        for ld in loaders:
+            self.loader_combo.addItem(ld, ld)
+        # 默认对齐:优先目标实例的基础版本/加载器
+        inst = self.selected_inst
+        if inst:
+            i = self.gv_combo.findText(inst["base"])
+            if i >= 0:
+                self.gv_combo.setCurrentIndex(i)
+            li = self.loader_combo.findData(inst["loader"])
+            if li >= 0:
+                self.loader_combo.setCurrentIndex(li)
+        self._refresh_versions()
 
     def _refresh_versions(self):
         if not getattr(self, "_current", None):
             return
-        import modrinth
         slug = self._current["slug"]
         gv = self.gv_combo.currentText().strip()
         loader = self.loader_combo.currentData()
-        versions = []
-        if gv:
-            try:
-                versions = modrinth.list_mod_versions(slug, gv, loader)
-            except Exception:
-                versions = []
         self.ver_combo.clear()
+        self.ver_combo.addItem(t("加载中...", "Loading..."), None)
+        self.ver_combo.setEnabled(False)
+        if not gv:
+            self.ver_combo.clear()
+            self.ver_combo.setEnabled(False)
+            return
+
+        def fetch():
+            import modrinth
+            return modrinth.list_mod_versions(slug, gv, loader)
+        self._async(("ver", slug, gv, loader), fetch, self._fill_versions)
+
+    def _fill_versions(self, versions):
+        self.ver_combo.clear()
+        if not versions:
+            self.ver_combo.addItem(t("(暂无可用版本)", "(no versions)"), None)
+            self.ver_combo.setEnabled(False)
+            return
         for v in versions:
             self.ver_combo.addItem(v, v)
-        self.ver_combo.setEnabled(bool(versions))
-        if versions:
-            self.ver_combo.setCurrentIndex(0)
+        self.ver_combo.setEnabled(True)
+        self.ver_combo.setCurrentIndex(0)
 
     # ---- 下载 ----
     def _download(self):
@@ -364,7 +581,7 @@ class ResourceBrowser(QWidget):
 
 
 class ResourceCenter(QWidget):
-    """下载新资源:左侧可折叠菜单 + 右侧分类面板(首页/实例/Mod/光影/数据包/资源包)"""
+    """下载新资源:左侧可折叠菜单 + 右侧分类面板(首页/实例/Mod/光影/数据包/资源包)。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -372,13 +589,18 @@ class ResourceCenter(QWidget):
         self._on_download_cb = None
         self._get_inst_loader = lambda inst: inst.get("loader")
 
+        # 全局目标实例(四个分类页共享)
+        self._shared_inst = None
+        self._shared_dir = None
+
         # ---- 左侧菜单(可折叠) ----
         self.menu_widget = QWidget()
         self.menu_widget.setFixedWidth(150)
         self.menu_layout = QVBoxLayout(self.menu_widget)
-        self.menu_layout.setContentsMargins(4, 4, 4, 4)
+        self.menu_layout.setContentsMargins(8, 8, 8, 8)
         self.menu_layout.setSpacing(4)
         self.collapse_btn = QPushButton("◀ 收起")
+        self.collapse_btn.setStyleSheet(card_btn_style())
         self.collapse_btn.clicked.connect(self._toggle_menu)
         self.menu_layout.addWidget(self.collapse_btn)
         self._menu_buttons = []   # (按钮, 面板 index)
@@ -391,7 +613,7 @@ class ResourceCenter(QWidget):
                 ("🎨 " + t("资源包", "Resourcepacks"), None)]):
             btn = QPushButton(icon + " " + label if label.startswith(("🏠", "📦")) else label)
             btn.setCheckable(True)
-            btn.setStyleSheet(card_style())
+            btn.setStyleSheet(card_btn_style())
             btn.clicked.connect(lambda _c, i=idx: self.switch_to(i))
             self.menu_layout.addWidget(btn)
             self._menu_buttons.append(btn)
@@ -414,6 +636,7 @@ class ResourceCenter(QWidget):
                                  on_download=self._browser_download,
                                  get_instance_loader=self._get_inst_loader)
             br.set_instance_dir_fn(self._instance_dir)
+            br._set_target_hooks(self._get_shared_target, self._set_shared_target)
             self.browsers[ptype] = br
             self.stack.addWidget(br)                        # 2..5
 
@@ -423,6 +646,16 @@ class ResourceCenter(QWidget):
         layout.addWidget(self.menu_widget)
         layout.addWidget(self.stack, 1)
         self.switch_to(0)
+
+    # ---- 全局目标实例 ----
+    def _get_shared_target(self):
+        return self._shared_inst, self._shared_dir
+
+    def _set_shared_target(self, inst, dir_):
+        self._shared_inst = inst
+        self._shared_dir = dir_
+        for br in self.browsers.values():
+            br._sync_target_ui()
 
     # ---- 菜单 ----
     def _toggle_menu(self):
@@ -442,9 +675,10 @@ class ResourceCenter(QWidget):
         home = QWidget()
         layout = QVBoxLayout(home)
         layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
         self.home_latest = QLabel(t("最新正式版: -- | 最新快照版: --",
                                     "Latest release: -- | Latest snapshot: --"))
-        self.home_latest.setStyleSheet("font-weight: bold;")
+        self.home_latest.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
         self.home_hint = QLabel(
             t("💡 提示:最新版游戏的 Mod 生态一般很不好(模组还没跟上),"
               "推荐使用模组活跃的版本,如 1.21.1 / 1.20.1。",
@@ -454,9 +688,9 @@ class ResourceCenter(QWidget):
         self.home_hint.setStyleSheet(hint_style())
         layout.addWidget(self.home_latest)
         layout.addWidget(self.home_hint)
-        layout.addSpacing(16)
+        layout.addSpacing(14)
         layout.addWidget(QLabel(t("像逛商场一样挑资源:", "Browse resources:")))
-        cards = QHBoxLayout()
+        cards = FlowLayout(hspacing=12, vspacing=12)
         entries = [
             (t("📦 创建实例", "Instances"), 1),
             ("🧩 " + t("Mod", "Mods"), 2),
@@ -466,16 +700,17 @@ class ResourceCenter(QWidget):
         ]
         for text, idx in entries:
             b = QPushButton(text)
-            b.setMinimumSize(150, 100)   # 高一点的分类卡片
-            b.setStyleSheet(card_style())
+            b.setMinimumSize(150, 96)   # 高一点的分类卡片;放不下时自动换行
+            b.setStyleSheet(card_btn_style())
             b.clicked.connect(lambda _c, i=idx: self.switch_to(i))
             cards.addWidget(b)
         layout.addLayout(cards)
-        layout.addSpacing(20)
+        layout.addSpacing(18)
         # 新手科普:MC 社区资源结构(新手模式显示,专家模式隐藏)
         self.guide_title = QLabel(
             t("📚 了解 MC 资源结构(自己挑资源前先看一眼):",
               "MC resource types (read before picking):"))
+        self.guide_title.setStyleSheet(f"font-weight: bold; color: {text_color()};")
         layout.addWidget(self.guide_title)
         self._guide_labels = []
         for line in _RESOURCE_GUIDE:
@@ -512,7 +747,7 @@ class ResourceCenter(QWidget):
               f"Latest release: {release} | Latest snapshot: {snapshot}"))
 
     def refresh_browser_instances(self, instances: list):
-        """刷新各资源浏览器里的目标实例卡片"""
+        """刷新各资源浏览器里的目标实例卡片(反映全局目标)。"""
         for br in self.browsers.values():
             br.set_instances(instances)
 

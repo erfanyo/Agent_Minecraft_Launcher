@@ -27,7 +27,7 @@ def sha1_of_file(path: str) -> str:
 
 
 def download_file(url: str, dest: str, sha1: str | None = None,
-                  progress_callback=None) -> None:
+                  progress_callback=None, timeout=30) -> None:
     """把 url 下载到 dest。
 
     参数:
@@ -35,10 +35,11 @@ def download_file(url: str, dest: str, sha1: str | None = None,
       dest   —— 保存路径(自动创建上级目录)
       sha1   —— 期望的指纹;给出则下载后校验,不一致删除并报错
       progress_callback(done, total) —— 进度回调,total 为 0 表示总量未知
+      timeout —— 超时(秒);可传 (连接超时, 读超时) 元组,用于"官方源缓慢就换源"
     """
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     try:
-        resp = requests.get(url, stream=True, timeout=30)
+        resp = requests.get(url, stream=True, timeout=timeout)
         resp.raise_for_status()
         total = int(resp.headers.get("content-length", 0))
         done = 0
@@ -62,43 +63,174 @@ def download_file(url: str, dest: str, sha1: str | None = None,
         raise ValueError(f"sha1 校验失败:{os.path.basename(dest)} 文件可能损坏或被篡改")
 
 
-def mirror_url(url: str, version_id: str | None = None) -> str:
-    """把 Mojang 官方下载地址换成 BMCLAPI 镜像地址;换不了就原样返回。
-    BMCLAPI 是国内社区维护的下载加速站,和官方内容一致。"""
+# ---------------------------------------------------------------------------
+# 镜像站:预设 + 自定义(自定义镜像存 config.json 的 custom_mirrors,见 settings.py)。
+# 换源统一规则:把官方地址按路径映射到镜像站的 libraries/ assets/ version/ 等目录,
+# 自定义镜像与 BMCLAPI 同构,填入 base 地址即可。
+# 注意:这里只登记"镜像站","要不要用官方"由下载策略 MIRROR_STRATEGIES 决定。
+# ---------------------------------------------------------------------------
+MIRROR_SOURCES = {
+    "bmclapi": {
+        "name": "BMCLAPI(推荐,国内加速)",
+        "base": "https://bmclapi2.bangbang93.com",
+        "desc": "国内社区维护的老牌镜像站,内容与官方一致,下载速度快",
+    },
+}
+
+# 下载策略:决定"官方源"和"镜像站"谁先用、谁兜底、用不用
+MIRROR_STRATEGIES = {
+    "smart_official": {
+        "name": "官方优先(官方慢或失败时换镜像)",
+        "desc": "先直连 Mojang 官方;官方连不上或太慢时,自动改用你选的镜像站。",
+    },
+    "mirror_first": {
+        "name": "镜像优先(镜像失败才回官方)",
+        "desc": "先用你选的镜像站(国内通常更快);镜像失败才回 Mojang 官方。",
+    },
+    "official_only": {
+        "name": "只用官方源",
+        "desc": "完全不使用镜像站,只从 Mojang 官方下载(慢也要等)。",
+    },
+    "mirror_only": {
+        "name": "只用镜像源",
+        "desc": "只用你选的镜像站,失败也不回官方。",
+    },
+}
+
+
+def _active_mirror() -> str:
+    """当前设置里选中的镜像站 key(每次读 config.json,改设置立即生效)"""
+    try:
+        from settings import load_settings
+        return load_settings().get("mirror_source", "bmclapi") or "bmclapi"
+    except Exception:
+        return "bmclapi"
+
+
+def _active_strategy() -> str:
+    """当前设置里的下载策略 key(见 MIRROR_STRATEGIES)"""
+    try:
+        from settings import load_settings
+        return load_settings().get("mirror_strategy", "smart_official") or "smart_official"
+    except Exception:
+        return "smart_official"
+
+
+def _mirror_base(mirror: str | None) -> str:
+    """镜像站 key → base 地址;未知 key 返回空串(表示没有可用镜像)"""
+    key = mirror or _active_mirror()
+    info = MIRROR_SOURCES.get(key)
+    if info:
+        return info.get("base", "")
+    if key.startswith("custom:"):
+        cid = key.split(":", 1)[1]
+        try:
+            from settings import load_settings
+            customs = load_settings().get("custom_mirrors", []) or []
+        except Exception:
+            customs = []
+        for cm in customs:
+            if cm.get("id") == cid:
+                return (cm.get("url") or "").rstrip("/")
+    return ""
+
+
+def mirror_url(url: str, version_id: str | None = None, mirror: str | None = None) -> str:
+    """把 Mojang 官方下载地址换成当前镜像源地址;换不了就原样返回。"""
+    base = _mirror_base(mirror)
+    if not base:
+        return url
     if "libraries.minecraft.net" in url:
-        return url.replace("https://libraries.minecraft.net/",
-                           "https://bmclapi2.bangbang93.com/libraries/")
+        return base + "/libraries/" + url.split("libraries.minecraft.net/")[-1]
     if "launcher.mojang.com/maven" in url:
-        return "https://bmclapi2.bangbang93.com/maven/" + url.split("/maven/")[-1]
+        return base + "/maven/" + url.split("/maven/")[-1]
     if "resources.download.minecraft.net" in url:
         # 资源文件按 hash 存放:.../<前两位>/<完整hash>
-        return "https://bmclapi2.bangbang93.com/assets/" + url.rstrip("/").rsplit("/", 1)[-1]
+        return base + "/assets/" + url.rstrip("/").rsplit("/", 1)[-1]
     if version_id and ("piston-data.mojang.com" in url or "launcher.mojang.com" in url):
-        # 客户端/服务器 jar:BMCLAPI 按版本号提供镜像
+        # 客户端/服务器 jar:镜像站按版本号提供
         if "client" in url:
-            return f"https://bmclapi2.bangbang93.com/version/{version_id}/client"
+            return f"{base}/version/{version_id}/client"
+        if "server" in url:
+            return f"{base}/version/{version_id}/server"
     return url
+
+
+def mirror_manifest_url(mirror: str | None = None) -> str | None:
+    """当前镜像站的版本清单地址(没有可用镜像时返回 None = 用官方地址)"""
+    base = _mirror_base(mirror)
+    if not base:
+        return None
+    return base + "/mc/game/version_manifest_v2.json"
+
+
+def mirror_version_json_url(url: str, mirror: str | None = None) -> str:
+    """把版本详情 JSON 的官方地址换成镜像地址(镜像站按版本 id 提供 /version/<id>/json)"""
+    base = _mirror_base(mirror)
+    if not base:
+        return url
+    if ("piston-meta.mojang.com" in url or "launchermeta.mojang.com" in url
+            or "launcher.mojang.com" in url):
+        vid = url.rstrip("/").rsplit("/", 1)[-1]
+        if vid.endswith(".json"):
+            vid = vid[:-5]
+        return f"{base}/version/{vid}/json"
+    return url
+
+
+def _candidate_urls(url: str, version_id: str | None = None,
+                    mirror: str | None = None, strategy: str | None = None) -> list:
+    """按下载策略生成候选地址(去重),只含官方地址与所选镜像地址两个候选:
+    smart_official  → 官方优先,镜像兜底
+    mirror_first    → 镜像优先,官方兜底
+    official_only   → 只有官方
+    mirror_only     → 只有镜像
+    """
+    strat = strategy or _active_strategy()
+    m = mirror_url(url, version_id, mirror)
+    official = url
+    if strat == "official_only":
+        return [official]
+    if strat == "mirror_only":
+        return [m] if m != official else [official]
+    if strat == "mirror_first":
+        return list(dict.fromkeys([m, official]))
+    return list(dict.fromkeys([official, m]))   # smart_official
+
+
+def _is_mojang_url(url: str) -> bool:
+    """判断是不是 Mojang 官方地址(只有官方地址才参与"官方慢就换镜像"的策略)"""
+    hosts = ("libraries.minecraft.net", "launcher.mojang.com", "launchermeta.mojang.com",
+             "piston-meta.mojang.com", "piston-data.mojang.com",
+             "resources.download.minecraft.net")
+    return any(h in url for h in hosts)
 
 
 def download_with_mirror(url: str, dest: str, version_id: str | None = None,
                          sha1: str | None = None,
-                         progress_callback=None) -> None:
-    """统一下载入口:官方源先试 2 次(网络偶尔抖动),仍失败换 BMCLAPI 镜像。
-    都失败就把最后一个错误抛出去。"""
+                         progress_callback=None, mirror: str | None = None,
+                         strategy: str | None = None) -> None:
+    """统一下载入口:按当前下载策略依次尝试候选地址(首个地址试 2 次,网络偶尔抖动),
+    全失败就把最后一个错误抛出去。
+
+    "官方优先"策略下,官方源用短超时(6 秒连不上 / 10 秒没有数据就算"慢"),
+    快速切到镜像,实现"官方源缓慢时改用镜像源";兜底候选用完整 30 秒超时。
+    短超时只对 Mojang 官方地址生效,其他来源(Modrinth 等)不受影响。"""
+    strat = strategy or _active_strategy()
     last_err = None
-    for _ in range(2):
-        try:
-            download_file(url, dest, sha1=sha1, progress_callback=progress_callback)
-            return
-        except Exception as e:
-            last_err = e
-    mirror = mirror_url(url, version_id)
-    if mirror != url:
-        try:
-            download_file(mirror, dest, sha1=sha1, progress_callback=progress_callback)
-            return
-        except Exception as e:
-            last_err = e
+    for i, u in enumerate(_candidate_urls(url, version_id, mirror, strat)):
+        attempts = 2 if i == 0 else 1
+        for _ in range(attempts):
+            try:
+                if strat == "smart_official" and i == 0 and u == url and _is_mojang_url(url):
+                    # 官方源"缓慢检测":短连接/读超时,慢就抛错换镜像
+                    download_file(u, dest, sha1=sha1, progress_callback=progress_callback,
+                                  timeout=(6, 10))
+                else:
+                    download_file(u, dest, sha1=sha1, progress_callback=progress_callback)
+                return
+            except Exception as e:
+                last_err = e
     raise last_err
 
 
@@ -112,10 +244,26 @@ MAVEN_REPOS = [
 
 
 def download_maven(path: str, dest: str, sha1: str | None = None,
-                   progress_callback=None) -> None:
-    """下载一个只有 Maven 坐标(路径)、没有明确地址的依赖库。"""
+                   progress_callback=None, mirror: str | None = None,
+                   strategy: str | None = None) -> None:
+    """下载一个只有 Maven 坐标(路径)、没有明确地址的依赖库。
+    按下载策略安排镜像 Maven 仓库的位置(镜像站一般也镜像了 Maven 仓库)。"""
+    strat = strategy or _active_strategy()
+    base = _mirror_base(mirror)
+    mirror_repo = (base + "/maven/{path}") if base else None
+    repos = list(MAVEN_REPOS)
+    if strat == "official_only":
+        pass                        # 只用官方仓库,顺序不变
+    elif strat == "mirror_only":
+        repos = [mirror_repo] if mirror_repo else []
+    elif strat == "mirror_first":
+        if mirror_repo:
+            repos = [mirror_repo] + repos
+    else:                           # smart_official:官方仓库优先,镜像兜底
+        if mirror_repo:
+            repos = repos + [mirror_repo]
     last_err = None
-    for template in MAVEN_REPOS:
+    for template in repos:
         try:
             download_file(template.format(path=path), dest, sha1=sha1,
                           progress_callback=progress_callback)

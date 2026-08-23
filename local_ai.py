@@ -1,0 +1,278 @@
+# -*- coding: utf-8 -*-
+"""
+本地推理模块原型(规划 §7.1 优先项:grammar 约束解码)。
+
+核心思路:
+  1. 用 llama.cpp server(b10590 自带二进制,AMCL/runtime/llama-cpp)加载本地模型
+  2. GBNF grammar 从工具 schema **自动生成**:name 枚举合法工具名,
+     arguments 按每个工具的 parameters(required 字段必填)约束 —— "结构上必对"
+  3. 输出必然是可解析 JSON,模型只能"选工具 + 填参数",格式错误从根上消灭
+
+用法:
+  from local_ai import GrammarToolEngine
+  engine = GrammarToolEngine()
+  engine.start()                      # 启动 llama-server(懒加载,用完可 stop)
+  call = engine.tool_call("给 neoforge-21.1.248 装 钠")   # -> {"name": ..., "arguments": ...}
+  engine.stop()
+
+当前原型用原生 /completion 端点 + GBNF(不走 OpenAI 兼容层,因为 LM Studio
+端点对推理模型不生效 grammar,见 .tmp/probe 结论)。
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+
+import requests
+
+from paths import CONFIG_DIR  # noqa: E402
+
+LLAMA_DIR = os.path.join(CONFIG_DIR, "runtime", "llama-cpp")
+SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server.exe")
+
+# 默认模型:xLAM 微调版 Q4_K_M(§8.1 拍板)
+DEFAULT_MODEL_ID = "qwen3.5-0.8b-xlam-q4km"
+
+def schemas_from_assistant_tools() -> dict:
+    """从 assistant.TOOLS(单一来源)提取本地 grammar 用的工具 schema。
+    这样以后加工具只需改 assistant.py 一处,grammar 自动跟着变。
+    返回 {工具名: {"properties": {k: 类型}, "required": [...]}}"""
+    try:
+        import assistant
+        out = {}
+        for t in assistant.TOOLS:
+            fn = t["function"]
+            params = fn.get("parameters", {})
+            props = params.get("properties", {})
+            out[fn["name"]] = {
+                "properties": {k: (v.get("type", "string") if isinstance(v, dict) else "string")
+                               for k, v in props.items()},
+                "required": list(params.get("required", [])),
+            }
+        if out:
+            return out
+    except Exception:
+        pass
+    # fallback:assistant 不可用时用内置清单
+    return TOOL_SCHEMAS_FALLBACK
+# 工具 schema 的最小形态:name + 参数 key/required。
+# 正式来源:assistant.TOOLS(见 schemas_from_assistant_tools);
+# 下面这份是 assistant 不可用时的 fallback(内容与 assistant.TOOLS 同步维护)。
+TOOL_SCHEMAS_FALLBACK = {
+    "list_instances": {"properties": {}, "required": []},
+    "search_mods": {"properties": {"query": "string", "game_version": "string", "loader": "string"},
+                    "required": ["query"]},
+    "list_mods": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "read_instance_log": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "read_crash_report": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "get_settings": {"properties": {}, "required": []},
+    "install_instance": {"properties": {"version": "string", "loader": "string",
+                                        "loader_version": "string", "shader": "boolean",
+                                        "optimize": "boolean"},
+                         "required": ["version"]},
+    "ask_user": {"properties": {"question": "string", "options": "array"},
+                 "required": ["question"]},
+    "launch_game": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "install_mod": {"properties": {"slug": "string", "instance": "string", "version": "string"},
+                    "required": ["slug", "instance"]},
+    "install_mods": {"properties": {"slugs": "array", "instance": "string"},
+                     "required": ["slugs", "instance"]},
+    "backup_instance": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "set_setting": {"properties": {"key": "string", "value": "string"},
+                    "required": ["key", "value"]},
+    "send_game_command": {"properties": {"instance": "string", "command": "string"},
+                          "required": ["instance", "command"]},
+    "get_command_guide": {"properties": {"mc_version": "string"}, "required": ["mc_version"]},
+    "get_key_bindings": {"properties": {"instance": "string", "query": "string"},
+                         "required": ["instance", "query"]},
+    "get_recipe_path": {"properties": {"item": "string", "count": "integer",
+                                       "instance": "string", "brief": "boolean",
+                                       "recipe_index": "integer"},
+                        "required": ["item"]},
+    "compare_items": {"properties": {"attribute": "string", "top_n": "integer"},
+                      "required": ["attribute"]},
+}
+
+# 工具描述(给模型看的语义信息,决定它选对工具;grammar 管格式,描述管语义)
+TOOL_DESCRIPTIONS = {
+    "list_instances": "列出已安装的实例及其加载器/基础版本。用户问'有哪些实例/装了哪些游戏/看看实例'时用它",
+    "search_mods": "搜索 Mod(支持中文名),参数 query 如 sodium 或 钠;可按游戏版本/加载器过滤。注意:只是搜索,不是安装",
+    "list_mods": "列出某实例已安装的 Mod 文件。用户问'XX 装了哪些mod/有什么mod'时用它",
+    "read_instance_log": "读取某实例最近的游戏日志(诊断报错/崩溃用)。用户说'看日志/看报错'时用它",
+    "read_crash_report": "读取某实例最新的崩溃报告(诊断崩溃用)。用户说'崩溃了/闪退/看崩溃报告'时用它",
+    "get_settings": "查看启动器当前设置(内存/用户名等)",
+    "install_instance": "下载/创建【新】游戏实例(写操作)。version 如 1.21.1,loader 如 fabric/forge/neoforge。"
+                        "注意:这是创建新实例,不是启动已有实例!用户说'建一个/下载一个/创建实例'时用它",
+    "ask_user": "重要!当用户指令有歧义、缺少关键信息、或需要用户选择时调用:向用户弹出选择框,question 是你要问的话,options 是候选选项列表。"
+                "规则:拿不准用户想要什么时【必须】用这个,不要擅自猜测!例如用户说'帮我推荐mod/该装哪些'但没说具体装什么时,用这个问用户",
+    "launch_game": "启动【已存在】的实例游戏(写操作)。用户说'启动XX/打开游戏/开始玩/进游戏'时用它。"
+                   "注意:只启动,不创建!实例不存在时改用 install_instance 或先查 list_instances",
+    "install_mod": "给某实例安装单个 Mod(写操作),slug 是 mod 的英文名如 sodium。用户明确说要装某个具体 mod 时用它",
+    "install_mods": "批量给某实例安装多个 Mod(写操作),slugs 是 mod 名列表如 [sodium, lithium]。"
+                    "用户说'装A和B/装这几个mod'时用它一次装完,别逐个调 install_mod",
+    "backup_instance": "备份某实例(写操作)。用户说'备份XX/怕坏档'时用它",
+    "set_setting": "修改启动器设置(写操作),key 如 memory_gb / username,value 是新值。用户说'改成XX/设置XX'时用它",
+    "send_game_command": "向运行中的游戏发送指令,command 如 summon zombie 或 weather rain。"
+                         "用户说'发指令/执行命令/summon/生成僵尸/改天气'时用它",
+    "get_command_guide": "按游戏版本查指令指南,mc_version 如 1.21.1。用户问'XX指令怎么写/指令大全'时用它",
+    "get_key_bindings": "查询按键绑定,query 是按键或功能词如 空格/space/前进/攻击",
+    "get_recipe_path": "查询物品合成配方,支持中文名,item 如 终极感应供应器/铁锭。用户问'怎么合成/要多少材料/怎么做'时用它",
+    "compare_items": "比较物品参数(武器伤害/护甲/护甲韧性/攻速/挖掘等级),attribute 必须用中文(如 武器伤害/护甲/攻速),"
+                     "不要用英文 damage/armor!用户问'哪个伤害最高/谁护甲最厚/哪个最强'时用它",
+}
+
+
+def build_gbnf(schemas: dict) -> str:
+    """从工具 schema 生成 GBNF grammar:
+    root 是每个工具一个分支:name 字面量 + 对应 arguments 结构绑定,
+    模型选 name=xxx 时 arguments 只能走该工具的字段约束 —— "结构上必对,字段按工具齐全"。
+    """
+    lines = [
+        # 每个工具一个完整分支:name 字面量 与 该工具 argsN 绑定
+        "root ::= " + " | ".join(f"tool{i}" for i in range(len(schemas))),
+        'object ::= "{" ws (pair (ws "," ws pair)*)? ws "}"',
+        'pair ::= "\\"" key "\\"" ws ":" ws value',
+        'key ::= [a-zA-Z_]+',
+        'value ::= string | number | boolean | "null" | object | array',
+        'string ::= "\\"" ([^"\\\\] | "\\\\" .)* "\\""',
+        'number ::= "-"? [0-9]+ ("." [0-9]+)?',
+        'boolean ::= "true" | "false"',
+        'array ::= "[" ws (value (ws "," ws value)*)? ws "]"',
+        'ws ::= [ \\t\\n]*',
+    ]
+    for i, (name, meta) in enumerate(schemas.items()):
+        # 分支:{"name": "<工具名>", "arguments": <argsN>}
+        lines.append(f'tool{i} ::= "{{" ws "\\"name\\"" ws ":" ws "\\"{name}\\""'
+                     f' ws "," ws "\\"arguments\\"" ws ":" ws args{i} ws "}}"')
+        props = meta.get("properties", {})
+        required = meta.get("required", [])
+        opt_keys = [k for k in props if k not in required]
+        if not props:
+            lines.append(f"args{i} ::= object")
+            continue
+        # 必填:key:value 用逗号连接,固定顺序
+        req_pairs = [f'"\\"{k}\\"" ws ":" ws {_type_rule(props[k])}' for k in required]
+        core = " ws \",\" ws ".join(req_pairs)
+        # 可选:每个整体 (ws "," ws "key" ws ":" ws value)? 包裹
+        for k in opt_keys:
+            core += f' (ws "," ws "\\"{k}\\"" ws ":" ws {_type_rule(props[k])})?'
+        lines.append(f"args{i} ::= " + '"{" ws ' + core + ' ws "}"')
+    return "\n".join(lines)
+
+
+def _type_rule(t: str) -> str:
+    return {"string": "string", "integer": "number", "boolean": "boolean",
+            "array": "array"}.get(t, "string")
+
+
+class GrammarToolEngine:
+    """本地推理引擎原型:管理 llama-server 子进程 + GBNF 约束的工具调用"""
+
+    def __init__(self, model_id: str = DEFAULT_MODEL_ID, port: int = 8090,
+                 gbnf: str = None, system_prompt: str = None,
+                 schemas: dict = None):
+        self.model_id = model_id
+        self.port = port
+        self.base = f"http://127.0.0.1:{port}"
+        self.schemas = schemas or schemas_from_assistant_tools()
+        self.gbnf = gbnf or build_gbnf(self.schemas)
+        self.system_prompt = system_prompt or self._default_system()
+        self.proc = None
+
+    # ---- 生命周期(规划 §5:用完即卸)----
+    def start(self, model_path: str = None, wait: int = 90):
+        import model_registry
+        if self.proc and self.proc.poll() is None:
+            return
+        if model_path is None:
+            model_path = model_registry.local_path(self.model_id)
+        if not os.path.exists(SERVER_EXE):
+            raise RuntimeError(f"llama-server 不存在:{SERVER_EXE}(先运行 .tmp/full_llamacpp.py)")
+        self.proc = subprocess.Popen(
+            [SERVER_EXE, "-m", model_path, "--port", str(self.port),
+             "-c", "2048", "--no-webui", "-np", "1", "--log-disable"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(wait):
+            try:
+                if requests.get(f"{self.base}/health", timeout=3).status_code == 200:
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+        self.stop()
+        raise RuntimeError("llama-server 启动超时")
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *a):
+        self.stop()
+
+    # ---- 调用 ----
+    def _chat_prompt(self, user_text: str) -> str:
+        return ("<|im_start|>system\n" + self.system_prompt + "<|im_end|> \n"
+                f"<|im_start|>user\n{user_text}<|im_end|> \n"
+                "<|im_start|>assistant\n")
+
+    def tool_call(self, user_text: str, timeout: int = 120) -> dict:
+        """让模型输出一次工具调用,grammar 保证可解析。返回 {"name":..,"arguments":..}
+        若输出被截断/卡住(必填参数未填完),自动重试一次并提示补全。"""
+        attempt = 0
+        while True:
+            prompt = self._chat_prompt(user_text)
+            if attempt > 0:
+                prompt = self._chat_prompt(
+                    user_text + "\n(上次输出不完整:arguments 缺少必填参数,请补全后再输出)")
+            body = {"prompt": prompt, "n_predict": 600,
+                    "temperature": 0.0, "stop": ["<|im_end|>", "</s>"],
+                    "grammar": self.gbnf}
+            r = requests.post(f"{self.base}/completion", json=body, timeout=timeout)
+            r.raise_for_status()
+            content = r.json()["content"].strip()
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                if attempt >= 1:
+                    raise ValueError(f"grammar 输出解析失败:{content[:200]}")
+                attempt += 1
+                continue
+
+    def _default_system(self) -> str:
+        descs = "\n".join(f"- {n}:{d}" for n, d in TOOL_DESCRIPTIONS.items())
+        return ("你是 Agent Minecraft 启动器的 AI 助手。需要调用工具时,只输出 JSON:"
+                '{"name": 工具名, "arguments": {参数}}。工具清单:\n' + descs +
+                "\n可用实例:neoforge-21.1.248, fabric-1.21.1, vanilla-1.20.1。"
+                "参数里需要实例 id 时从可用实例中选择。"
+                "**重要:arguments 必须包含该工具的全部必填参数,一个都不能少;"
+                "缺参数会导致调用失败,请确保输出完整后再结束。**")
+
+
+if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    cases = [
+        "看看我有哪些实例",
+        "给 neoforge-21.1.248 装 钠 和 锂 两个mod",
+        "查一下 终极感应供应器 怎么合成",
+        "把内存改成 6G",
+        "游戏崩了,帮我看看崩溃报告",
+        "给 neoforge-21.1.248 发指令 summon zombie",
+    ]
+    with GrammarToolEngine() as eng:
+        for u in cases:
+            try:
+                call = eng.tool_call(u)
+                print(f"{u}\n  -> {json.dumps(call, ensure_ascii=False)}\n")
+            except Exception as e:
+                print(f"{u}\n  -> FAIL {type(e).__name__}: {str(e)[:150]}\n")

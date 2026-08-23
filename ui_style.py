@@ -4,6 +4,9 @@
 
 之前用写死的浅色背景(#f5f5f5),系统是深色主题时文字是白的 → 白底白字。
 现在所有"卡片"样式统一从这里取,深浅色各一套。
+
+这里还集中放了「我的版本」首页与「下载新资源」共用的一套圆角/卡片/列表/标签页样式,
+做成主题自适应,并在 version_home 与 resource_center 之间保持一致。
 """
 from PySide6.QtWidgets import QApplication
 
@@ -23,6 +26,101 @@ def is_dark_mode() -> bool:
     return win.lightness() < 128
 
 
+# ---------------- 基础配色 ----------------
+def _tz(dark: str, light: str) -> str:
+    """按当前主题返回 dark 或 light 值"""
+    return dark if is_dark_mode() else light
+
+
+def text_color() -> str:
+    """正文文字颜色"""
+    return _tz("#e7ecf5", "#1f2430")
+
+
+def muted_color() -> str:
+    """次要/提示文字颜色"""
+    return _tz("#8b96a8", "#6b7280")
+
+
+def hover_bg() -> str:
+    """通用悬停底色(用于透明按钮/条目的 hover 背景)"""
+    return _tz("rgba(255,255,255,0.08)", "rgba(0,0,0,0.05)")
+
+
+def panel_style() -> str:
+    """卡片/面板:圆角 + 细边框 + 柔和背景,自适应深色。"""
+    bg = _tz("rgba(255,255,255,0.045)", "rgba(0,0,0,0.035)")
+    border = _tz("rgba(255,255,255,0.11)", "rgba(20,30,60,0.12)")
+    return f"border: 1px solid {border}; border-radius: 12px; background: {bg};"
+
+
+def card_btn_style() -> str:
+    """卡片感按钮(启动器设置/管理/刷新/实例卡片等):圆角 + 悬停蓝框。"""
+    bg = _tz("#2b2f3a", "#f4f6fa")
+    border = _tz("#3a4150", "#cfd5e0")
+    text = text_color()
+    pressed = _tz("#242833", "#e6ebf3")
+    return (
+        f"QPushButton {{ background: {bg}; color: {text}; border: 1px solid {border};"
+        f" border-radius: 9px; padding: 8px 12px; }}"
+        f"QPushButton:hover {{ border-color: #5B8DEF; }}"
+        f"QPushButton:pressed {{ background: {pressed}; }}"
+    )
+
+
+def list_style() -> str:
+    """列表(实例列表/结果列表):圆角条目 + 选中/悬停高亮,自适应主题。"""
+    sel = _tz("rgba(91,141,239,0.30)", "rgba(59,142,234,0.20)")
+    hover = _tz("rgba(255,255,255,0.08)", "rgba(59,142,234,0.08)")
+    text = text_color()
+    return (
+        f"QListWidget {{ background: transparent; border: none; outline: none; }}"
+        f"QListWidget::item {{ padding: 8px 10px; margin: 3px 4px;"
+        f" border-radius: 8px; color: {text}; }}"
+        f"QListWidget::item:selected {{ background: {sel}; color: #ffffff; }}"
+        f"QListWidget::item:hover {{ background: {hover}; }}"
+    )
+
+
+def tab_style() -> str:
+    """标签页:圆角 + 选中高亮,自适应主题。"""
+    pane_border = _tz("rgba(255,255,255,0.10)", "rgba(20,30,60,0.14)")
+    sel_bg = _tz("rgba(91,141,239,0.16)", "rgba(59,142,234,0.14)")
+    text = text_color()
+    muted = muted_color()
+    return (
+        f"QTabWidget::pane {{ border: 1px solid {pane_border}; border-radius: 10px; }}"
+        f"QTabBar::tab {{ background: transparent; padding: 7px 16px; margin-right: 4px;"
+        f" color: {muted}; border-top-left-radius: 7px; border-top-right-radius: 7px; }}"
+        f"QTabBar::tab:selected {{ background: {sel_bg}; color: {text}; font-weight: bold; }}"
+        f"QTabBar::tab:hover {{ color: {text}; }}"
+    )
+
+
+def launch_btn_style() -> str:
+    """主操作大按钮(启动游戏):蓝色渐变 + 大圆角,自适应主题的蓝。"""
+    if is_dark_mode():
+        return (
+            "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 #3D80E8, stop:1 #2E6FD8); color: #ffffff; border: none;"
+            " border-radius: 12px; font-size: 17px; font-weight: bold; padding: 12px 14px; }"
+            "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 #4A8CF0, stop:1 #3D80E8); }"
+            "QPushButton:pressed { background: #265FB8; }"
+            "QPushButton:disabled { background: #44506A; color: #9AA4B8; }"
+        )
+    return (
+        "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+        " stop:0 #2F7FE8, stop:1 #1E6FD9); color: #ffffff; border: none;"
+        " border-radius: 12px; font-size: 17px; font-weight: bold; padding: 12px 14px; }"
+        "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+        " stop:0 #3D8BF2, stop:1 #2F7FE8); }"
+        "QPushButton:pressed { background: #175CB5; }"
+        "QPushButton:disabled { background: #B9C4D6; color: #EEF1F6; }"
+    )
+
+
+# ---------------- 旧兼容样式 ----------------
 def card_style() -> str:
     """可点击卡片(加载器/实例/Mod):未选中浅灰底,选中蓝框高亮"""
     if is_dark_mode():
@@ -48,7 +146,6 @@ def arrow_style() -> str:
 def primary_btn_style() -> str:
     """主操作按钮(蓝底白字):深浅色模式用不同蓝色适配,可读性更好"""
     if is_dark_mode():
-        # 深色模式用亮一些的蓝,白字更醒目
         return (
             "QPushButton { background: #2E6FD8; color: #FFFFFF; border: none;"
             " border-radius: 6px; padding: 6px 14px; font-weight: bold; }"
@@ -56,7 +153,6 @@ def primary_btn_style() -> str:
             "QPushButton:pressed { background: #265FB8; }"
             "QPushButton:disabled { background: #44506A; color: #9AA4B8; }"
         )
-    # 浅色模式用标准蓝
     return (
         "QPushButton { background: #1E6FD9; color: #FFFFFF; border: none;"
         " border-radius: 6px; padding: 6px 14px; font-weight: bold; }"
@@ -68,7 +164,7 @@ def primary_btn_style() -> str:
 
 def hint_style() -> str:
     """灰色提示文字(两种主题下都可读)"""
-    return "color: #888888;"
+    return f"color: {muted_color()};"
 
 
 def inner_style() -> str:

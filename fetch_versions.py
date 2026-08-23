@@ -17,16 +17,33 @@ if hasattr(sys.stdout, "reconfigure"):
 
 # 版本清单的来源:官方源 + 国内镜像源(BMCLAPI)。
 # 国内直连官方源经常很慢甚至失败,所以"失败就换下一个源"。
+# 顺序由设置 → 镜像源里的"下载策略"决定(见 downloader.MIRROR_STRATEGIES)。
 SOURCES = [
     "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
     "https://bmclapi2.bangbang93.com/mc/game/version_manifest_v2.json",
 ]
 
 
+def _manifest_candidates() -> list:
+    """按当前下载策略生成版本清单候选地址(官方地址 + 所选镜像地址,去重)"""
+    from downloader import _active_mirror, _active_strategy, mirror_manifest_url
+    mirror = _active_mirror()
+    strat = _active_strategy()
+    murl = mirror_manifest_url(mirror)   # 无可用镜像时为 None
+    official = SOURCES[0]
+    if strat == "official_only":
+        return [official]
+    if strat == "mirror_only":
+        return [murl] if murl else []
+    if strat == "mirror_first":
+        return list(dict.fromkeys(u for u in [murl, official] if u))
+    return list(dict.fromkeys(u for u in [official, murl] if u))   # smart_official
+
+
 def fetch_version_manifest() -> dict:
     """依次尝试各个源,返回版本清单(一个嵌套的 dict)"""
     last_error = None
-    for url in SOURCES:
+    for url in _manifest_candidates():
         try:
             print(f"正在请求: {url}")
             resp = requests.get(url, timeout=15)  # 15 秒内没响应就放弃
@@ -44,10 +61,30 @@ def fetch_version_detail(version_url: str) -> dict:
     版本清单里每个版本都有一个 url 指向它自己的详细数据,
     里面写着:客户端 jar 下载地址、大小、所需 Java 版本、资源索引、主类等。
     下载和启动游戏都靠这份数据。
+    地址顺序同样由"下载策略"决定(官方地址 / 镜像地址谁先用)。
     """
-    resp = requests.get(version_url, timeout=15)
-    resp.raise_for_status()
-    return resp.json()
+    from downloader import _active_mirror, _active_strategy, mirror_version_json_url
+    mirror = _active_mirror()
+    strat = _active_strategy()
+    m = mirror_version_json_url(version_url, mirror)
+    official = version_url
+    if strat == "official_only":
+        candidates = [official]
+    elif strat == "mirror_only":
+        candidates = [m]
+    elif strat == "mirror_first":
+        candidates = [m, official]
+    else:                                        # smart_official
+        candidates = [official, m]
+    last_error = None
+    for u in dict.fromkeys(candidates):
+        try:
+            resp = requests.get(u, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            last_error = e
+    raise last_error
 
 
 def main():

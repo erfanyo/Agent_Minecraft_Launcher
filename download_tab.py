@@ -231,10 +231,14 @@ class DownloadTab(QWidget):
 
     # ================= 版本面板 =================
     def _load_tree(self):
-        try:
-            manifest = fetch_version_manifest()
-        except Exception:
-            self.status_label.setText("版本列表获取失败,请检查网络")
+        """版本清单后台加载,不阻塞界面(构造时也可能触发)。"""
+        self._async(("tree",), fetch_version_manifest, self._fill_tree)
+
+    def _fill_tree(self, manifest):
+        if not manifest:
+            label = getattr(self, "status_label", None)
+            if label is not None:
+                label.setText("版本列表获取失败,请检查网络")
             return
         fill_version_tree(self.version_tree, manifest)
 
