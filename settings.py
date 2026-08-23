@@ -32,6 +32,16 @@ DEFAULTS = {
     "ai_local_model": "qwen3.5-0.8b-xlam-q4km",   # 本地模型 id(与 model_registry.RESOURCES 对应)
     "ai_local_auto_download": True,               # 首次用到且未下载 → 自动后台下载(False = 不下载直接走云端)
     "ai_in_game": "off",                          # 游戏内 AI 通道:off(关闭,卸载模型省内存)/ cloud(云端)/ local(本地)
+    # ---- 云端 / 本地 两组独立设置(设置 UI 分开,ai_source 决定当前用哪边)----
+    "ai_source": "cloud",          # 当前模型来源:cloud(云端)/ local(本地)
+    # 云端模型(ai_source=cloud 时生效;DeepSeek/OpenRouter/硅基流动/智谱/通义/自定义)
+    "ai_cloud_provider": "deepseek",
+    "ai_cloud_base_url": "https://api.deepseek.com/v1",
+    "ai_cloud_api_key": "",
+    "ai_cloud_model": "deepseek-chat",
+    # 本地模型(ai_source=local 时生效):builtin(内置)/ ollama / lmstudio
+    "ai_local_mode": "builtin",
+    "ai_local_endpoint": "",       # ollama/lmstudio 的服务地址(内置模型留空)
     # 下载镜像策略(见 downloader.MIRROR_STRATEGIES):
     #   smart_official 官方优先(官方慢/失败时换镜像) / mirror_first 镜像优先(失败回官方)
     #   official_only 只用官方 / mirror_only 只用镜像
@@ -62,9 +72,37 @@ def load_settings() -> dict:
                     elif old == "bmclapi" or (isinstance(old, str) and old.startswith("custom:")):
                         data["mirror_strategy"] = "mirror_first"
                     # 没有 mirror_source(全新安装)→ 保持默认 smart_official + bmclapi
+                # AI 设置迁移:把旧式"单一 provider"配置拆成 云端/本地 两组(拆分设置前,ai_source 不存在)
+                if "ai_source" not in saved:
+                    _migrate_ai(data)
         except Exception:
             pass  # 配置文件损坏:退回默认
     return data
+
+
+def _migrate_ai(data: dict):
+    """把旧式"单一 ai_provider"配置拆成 / 映射到 云端与本地两组设置。
+
+    只在老配置(还没有 ai_source 键)时调用:用当前生效的 ai_provider 判断属于云端还是本地,
+    把 ai_base_url/ai_api_key/ai_model 填到对应那一组,保住用户现有配置。"""
+    prov = data.get("ai_provider", "deepseek")
+    if prov in ("local_builtin", "ollama", "lmstudio"):
+        # 本地一侧
+        data["ai_source"] = "local"
+        data["ai_local_mode"] = "builtin" if prov == "local_builtin" else prov
+        data["ai_local_endpoint"] = (data.get("ai_base_url") or "").strip()
+        if prov == "local_builtin":
+            data["ai_local_model"] = data.get("ai_local_model",
+                                              "qwen3.5-0.8b-xlam-q4km")
+        else:
+            data["ai_local_model"] = (data.get("ai_model") or "").strip()
+    else:
+        # 云端一侧
+        data["ai_source"] = "cloud"
+        data["ai_cloud_provider"] = prov
+        data["ai_cloud_base_url"] = (data.get("ai_base_url") or "").strip()
+        data["ai_cloud_api_key"] = (data.get("ai_api_key") or "").strip()
+        data["ai_cloud_model"] = (data.get("ai_model") or "").strip()
 
 
 def save_settings(settings: dict) -> None:

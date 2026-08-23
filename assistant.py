@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -43,6 +44,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QTextBrowser,
     QVBoxLayout,
@@ -458,79 +460,255 @@ class RecentScreenshotsDialog(QDialog):
             self.accept()
 
 
+# 云端服务商(下拉选项:标签, 值)
+_CLOUD_PROVIDERS = [
+    ("DeepSeek(推荐 · 便宜好用)", "deepseek"),
+    ("OpenRouter(一家账号用多家,部分模型会看图)", "openrouter"),
+    ("硅基流动(国内速度快)", "siliconflow"),
+    ("智谱 GLM(国内)", "zhipu"),
+    ("通义千问(国内)", "dashscope"),
+    ("自定义(自己填接口)", "custom"),
+]
+# 本地模型类型(下拉:标签, 值)
+_LOCAL_MODES = [
+    ("内置本地模型(离线,无密钥,需下载)", "builtin"),
+    ("Ollama(本地服务,免费离线)", "ollama"),
+    ("LM Studio(本地服务,免费离线)", "lmstudio"),
+]
+
+
 class AISettingsForm(QWidget):
-    """AI 服务设置表单(可嵌入对话框 / 首次引导页):服务商 / 接口 / 密钥 / 模型 / 权限"""
+    """AI 模型设置(拆分云端 / 本地两大块)。
+
+    - 顶部「当前使用」:云端模型 / 本地模型(单选)—— 决定 AI 对话走哪边。
+    - 云端块:服务商(DeepSeek/OpenRouter/硅基流动/智谱/通义/自定义)+ 接口地址 + API 密钥 + 模型。
+    - 本地块:本地类型(内置 / Ollama / LM Studio)+
+      内置:模型下载状态 + 自动下载;Ollama/LM Studio:服务地址 + 模型名。
+    - 通用:文件权限、上下文窗口、图片输入(按模型自动)、游戏内 AI 通道。
+
+    保存时据当前来源推导「生效」的 ai_provider / ai_base_url / ai_api_key / ai_model,
+    后端(chat/task_router/local 路由)读到的是统一的一套,零改动。
+    """
 
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
-        self.provider = QComboBox()
-        # 列表标注 云端/本地、是否免费,方便新手理解;OpenRouter 特别注明"部分模型会看图"
-        self.provider.addItem("DeepSeek(推荐 · 云端 · 便宜好用)", "deepseek")
-        self.provider.addItem("内置本地模型(免费 · 无密钥,需下载约500MB)", "local_builtin")
-        self.provider.addItem("Ollama(本地 · 免费离线)", "ollama")
-        self.provider.addItem("LM Studio(本地 · 免费离线)", "lmstudio")
-        self.provider.addItem("OpenRouter(云端 · 一家账号用多家,部分模型会看图)", "openrouter")
-        self.provider.addItem("硅基流动(云端 · 国内速度快)", "siliconflow")
-        self.provider.addItem("智谱 GLM(云端 · 国内)", "zhipu")
-        self.provider.addItem("通义千问(云端 · 国内)", "dashscope")
-        self.provider.addItem("自定义(云端或本地 · 自己填接口)", "custom")
-        self.base_url = QLineEdit(settings.get("ai_base_url", ""))
-        self.api_key = QLineEdit(settings.get("ai_api_key", ""))
-        self.api_key.setPlaceholderText("留空 = 不需要密钥(本地服务)")
-        self.model = QLineEdit(settings.get("ai_model", ""))
+        self._settings = settings
+        self._build_ui()
+        self._sync_from_settings()
+        self._apply_source_visibility()
+
+    def _build_ui(self):
+        # ---------- 当前使用(来源单选) ----------
+        self.source_cloud = QRadioButton("☁ 云端模型")
+        self.source_local = QRadioButton("🖥 本地模型")
+        self.source_cloud.setToolTip("走云端 API(DeepSeek / OpenRouter / 硅基流动 / 智谱 / 通义 / 自定义)")
+        self.source_local.setToolTip("本地推理(内置小模型 / Ollama / LM Studio),离线可用")
+        self.source_cloud.toggled.connect(self._apply_source_visibility)
+
+        # ---------- 云端块 ----------
+        self.cloud_provider = QComboBox()
+        for label, value in _CLOUD_PROVIDERS:
+            self.cloud_provider.addItem(label, value)
+        self.cloud_base_url = QLineEdit()
+        self.cloud_base_url.setPlaceholderText("如 https://api.deepseek.com/v1")
+        self.cloud_api_key = QLineEdit()
+        self.cloud_api_key.setPlaceholderText("在对应平台注册获取;本地服务留空")
+        self.cloud_model = QLineEdit()
+        self.cloud_model.setPlaceholderText("如 deepseek-chat / glm-4-flash")
+        cloud_box = QGroupBox("云端模型")
+        cl = QFormLayout(cloud_box)
+        cl.addRow("服务商:", self.cloud_provider)
+        cl.addRow("接口地址:", self.cloud_base_url)
+        cl.addRow("API 密钥:", self.cloud_api_key)
+        cl.addRow("模型:", self.cloud_model)
+
+        # ---------- 本地块 ----------
+        self.local_mode = QComboBox()
+        for label, value in _LOCAL_MODES:
+            self.local_mode.addItem(label, value)
+        # 内置模型专属:下载状态 + 自动下载
+        self.local_builtin_row = QWidget()
+        b_row = QHBoxLayout(self.local_builtin_row)
+        b_row.setContentsMargins(0, 0, 0, 0)
+        self.local_status = QLabel("")
+        self.local_auto_dl = QCheckBox("首次用到且未下载时自动下载")
+        self.local_auto_dl.setChecked(True)
+        b_row.addWidget(self.local_status, 1)
+        b_row.addWidget(self.local_auto_dl)
+        # Ollama / LM Studio 专属:服务地址 + 模型名
+        self.local_server_row = QWidget()
+        s_form = QFormLayout(self.local_server_row)
+        s_form.setContentsMargins(0, 0, 0, 0)
+        self.local_endpoint = QLineEdit()
+        self.local_endpoint.setPlaceholderText("如 http://localhost:11434/v1")
+        self.local_model = QLineEdit()
+        self.local_model.setPlaceholderText("本机加载的模型名,如 qwen2.5:7b")
+        s_form.addRow("服务地址:", self.local_endpoint)
+        s_form.addRow("模型名:", self.local_model)
+        local_box = QGroupBox("本地模型")
+        ll = QVBoxLayout(local_box)
+        ll.addWidget(QLabel("本地类型:"))
+        ll.addWidget(self.local_mode)
+        ll.addWidget(self.local_builtin_row)
+        ll.addWidget(self.local_server_row)
+
+        # ---------- 通用 ----------
         self.permission = QComboBox()
         for label, value in PERMISSIONS:
             self.permission.addItem(label, value)
-        cur = settings.get("ai_permission", "readonly")
-        idx = self.permission.findData(cur)
-        self.permission.setCurrentIndex(idx if idx >= 0 else 0)
         self.context_window = QSpinBox()
         self.context_window.setRange(1000, 1000000)
         self.context_window.setSingleStep(1024)
-        self.context_window.setValue(int(settings.get("context_window", 65536) or 65536))
         self.context_window.setSuffix(" tokens")
         self.context_window.setToolTip("模型上下文窗口上限,用于对话框里的占用圆环显示")
-        # 发图片(多模态):勾选后 AI 对话框才显示 📷/🖼 按钮。
-        # 关键前提:必须你选的模型本身会"看图",否则勾了也没用(发送图片会报错)。
-        self.vision_check = QCheckBox("允许给 AI 发图片(需要你选的模型本身支持看图)")
-        self.vision_check.setChecked(bool(settings.get("ai_multimodal", False)))
+        self.vision_check = QCheckBox("允许给 AI 发图片(需要所选模型本身支持看图)")
         self.vision_check.setToolTip(
             "图片功能不是想开就开:要看你选的模型本身会不会\"看图\"(多模态)。\n"
             "不确定的话保持关闭最稳妥;勾了但模型不支持,发图片时会报错。")
-
-        # 游戏内 AI 通道:决定游戏启动时本地模型去留(off/cloud 卸载省内存给游戏)
         self.ai_in_game = QComboBox()
         self.ai_in_game.addItem("关闭(游戏内不用 AI,推荐)", "off")
         self.ai_in_game.addItem("云端(游戏内用云端 AI)", "cloud")
         self.ai_in_game.addItem("本地(游戏内用内置本地模型)", "local")
-        ig = settings.get("ai_in_game", "off")
-        idx = self.ai_in_game.findData(ig)
-        self.ai_in_game.setCurrentIndex(idx if idx >= 0 else 0)
         self.ai_in_game.setToolTip(
             "游戏运行时是否保留本地模型:\n"
             "· off/cloud → 游戏启动时卸载本地模型,省内存给游戏;\n"
             "· local → 游戏启动时保持本地模型加载(游戏内 AI 通道,规划中)。")
 
-        form = QFormLayout(self)
-        form.addRow("AI 服务商:", self.provider)
-        form.addRow("接口地址:", self.base_url)
-        form.addRow("API 密钥:", self.api_key)
-        form.addRow("模型:", self.model)
-        form.addRow("文件权限:", self.permission)
-        form.addRow("上下文窗口:", self.context_window)
-        form.addRow("图片输入:", self.vision_check)
-        form.addRow("游戏内 AI:", self.ai_in_game)
+        common = QGroupBox("通用")
+        cf = QFormLayout(common)
+        cf.addRow("文件权限:", self.permission)
+        cf.addRow("上下文窗口:", self.context_window)
+        cf.addRow("图片输入:", self.vision_check)
+        cf.addRow("游戏内 AI:", self.ai_in_game)
 
-        self.provider.currentIndexChanged.connect(self._fill_defaults)
-        self.provider.currentIndexChanged.connect(self._auto_vision)
-        self.model.textChanged.connect(self._auto_vision)
-        self._fill_defaults()
+        # ---------- 布局 ----------
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.source_cloud)
+        source_row.addWidget(self.source_local)
+        source_row.addStretch()
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(QLabel("当前使用:"))
+        layout.addLayout(source_row)
+        layout.addWidget(cloud_box)
+        layout.addWidget(local_box)
+        layout.addWidget(common)
+
+        # 联动
+        self.cloud_provider.currentIndexChanged.connect(self._fill_cloud_defaults)
+        self.cloud_provider.currentIndexChanged.connect(self._auto_vision)
+        self.cloud_model.textChanged.connect(self._auto_vision)
+        self.local_mode.currentIndexChanged.connect(self._on_local_mode_changed)
+        self.local_mode.currentIndexChanged.connect(self._auto_vision)
+        self.local_model.textChanged.connect(self._auto_vision)
+
+        self.cloud_box = cloud_box
+        self.local_box = local_box
+
+    def _sync_from_settings(self):
+        """从 settings 载入(组合/文本设置时屏蔽信号,避免 _fill_* 覆盖用户已存值)。"""
+        s = self._settings
+        self.blockSignals(True)
+        source = s.get("ai_source", "cloud")
+        self.source_cloud.setChecked(source != "local")
+        self.source_local.setChecked(source == "local")
+        # 云端
+        self.cloud_provider.setCurrentIndex(
+            self.cloud_provider.findData(s.get("ai_cloud_provider", "deepseek")) if self.cloud_provider.findData(
+                s.get("ai_cloud_provider", "deepseek")) >= 0 else 0)
+        self.cloud_base_url.setText(s.get("ai_cloud_base_url", ""))
+        self.cloud_api_key.setText(s.get("ai_cloud_api_key", ""))
+        self.cloud_model.setText(s.get("ai_cloud_model", ""))
+        # 本地
+        self.local_mode.setCurrentIndex(
+            self.local_mode.findData(s.get("ai_local_mode", "builtin")) if self.local_mode.findData(
+                s.get("ai_local_mode", "builtin")) >= 0 else 0)
+        self.local_endpoint.setText(s.get("ai_local_endpoint", ""))
+        self.local_model.setText(s.get("ai_local_model", ""))
+        self.local_auto_dl.setChecked(bool(s.get("ai_local_auto_download", True)))
+        # 通用
+        cur = s.get("ai_permission", "readonly")
+        idx = self.permission.findData(cur)
+        self.permission.setCurrentIndex(idx if idx >= 0 else 0)
+        self.context_window.setValue(int(s.get("context_window", 65536) or 65536))
+        self.vision_check.setChecked(bool(s.get("ai_multimodal", False)))
+        ig = s.get("ai_in_game", "off")
+        idx = self.ai_in_game.findData(ig)
+        self.ai_in_game.setCurrentIndex(idx if idx >= 0 else 0)
+        self.blockSignals(False)
+        self._toggle_local_visibility()   # 仅切换显隐,不改用户已存值
+        self._refresh_local_status()
+
+    # ---- 来源/本地类型切换 ----
+    def _apply_source_visibility(self, *_):
+        is_cloud = self.source_cloud.isChecked()
+        self.cloud_box.setVisible(is_cloud)
+        self.local_box.setVisible(not is_cloud)
+
+    def _toggle_local_visibility(self, *_):
+        """仅按本地类型切换子区显隐 + 内置模型只读,不改用户已存值。"""
+        mode = self.local_mode.currentData()
+        builtin = (mode == "builtin")
+        self.local_builtin_row.setVisible(builtin)
+        self.local_server_row.setVisible(not builtin)
+        self.local_model.setReadOnly(builtin)
+        if builtin:
+            self.local_model.setText(LOCAL_MODEL_ID)
+        self._refresh_local_status()
+
+    def _on_local_mode_changed(self, *_):
+        """用户切换本地类型:先切显隐,再补默认端点/模型名(仅空格/内置默认时)。"""
+        self._toggle_local_visibility()
+        mode = self.local_mode.currentData()
+        if mode == "ollama":
+            if not self.local_endpoint.text().strip():
+                self.local_endpoint.setText("http://localhost:11434/v1")
+            if not self.local_model.text().strip() or self.local_model.text() == LOCAL_MODEL_ID:
+                self.local_model.setText("qwen2.5:7b")
+        elif mode == "lmstudio":
+            if not self.local_endpoint.text().strip():
+                self.local_endpoint.setText("http://localhost:1234/v1")
+            self.local_model.clear()
+            self.local_model.setPlaceholderText("输入你已在 LM Studio 加载的模型名")
+
+    def _fill_cloud_defaults(self):
+        idx = self.cloud_provider.currentData()
+        if idx == "deepseek":
+            self.cloud_base_url.setText("https://api.deepseek.com/v1")
+            self.cloud_model.setText("deepseek-chat")
+        elif idx == "openrouter":
+            self.cloud_base_url.setText("https://openrouter.ai/api/v1")
+            self.cloud_model.setText("deepseek/deepseek-chat-v3-0324:free")
+        elif idx == "siliconflow":
+            self.cloud_base_url.setText("https://api.siliconflow.cn/v1")
+            self.cloud_model.setText("Qwen/Qwen2.5-7B-Instruct")
+        elif idx == "zhipu":
+            self.cloud_base_url.setText("https://open.bigmodel.cn/api/paas/v4")
+            self.cloud_model.setText("glm-4-flash")
+        elif idx == "dashscope":
+            self.cloud_base_url.setText("https://dashscope.aliyuncs.com/compatible-mode/v1")
+            self.cloud_model.setText("qwen-plus")
+        # custom:保留用户输入
+
+    def _refresh_local_status(self):
+        """刷新内置本地模型的下载状态文字。"""
+        if not hasattr(self, "local_status"):
+            return
+        try:
+            import model_registry
+            ready = model_registry.is_downloaded(LOCAL_MODEL_ID)
+        except Exception:
+            ready = False
+        self.local_status.setText("内置模型:" + ("✅ 已下载" if ready else "未下载(约500MB,首次用自动下载)"))
 
     def _auto_vision(self):
-        """切服务商/模型时,按模型是否能看图自动设定「图片输入」开关。
-
-        模型名可判定 → 自动开/关;无法判定(本地/自定义)→ 保留用户手动选择。"""
-        vis = model_supports_vision(self.provider.currentData(), self.model.text())
+        """切服务商/模型时,按所选(生效的)模型是否能看图自动设定「图片输入」开关。"""
+        if self.source_cloud.isChecked():
+            prov, model = self.cloud_provider.currentData(), self.cloud_model.text().strip()
+        else:
+            prov = "local_builtin" if self.local_mode.currentData() == "builtin" else self.local_mode.currentData()
+            model = LOCAL_MODEL_ID if prov == "local_builtin" else self.local_model.text().strip()
+        vis = model_supports_vision(prov, model)
         if vis is True:
             self.vision_check.setChecked(True)
             self.vision_check.setToolTip("该模型看起来支持看图(多模态),已自动开启。")
@@ -538,44 +716,40 @@ class AISettingsForm(QWidget):
             self.vision_check.setChecked(False)
             self.vision_check.setToolTip("该模型不支持看图(多模态),图片功能已自动关闭。")
 
-    def _fill_defaults(self):
-        idx = self.provider.currentData()
-        if idx == "deepseek":
-            self.base_url.setText("https://api.deepseek.com/v1")
-            self.model.setText("deepseek-chat")
-        elif idx == "local_builtin":
-            # 内置本地模型:无需接口/密钥,模型名固定;首次用会后台下载
-            self.base_url.setText("")
-            self.base_url.setPlaceholderText("内置本地模型(无需接口地址)")
-            self.api_key.setText("")
-            self.model.setText(LOCAL_MODEL_ID)
-        elif idx == "ollama":
-            self.base_url.setText("http://localhost:11434/v1")
-            self.model.setText("qwen2.5:7b")
-        elif idx == "lmstudio":
-            self.base_url.setText("http://localhost:1234/v1")
-            self.model.clear()
-            self.model.setPlaceholderText("输入你已在 LM Studio 加载的模型名")
-        elif idx == "openrouter":
-            self.base_url.setText("https://openrouter.ai/api/v1")
-            self.model.setText("deepseek/deepseek-chat-v3-0324:free")
-        elif idx == "siliconflow":
-            self.base_url.setText("https://api.siliconflow.cn/v1")
-            self.model.setText("Qwen/Qwen2.5-7B-Instruct")
-        elif idx == "zhipu":
-            self.base_url.setText("https://open.bigmodel.cn/api/paas/v4")
-            self.model.setText("glm-4-flash")
-        elif idx == "dashscope":
-            self.base_url.setText("https://dashscope.aliyuncs.com/compatible-mode/v1")
-            self.model.setText("qwen-plus")
-
     def values(self) -> dict:
-        """收集表单内容为设置字段"""
+        """收集表单内容为设置字段,并据当前来源推导「生效」的一组 ai_provider/... 给后端。"""
+        if self.source_cloud.isChecked():
+            source = "cloud"
+            provider = self.cloud_provider.currentData()
+            base_url = self.cloud_base_url.text().strip()
+            api_key = self.cloud_api_key.text().strip()
+            model = self.cloud_model.text().strip()
+        else:
+            source = "local"
+            mode = self.local_mode.currentData()
+            provider = "local_builtin" if mode == "builtin" else mode
+            base_url = "" if mode == "builtin" else self.local_endpoint.text().strip()
+            api_key = ""
+            model = LOCAL_MODEL_ID if mode == "builtin" else self.local_model.text().strip()
         return {
-            "ai_provider": self.provider.currentData(),
-            "ai_base_url": self.base_url.text().strip(),
-            "ai_api_key": self.api_key.text().strip(),
-            "ai_model": self.model.text().strip(),
+            "ai_source": source,
+            # 云端组
+            "ai_cloud_provider": self.cloud_provider.currentData(),
+            "ai_cloud_base_url": self.cloud_base_url.text().strip(),
+            "ai_cloud_api_key": self.cloud_api_key.text().strip(),
+            "ai_cloud_model": self.cloud_model.text().strip(),
+            # 本地组
+            "ai_local_mode": self.local_mode.currentData(),
+            "ai_local_endpoint": self.local_endpoint.text().strip(),
+            "ai_local_model": (LOCAL_MODEL_ID if self.local_mode.currentData() == "builtin"
+                               else self.local_model.text().strip()),
+            "ai_local_auto_download": self.local_auto_dl.isChecked(),
+            # 生效(后端读取)
+            "ai_provider": provider,
+            "ai_base_url": base_url,
+            "ai_api_key": api_key,
+            "ai_model": model,
+            # 通用
             "ai_permission": self.permission.currentData(),
             "context_window": self.context_window.value(),
             "ai_multimodal": self.vision_check.isChecked(),
@@ -594,20 +768,19 @@ class AISettingsDialog(QDialog):
 
         self.form = AISettingsForm(self.settings, self)
         # 兼容旧用法:直接访问 dlg.provider / dlg.base_url / dlg.permission 等
-        self.provider = self.form.provider
-        self.base_url = self.form.base_url
-        self.api_key = self.form.api_key
-        self.model = self.form.model
+        # (现在分云端/本地两组,旧别名指向云端服务商那组)
+        self.provider = self.form.cloud_provider
+        self.base_url = self.form.cloud_base_url
+        self.api_key = self.form.cloud_api_key
+        self.model = self.form.cloud_model
         self.permission = self.form.permission
         self.context_window = self.form.context_window
 
         hint = QLabel(
             "怎么选:\n"
-            "· 云端(DeepSeek / OpenRouter / 硅基流动 / 智谱 / 通义):去对应官网注册,\n"
-            "  拿到 API 密钥填在上面(DeepSeek 最便宜);\n"
-            "· 本地(Ollama / LM Studio):在自己电脑上跑,免费离线,密钥留空即可;\n"
-            "· 发图片:和用哪家无关,取决于你选的模型本身会不会\"看图\"。\n"
-            "  模型不会看的话,图片功能就别开。\n"
+            "· 云端(DeepSeek / OpenRouter / 硅基流动 / 智谱 / 通义):去官网注册拿密钥,填右上(DeepSeek 最便宜);\n"
+            "· 本地(内置本地模型 / Ollama / LM Studio):离线可用;内置模型约 500MB 首次用自动下载;\n"
+            "· 发图片:和用哪家无关,取决于所选模型本身会不会\"看图\"(内置本地模型不支持,自动关闭);\n"
             "文件权限:只读 = AI 只能看文件;工作区可写 = AI 只能在启动器目录里改文件。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888888;")

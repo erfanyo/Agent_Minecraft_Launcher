@@ -153,9 +153,9 @@ class SettingsDialog(QDialog):
 
         self.ai_form = AISettingsForm(self.settings)
         ai_hint = QLabel("AI 设置会自动保存,下次打开启动器仍然有效。\n"
-                         "发图片(多模态):只有你选的模型本身会\"看图\"才有效。勾选后,"
-                         "AI 对话框才会显示📷 添加图片 / 🖼 最近截图按钮;\n"
-                         "模型不支持时勾了也没用(发图片会报错),所以不确定就保持关闭。")
+                         "· 云/本地两块分开配:顶部选「当前使用」哪边,AI 对话就走哪边;\n"
+                         "· 发图片(多模态):只有所选模型本身会\"看图\"才有效,内置本地模型自动关闭;\n"
+                         "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
         ai_hint.setWordWrap(True)
         ai_hint.setStyleSheet("color: #888888;")
 
