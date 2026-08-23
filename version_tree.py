@@ -7,7 +7,7 @@ from datetime import datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
 
 # 黄金版本:模组生态最活跃的经典版本(灵感 #1,静态列表版)。
 # 经典版本几乎不再变动,没必要实时统计;以后想加版本直接往这里添一行。
@@ -54,6 +54,12 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
     返回 (正式版数, 快照数, 远古数, 愚人节数)。"""
     tree.setColumnCount(2)
     tree.setHeaderLabels(["版本", "发布年月"])
+    # 版本列加宽且可拖,年月列固定靠右——不让年月遮挡版本信息
+    tree.setColumnWidth(0, 440)
+    tree.setColumnWidth(1, 76)
+    header = tree.header()
+    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+    header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
 
     # 愚人节版本:4 月 1 日发布且不是正式版(如 20w14infinite、23w13a_or_b)
     april_fools = [v for v in manifest["versions"]
@@ -82,12 +88,13 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
             ancients.append(v)
 
     def _leaf(parent, v):
-        """加一个版本叶子:第 0 列版本(黄金版本加 🏅),第 1 列灰色年月"""
+        """加一个版本叶子:第 0 列版本(黄金版本加 🏅),第 1 列灰色年月(右对齐)"""
         star = " 🏅" if v["id"] in GOLDEN_VERSIONS else ""
         item = QTreeWidgetItem([f"{v['id']}  ({v['type']}){star}",
                                 v.get("releaseTime", "")[:7]])
         item.setData(0, Qt.ItemDataRole.UserRole, v)
         item.setForeground(1, QColor("#999999"))  # 灰色年月
+        item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         parent.addChild(item)
         return item
 
