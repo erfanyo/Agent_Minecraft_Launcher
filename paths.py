@@ -1,22 +1,55 @@
 # -*- coding: utf-8 -*-
-"""路径常量:整个项目共用的游戏目录位置。
+"""路径常量:整个项目共用的数据根目录与游戏目录位置。
 
-支持在设置/首次引导里改路径:
+数据根目录(BASE_DIR)采用 PCL 式"就地创建"便携设计,优先级:
+1. 环境变量 AML_DATA_DIR 显式指定(最优先,适合多配置/绿色便携)
+2. 打包后(exe):exe 所在目录 —— 数据跟着 exe 走,整个文件夹可随意搬动
+3. 源码运行:项目目录
+4. 就地目录不可写(如 Program Files)→ 自动退回 %APPDATA%\\AgentMinecraftLauncher
+
+这样 PyInstaller 打包后数据不会写进临时解压目录(%TEMP%\\_MEIxxx,重启即丢),
+config.json(游戏目录/AI 设置)、.minecraft、runtime 全部持久化在 exe 旁边。
+
+支持在设置/首次引导里改游戏目录:
 - set_game_dir() 更新模块级 GAME_DIR / RUNTIME_DIR,改完立即全局生效
 - 模块导入时会先读 config.json 里保存的 game_dir(有则优先,没有就用默认 .minecraft)
 """
 import json
 import os
+import sys
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
-_CONFIG_PATH = os.path.join(_BASE, "config.json")
-DEFAULT_GAME_DIR = os.path.join(_BASE, ".minecraft")
+
+def _pick_base_dir() -> str:
+    """选择数据根目录(见模块注释的优先级规则)"""
+    env = os.environ.get("AML_DATA_DIR", "").strip()
+    if env:
+        return os.path.abspath(env)
+    if getattr(sys, "frozen", False):
+        # PyInstaller 打包后:sys.executable 才是 exe 真实路径,__file__ 是临时解压目录
+        base = os.path.dirname(os.path.abspath(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    # 就地目录可写 → 便携模式;不可写(只读目录)→ 系统用户目录
+    try:
+        probe = os.path.join(base, ".aml_write_probe")
+        with open(probe, "w") as f:
+            f.write("1")
+        os.remove(probe)
+        return base
+    except OSError:
+        appdata = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(appdata, "AgentMinecraftLauncher")
+
+
+BASE_DIR = _pick_base_dir()
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+DEFAULT_GAME_DIR = os.path.join(BASE_DIR, ".minecraft")
 
 
 def _saved_game_dir() -> str:
     """config.json 里用户保存的游戏目录(空 = 未配置)"""
     try:
-        with open(_CONFIG_PATH, encoding="utf-8") as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             data = json.load(f)
         g = data.get("game_dir")
         if isinstance(g, str) and g.strip():

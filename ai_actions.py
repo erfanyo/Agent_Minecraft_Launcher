@@ -10,7 +10,7 @@ AI 助手的文件操作权限:只读 / 工作区可写 两档。
 """
 import os
 
-WORKSPACE = os.path.dirname(os.path.abspath(__file__))  # 项目根目录(工作区)
+from paths import BASE_DIR as WORKSPACE  # 工作区 = 数据根目录(打包后 = exe 旁边)
 
 # 两档权限(界面选项:显示名, 内部值)
 PERMISSIONS = [

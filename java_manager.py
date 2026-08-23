@@ -15,6 +15,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tempfile
 import zipfile
 
 from downloader import download_file
@@ -44,9 +45,7 @@ def parse_java_major(output: str) -> int:
 def java_major(java_exe: str) -> int:
     """运行 java -version 并解析大版本;失败返回 0。"""
     try:
-        tmp = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tmp")
-        os.makedirs(tmp, exist_ok=True)
-        ver_file = os.path.join(tmp, "java_ver.txt")
+        ver_file = os.path.join(tempfile.gettempdir(), "aml_java_ver.txt")
         with open(ver_file, "wb") as f:
             subprocess.run([java_exe, "-version"], stdout=f,
                            stderr=subprocess.STDOUT, timeout=15)

@@ -9,7 +9,7 @@
 import json
 import os
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+from paths import CONFIG_PATH  # 与 paths.BASE_DIR 一致(打包后 = exe 旁边,便携)
 
 DEFAULTS = {
     "username": "Player",        # 离线模式游戏名
