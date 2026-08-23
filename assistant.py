@@ -183,12 +183,14 @@ def build_executor(settings: dict):
 
 
 def chat_with_tools(messages: list, settings: dict, tools: list,
-                    executor, max_rounds: int = 10, on_tool=None) -> str:
+                    executor, max_rounds: int = 10, on_tool=None,
+                    return_messages: bool = False):
     """带工具调用的对话循环:LLM 提议 → 执行 → 结果回传 → 直到完成。
 
     tools 为 None 时退化为普通对话。
     on_tool(name, args, result) 每执行一个工具就回调一次(供界面显示过程)。
-    返回最终回复文本。"""
+    return_messages=True 时返回 (回复文本, 完整消息历史)——调用方保存历史
+    即可实现真正的多轮对话记忆(含工具调用过程)。默认返回回复文本。"""
     url = settings["ai_base_url"].rstrip("/") + "/chat/completions"
     headers = {"Content-Type": "application/json"}
     if settings.get("ai_api_key"):
@@ -206,7 +208,8 @@ def chat_with_tools(messages: list, settings: dict, tools: list,
 
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return msg.get("content") or ""
+            reply = msg.get("content") or ""
+            return (reply, working) if return_messages else reply
         for call in tool_calls:
             name = call["function"]["name"]
             try:
@@ -222,7 +225,8 @@ def chat_with_tools(messages: list, settings: dict, tools: list,
             if on_tool:
                 on_tool(name, args, result)
             working.append({"role": "tool", "tool_call_id": call["id"], "content": result})
-    return "(达到最大工具轮数,已停止。可以让我继续,或拆分任务。)"
+    reply = "(达到最大工具轮数,已停止。可以让我继续,或拆分任务。)"
+    return (reply, working) if return_messages else reply
 
 
 class _Signals(QObject):
@@ -712,6 +716,7 @@ class AIChatDock(QDockWidget):
         self._tool_id = 0              # 工具调用编号
         self._entries = []             # 历史条目(kind, ...),展开时整体重渲染
         self._expanded_tools = set()   # 已展开的工具编号
+        self._chat_messages = []       # 真正的对话历史(喂给 LLM 的消息,不含 system)
         self._append_system("AI 助手就绪。选中实例后提问,我会带上实例上下文;"
                             "我还能调用工具(列实例/搜 Mod/读日志等),写操作需要\"工作区可写\"权限。")
 
@@ -778,19 +783,8 @@ class AIChatDock(QDockWidget):
         self._update_ctx_ring()
 
     def _update_ctx_ring(self):
-        """按当前对话流估算已用上下文 tokens,更新发送按钮外圈的占用环(绿→黄→红)"""
-        used = 0
-        for e in self._entries:
-            kind = e[0]
-            if kind == "system":
-                used += estimate_tokens(e[1])
-            elif kind in ("user", "ai"):
-                used += estimate_tokens(e[1])
-            elif kind == "tool":
-                _k, _tid, name, args, result = e
-                used += estimate_tokens(name)
-                used += estimate_tokens(json.dumps(args, ensure_ascii=False))
-                used += estimate_tokens(result or "")
+        """按真实对话历史估算已用上下文 tokens,更新发送按钮外圈的占用环(绿→黄→红)"""
+        used = sum(self._est_message(m) for m in self._chat_messages)
         limit = int(self.settings.get("context_window", 65536) or 65536)
         self.input.send_btn.set_usage(used, limit)
 
@@ -932,10 +926,13 @@ class AIChatDock(QDockWidget):
                                 "image_url": {"url": f"data:{mime};base64,{b64}"}})
         self.pending_images = []
         self._rebuild_thumb_row()
+        # 真正的多轮记忆:历史消息(含工具调用)保存在 _chat_messages,
+        # 每次发送 = 最新 system + 历史 + 当前问题
+        self._chat_messages.append({"role": "user", "content": content})
+        self._trim_history()
         messages = [
             {"role": "system", "content": self.main.ai_context()},
-            {"role": "user", "content": content},
-        ]
+        ] + list(self._chat_messages)
         s = self.settings
         executor = build_executor(s)
         tools_called = []
@@ -946,14 +943,43 @@ class AIChatDock(QDockWidget):
 
         def worker():
             try:
-                reply = chat_with_tools(messages, s, TOOLS, executor, on_tool=on_tool)
+                result = chat_with_tools(messages, s, TOOLS, executor,
+                                         on_tool=on_tool, return_messages=True)
+                if isinstance(result, tuple):
+                    reply, working = result
+                    # 存回完整历史(去掉 system,下次重新生成)
+                    self._chat_messages = [m for m in working
+                                           if m.get("role") != "system"]
+                else:   # 兼容旧 mock(返回字符串)
+                    reply = result
                 if not tools_called:
                     self.signals.no_tool.emit()
                 self.signals.reply.emit(reply)
+                self._update_ctx_ring()
             except Exception as e:
                 self.signals.error.emit(str(e))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _est_message(self, m: dict) -> int:
+        """估算一条消息的 token 数(支持多模态 content list)"""
+        content = m.get("content")
+        if isinstance(content, list):
+            text = " ".join(str(c.get("text", "")) for c in content
+                            if isinstance(c, dict) and c.get("type") == "text")
+            return estimate_tokens(text)
+        return estimate_tokens(str(content or ""))
+
+    def _trim_history(self):
+        """上下文超限时丢弃最早的消息(保留最近的,让对话能继续)"""
+        limit = int(self.settings.get("context_window", 65536) or 65536)
+        budget = int(limit * 0.7)   # 给回复留 30%
+        while len(self._chat_messages) > 1:
+            used = sum(self._est_message(m) for m in self._chat_messages)
+            if used <= budget:
+                break
+            self._chat_messages.pop(0)   # 丢最早的一条(保留刚发的当前问题)
+        self._update_ctx_ring()
 
     def _on_no_tool(self):
         self._append_system(
