@@ -40,6 +40,19 @@ RESOURCE_CATEGORIES = [
     ("resourcepack", "🎨 资源包", "resourcepacks"),
 ]
 
+# 新手科普:MC 社区资源结构(首页展示,让想自己挑资源的人先看懂"都是些什么")
+_RESOURCE_GUIDE = [
+    "🧩 Mod:修改/扩展游戏玩法(如机械动力、JEI 物品管理器),放进 mods 文件夹,"
+    "需要 Fabric/Forge/NeoForge 加载器才能用",
+    "🌄 光影包:只改画面渲染(光线/水面/天空),放进 shaderpacks,"
+    "需要 Iris/Oculus 等光影加载器配合",
+    "🗂 数据包:原版官方支持的玩法调整(配方/生成/难度),放进存档的 datapacks 文件夹,"
+    "不需要加载器",
+    "🎨 资源包:改纹理/音效/界面外观,不改变玩法,放进 resourcepacks,原版直接支持",
+    "📦 整合包:Mod + 配置 + 可选存档的一键合集,适合想直接玩成品的人",
+    "⚡ 辅助 Mod:性能优化(钠/锂)和信息显示(玉/JEI),新手建议先装这些",
+]
+
 
 class ResourceBrowser(QWidget):
     """资源浏览器(Mod / 光影包 / 数据包 / 资源包共用):
@@ -439,11 +452,21 @@ class ResourceCenter(QWidget):
         ]
         for text, idx in entries:
             b = QPushButton(text)
-            b.setMinimumSize(120, 80)
+            b.setMinimumSize(150, 100)   # 高一点的分类卡片
             b.setStyleSheet(card_style())
             b.clicked.connect(lambda _c, i=idx: self.switch_to(i))
             cards.addWidget(b)
         layout.addLayout(cards)
+        layout.addSpacing(20)
+        # 新手科普:MC 社区资源结构(想自己挑资源的人先看懂这些是什么)
+        layout.addWidget(QLabel(
+            t("📚 了解 MC 资源结构(自己挑资源前先看一眼):",
+              "MC resource types (read before picking):")))
+        for line in _RESOURCE_GUIDE:
+            l = QLabel("• " + line)
+            l.setWordWrap(True)
+            l.setStyleSheet(hint_style())
+            layout.addWidget(l)
         layout.addStretch()
         return home
 

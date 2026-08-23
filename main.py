@@ -225,20 +225,17 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()  # 启动器配置(用户名/内存/版本隔离)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
-        # ---- 顶部:刷新按钮 + 设置(最新版本信息已移到「下载新资源」首页) ----
-        refresh_btn = QPushButton(t("刷新列表", "Refresh"))
-        refresh_btn.clicked.connect(self.load_versions)  # 信号槽:点按钮 → 执行函数
-
+        # ---- 顶部:设置(刷新列表已隐藏,入口移到 文件菜单) ----
         top_bar = QHBoxLayout()
         top_bar.addStretch()
         settings_btn = QPushButton(t("设置", "Settings"))
         settings_btn.clicked.connect(self.open_settings)
         top_bar.addWidget(settings_btn)
-        top_bar.addWidget(refresh_btn)
 
         # ---- 菜单栏(基础启动器的骨架) ----
         menubar = self.menuBar()
         file_menu = menubar.addMenu(t("文件", "File"))
+        file_menu.addAction(t("刷新版本列表", "Refresh Version List"), self.load_versions)
         file_menu.addAction(t("导入整合包(Modrinth .mrpack)…", "Import Modpack (.mrpack)…"), self.import_modpack)
         file_menu.addAction(t("打开游戏目录", "Open Game Directory"), self.open_game_dir)
         file_menu.addAction(t("清空所有实例…", "Clear All Instances…"), self.clear_instances)
