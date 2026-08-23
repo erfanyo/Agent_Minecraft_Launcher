@@ -11,7 +11,10 @@
 
 所有选择通过 state() 汇总,由主窗口拿去下载。
 """
-from PySide6.QtCore import Qt
+import queue
+import threading
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -47,6 +50,13 @@ class DownloadTab(QWidget):
         self.loader_versions = {}   # loader -> QComboBox(指定版本)
         self.shader_combo = None
         self.opt_combos = {}        # mod slug -> QComboBox
+
+        # 异步加载:版本/Mod 列表来自网络,全部放后台线程,UI 不卡
+        self._async_q = queue.Queue()
+        self._async_cache = {}      # cache_key -> 已加载的版本列表
+        self._async_timer = QTimer(self)
+        self._async_timer.timeout.connect(self._drain_async)
+        self._async_timer.start(60)
 
         # ---- 左侧:同级别菜单 ----
         self.menu = QListWidget()
@@ -228,11 +238,50 @@ class DownloadTab(QWidget):
     def _switch_panel(self, row):
         self.stack.setCurrentIndex(row)
         if row == 1 and self.mc:
-            self._refresh_loader_versions()
+            self._request_loader_versions(self.loader_key)   # 只刷当前加载器,异步
         elif row == 2:
-            self._refresh_shader()
+            self._request_shader()
         elif row == 3:
-            self._refresh_optimize()
+            self._request_optimize()
+
+    # ================= 异步加载(网络请求不卡 UI) =================
+    def _async(self, cache_key: tuple, fetch, on_done):
+        """后台线程跑网络请求 fetch(),完成后回主线程调 on_done(版本列表)。
+        结果按 cache_key 缓存,第二次直接同步回调(不重复请求)。"""
+        if cache_key in self._async_cache:
+            on_done(self._async_cache[cache_key])
+            return
+
+        def worker():
+            try:
+                result = fetch()
+            except Exception:
+                result = []
+            self._async_q.put((cache_key, result, on_done))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _drain_async(self):
+        """主线程:把后台结果搬回 UI"""
+        while True:
+            try:
+                cache_key, result, on_done = self._async_q.get_nowait()
+            except queue.Empty:
+                return
+            self._async_cache[cache_key] = result
+            try:
+                on_done(result)
+            except Exception:
+                pass
+
+    def _fill_combo(self, combo: QComboBox, versions: list):
+        """填充下拉:清空 → 逐项加入 → 默认选最新的"""
+        combo.clear()
+        for v in versions:
+            combo.addItem(v, v)
+        combo.setEnabled(bool(versions))
+        if versions:
+            combo.setCurrentIndex(0)
 
     # ================= 加载器 =================
     def _select_loader(self, key):
@@ -243,29 +292,40 @@ class DownloadTab(QWidget):
         for _name, k, mr in LOADER_CHOICES:
             if k == key:
                 self.modrinth_loader = mr
-        self._refresh_loader_versions()
-        self._refresh_shader()
-        self._refresh_optimize()
-        self._refresh_fabric_api()
+        # 切换加载器时收起已展开的版本行(避免显示上一个加载器的下拉)
+        self._expanded_loader = None
+        for k, _card, arrow, c in self.loader_rows:
+            c.setVisible(False)
+            arrow.setText("▸")
+        self.loader_version_row.setVisible(False)
+        # 异步填充:UI 立即响应,网络结果后台到了再更新
+        self._request_loader_versions(key)
+        self._request_shader()
+        self._request_optimize()
+        self._request_fabric_api()
         self._update_ready()
 
-    def _refresh_fabric_api(self):
-        """选中 Fabric 时显示 Fabric API 版本选择(默认最新);其他加载器隐藏"""
+    def _request_fabric_api(self):
+        """选中 Fabric 时异步加载 Fabric API 版本;其他加载器隐藏"""
         if self.loader_key == "fabric" and self.mc:
             self.fabric_api_row.setVisible(True)
             self.fabric_api_combo.clear()
-            try:
-                import modrinth
-                versions = modrinth.list_mod_versions("fabric-api", self.mc, "fabric")
-            except Exception:
-                versions = []
-            for v in versions:
-                self.fabric_api_combo.addItem(v, v)
-            self.fabric_api_combo.setEnabled(bool(versions))
-            if versions:
-                self.fabric_api_combo.setCurrentIndex(0)  # 默认最新
+            self.fabric_api_combo.addItem("加载中...", None)
+            self.fabric_api_combo.setEnabled(False)
+            import modrinth
+            self._async(("fa", self.mc),
+                        lambda: modrinth.list_mod_versions("fabric-api", self.mc, "fabric"),
+                        self._fill_fabric_api)
         else:
             self.fabric_api_row.setVisible(False)
+
+    def _fill_fabric_api(self, versions):
+        self.fabric_api_combo.clear()
+        for v in versions:
+            self.fabric_api_combo.addItem(v, v)
+        self.fabric_api_combo.setEnabled(bool(versions))
+        if versions:
+            self.fabric_api_combo.setCurrentIndex(0)   # 默认最新
 
     def _toggle_loader_versions(self, key):
         """展开/收起面板底部的"加载器版本"行(一次只显示一张加载器的版本下拉)"""
@@ -280,36 +340,37 @@ class DownloadTab(QWidget):
             arrow.setText("▾" if on else "▸")
         self.loader_version_row.setVisible(show)
         if show:
-            self._refresh_loader_versions()
+            self._request_loader_versions(key)   # 只刷这一张,异步
 
-    def _refresh_loader_versions(self):
-        for k, _card, _a, _c in self.loader_rows:
-            combo = self.loader_versions[k]
-            if k is None:
-                combo.clear()
-                combo.addItem("(原版无需加载器)", None)
-                combo.setEnabled(False)
-                continue
-            if not self.mc:
-                continue
-            try:
-                if k == "fabric":
-                    versions = list_fabric_loaders(self.mc)
-                elif k == "forge":
-                    versions = list_forge_versions(self.mc)
-                else:
-                    versions = list_neoforge_versions(self.mc)
-            except Exception:
-                versions = []
+    def _request_loader_versions(self, key=None):
+        """异步加载某加载器的版本列表(只刷 key,不重复请求其他加载器)"""
+        key = self.loader_key if key is None else key
+        combo = self.loader_versions.get(key)
+        if combo is None:
+            return
+        if key is None:
             combo.clear()
-            for v in versions:
-                combo.addItem(v, v)
-            combo.setEnabled(bool(versions))
-            if versions:
-                combo.setCurrentIndex(0)  # 默认选最新的那个
+            combo.addItem("(原版无需加载器)", None)
+            combo.setEnabled(False)
+            return
+        if not self.mc:
+            return
+        combo.clear()
+        combo.addItem("加载中...", None)
+        combo.setEnabled(False)
+        ck = ("loader", key, self.mc)
+
+        def fetch():
+            if key == "fabric":
+                return list_fabric_loaders(self.mc)
+            if key == "forge":
+                return list_forge_versions(self.mc)
+            return list_neoforge_versions(self.mc)
+
+        self._async(ck, fetch, lambda vs, c=combo: self._fill_combo(c, vs))
 
     # ================= 光影 =================
-    def _refresh_shader(self):
+    def _request_shader(self):
         slug = SHADER_MODS.get(self.loader_key or "")
         if not slug or not self.mc:
             self.shader_name_label.setText("当前加载器对应的光影 Mod:—(需先选 Fabric/Forge)")
@@ -317,11 +378,15 @@ class DownloadTab(QWidget):
             self.shader_combo.addItem("(无)", None)
             self.shader_combo.setEnabled(False)
             return
-        try:
-            versions = list_mod_versions(slug, self.mc, self.loader_key)
-        except Exception:
-            versions = []
         self.shader_name_label.setText(f"光影 Mod:{slug}({self.loader_key})")
+        self.shader_combo.clear()
+        self.shader_combo.addItem("加载中...", None)
+        self.shader_combo.setEnabled(False)
+        self._async(("shader", slug, self.mc, self.loader_key),
+                    lambda: list_mod_versions(slug, self.mc, self.loader_key),
+                    self._fill_shader)
+
+    def _fill_shader(self, versions):
         self.shader_combo.clear()
         for v in versions:
             self.shader_combo.addItem(v, v)
@@ -330,8 +395,8 @@ class DownloadTab(QWidget):
             self.shader_combo.setCurrentIndex(0)
 
     # ================= 优化 =================
-    def _refresh_optimize(self):
-        # 重建优化 Mod 列表(随加载器变化)
+    def _request_optimize(self):
+        """重建优化 Mod 行(本地操作,快),版本列表异步填"""
         for w in self._opt_rows:
             w.deleteLater()
         self._opt_rows.clear()
@@ -341,22 +406,22 @@ class DownloadTab(QWidget):
         mods = OPTIMIZE_MODS.get(self.loader_key or "", [])
         if not mods:
             box_layout.addWidget(QLabel("当前加载器没有内置优化 Mod 列表(选 Fabric 或 Forge)"))
+            return
         for slug in mods:
             row = QWidget()
             rl = QHBoxLayout(row)
             rl.setContentsMargins(0, 0, 0, 0)
             rl.addWidget(QLabel(slug), 1)
             combo = QComboBox()
-            try:
-                for v in list_mod_versions(slug, self.mc, self.loader_key):
-                    combo.addItem(v, v)
-            except Exception:
-                pass
-            combo.setEnabled(combo.count() > 0)
+            combo.addItem("加载中...", None)
+            combo.setEnabled(False)
             rl.addWidget(combo)
             box_layout.addWidget(row)
             self._opt_rows.append(row)
             self.opt_combos[slug] = combo
+            self._async(("opt", slug, self.mc, self.loader_key),
+                        lambda: list_mod_versions(slug, self.mc, self.loader_key),
+                        lambda vs, c=combo: self._fill_combo(c, vs))
 
     # ================= 汇总与下载 =================
     def _update_ready(self):
