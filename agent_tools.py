@@ -295,21 +295,25 @@ def get_recipe_path(item: str, count: int = 1, instance: str = None,
     brief=False 时返回 EMI 风格完整配方:先列出该物品全部合成方式
     (工作台/熔炉/机器,recipe_index 选第 N 种,默认第 1 种),
     再套娃展开合成树 + 材料总账。item 支持中文名(如 终极感应供应器)。
-    instance 缺省时自动用最新导出的数据。"""
+    instance 缺省时自动探测。数据来源:jar 旁路(直接读 mod jar 配方,无需进游戏)
+    + bridge 导出(实际生效,覆盖 jar)。"""
     import recipe_graph
     gd = _gd(game_dir)
-    rd = recipe_graph.load_bridge_data(gd, instance)
+    rd = recipe_graph.load_recipe_data(gd, instance)
     if rd is None:
         # 收敛:明确告诉 AI 哪个实例有/缺数据,避免它反复试其它工具
-        have = recipe_graph.instances_with_bridge(gd)
+        have = recipe_graph.instances_with_recipe_data(gd)
         if have:
-            return (f"还没有{instance or '指定'}实例的配方数据,但以下实例已导出过配方:"
-                    f"{', '.join(have)}。请用 instance 参数指定其中一个再查,"
-                    f"或让用户启动目标实例进一次世界导出数据(bridge-mod 会自动导出)。")
-        return ("还没有任何实例的配方数据:需要先装 bridge-mod 并启动游戏进一次世界,"
-                "它会导出配方到实例的 .bridge/recipes.json。"
+            return (f"还没有{instance or '指定'}实例的配方数据,但以下实例有:"
+                    f"{', '.join(have)}。请用 instance 参数指定其中一个再查;"
+                    f"装了 mod 的实例通常无需进游戏(旁路直接读 jar 配方)。")
+        return ("还没有任何实例的配方数据:装 bridge-mod 进一次世界会自动导出配方"
+                "到 .bridge/recipes.json;已装 mod 的实例也可以直接读 jar 配方。"
                 "不要重复调用其它工具,直接告诉用户这一步即可。")
-    head = f"【数据:{rd.source_instance},导出于 {rd.exported_at}】\n"
+    src = {"bridge+jar": "jar 旁路 + bridge 导出", "jar": "jar 旁路(无需进游戏)",
+           "bridge": f"bridge 导出({rd.exported_at})"}.get(
+        getattr(rd, "source_kind", "bridge"), "bridge")
+    head = f"【数据:{rd.source_instance} · {src}】\n"
     if brief:
         return head + rd.quick_recipe(item)
     return head + rd.describe_recipe(item, count, recipe_index=recipe_index)

@@ -23,6 +23,8 @@ import time
 import zipfile
 from collections import deque  # noqa: F401 (保留导入,避免其它模块误用)
 
+import recipe_datapack  # 配方旁路:直接读 mod jar / 版本 jar 的 datapack 配方(无需进游戏)
+
 # 配方类型 → 中文机器名(合成/加工设备)
 MACHINE_CN = {
     "crafting": "工作台(3×3合成)",
@@ -96,6 +98,18 @@ MC_CN_ITEMS = {
     "minecraft:bone": "骨头", "minecraft:arrow": "箭",
     "minecraft:bow": "弓", "minecraft:diamond_pickaxe": "钻石镐",
     "minecraft:iron_pickaxe": "铁镐", "minecraft:diamond_sword": "钻石剑",
+    "minecraft:dirt": "泥土", "minecraft:mycelium": "菌丝",
+    "minecraft:gravel": "沙砾", "minecraft:clay": "黏土",
+    "minecraft:soul_sand": "灵魂沙", "minecraft:glowstone": "萤石",
+    "minecraft:quartz": "下界石英", "minecraft:flint": "燧石",
+    "minecraft:flint_and_steel": "打火石", "minecraft:bucket": "铁桶",
+    "minecraft:water_bucket": "水桶", "minecraft:lava_bucket": "熔岩桶",
+    "minecraft:glass_bottle": "玻璃瓶", "minecraft:experience_bottle": "附魔之瓶",
+    "minecraft:slime_ball": "黏液球", "minecraft:magma_cream": "岩浆膏",
+    "minecraft:ender_eye": "末影之眼", "minecraft:ghast_tear": "恶魂之泪",
+    "minecraft:blaze_powder": "烈焰粉", "minecraft:spider_eye": "蜘蛛眼",
+    "minecraft:fermented_spider_eye": "发酵蛛眼", "minecraft:golden_apple": "金苹果",
+    "minecraft:shield": "盾牌", "minecraft:elytra": "鞘翅",
 }
 
 
@@ -111,6 +125,19 @@ def _lang_key_to_item(key: str) -> str | None:
                 if ns and path:
                     return f"{ns}:{path}"
     return None
+
+
+def _is_real_item(item) -> bool:
+    """可展开/显示的原料:排除旧式特殊伪原料 "(...)",但保留 "(chem:...)" 化学原料
+    (旁路从 jar 读到的化学输入,如冶金灌注的灌注材料:可显示、计入材料账,但不递归展开)。"""
+    return not (isinstance(item, str) and item.startswith("(")
+                and not item.startswith("(chem:"))
+
+
+def _real_ings(recipe: dict) -> list:
+    """配方里可展开/显示的原料列表((chem:...) 保留,旧式 "(...)" 伪原料排除)"""
+    return [i for i in recipe.get("ingredients", [])
+            if i.get("item") and _is_real_item(i["item"])]
 
 
 # 进程内中文索引缓存:mods 目录签名 → 索引,避免每次查询都重读 jar
@@ -131,51 +158,59 @@ def _mods_signature(mods_dir: str) -> str:
     return "|".join(parts)
 
 
-def build_zh_index(mods_dir: str) -> tuple:
+def _jar_mtime(jar_path: str) -> str:
+    try:
+        return f"{os.path.basename(jar_path)}:{int(os.path.getmtime(jar_path))}"
+    except OSError:
+        return os.path.basename(jar_path)
+
+
+def build_zh_index(mods_dir: str, extra_jars: list | None = None) -> tuple:
     """扫实例 mods 目录里所有 jar 的语言文件,构建:
-    (zh_to_id, en_to_id, id_to_zh)。带签名缓存,jar 没变就不重读。"""
-    sig = _mods_signature(mods_dir)
+    (zh_to_id, en_to_id, id_to_zh)。带签名缓存,jar 没变就不重读。
+    extra_jars:额外补充的 jar(如原版版本 jar,含 en_us 语言文件)。"""
+    sig = _mods_signature(mods_dir) + "|" + "+".join(_jar_mtime(j) for j in (extra_jars or []))
     if mods_dir in _zh_cache and _zh_cache[mods_dir][0] == sig:
         return _zh_cache[mods_dir][1]
     zh_to_id = {v: k for k, v in MC_CN_ITEMS.items()}
     id_to_zh = dict(MC_CN_ITEMS)
     en_to_id = {}
+    jars = []
     if os.path.isdir(mods_dir):
         try:
             files = sorted(os.listdir(mods_dir))
         except OSError:
             files = []
-        for f in files:
-            if not f.endswith(".jar"):
-                continue
-            path = os.path.join(mods_dir, f)
-            try:
-                with zipfile.ZipFile(path) as z:
-                    entries = {e.filename for e in z.infolist()}
-                    for lang, target in (("en_us.json", en_to_id), ("zh_cn.json", zh_to_id)):
-                        hit = next((e for e in entries if e.endswith(f"/lang/{lang}")), None)
-                        if hit is None:
+        jars = [os.path.join(mods_dir, f) for f in files if f.endswith(".jar")]
+    jars += list(extra_jars or [])
+    for path in jars:
+        try:
+            with zipfile.ZipFile(path) as z:
+                entries = {e.filename for e in z.infolist()}
+                for lang, target in (("en_us.json", en_to_id), ("zh_cn.json", zh_to_id)):
+                    hit = next((e for e in entries if e.endswith(f"/lang/{lang}")), None)
+                    if hit is None:
+                        continue
+                    try:
+                        data = json.loads(z.read(hit).decode("utf-8", errors="replace"))
+                    except Exception:
+                        continue
+                    for key, val in data.items():
+                        if not isinstance(val, str):
                             continue
-                        try:
-                            data = json.loads(z.read(hit).decode("utf-8", errors="replace"))
-                        except Exception:
+                        item_id = _lang_key_to_item(key)
+                        if not item_id:
                             continue
-                        for key, val in data.items():
-                            if not isinstance(val, str):
-                                continue
-                            item_id = _lang_key_to_item(key)
-                            if not item_id:
-                                continue
-                            name = val.strip()
-                            if not name or len(name) > 30:
-                                continue
-                            target[name] = item_id
-                            if lang == "zh_cn.json":
-                                id_to_zh[item_id] = name      # 中文优先
-                            else:
-                                id_to_zh.setdefault(item_id, name)  # 英文兜底
-            except Exception:
-                continue
+                        name = val.strip()
+                        if not name or len(name) > 30:
+                            continue
+                        target[name] = item_id
+                        if lang == "zh_cn.json":
+                            id_to_zh[item_id] = name      # 中文优先
+                        else:
+                            id_to_zh.setdefault(item_id, name)  # 英文兜底
+        except Exception:
+            continue
     _zh_cache[mods_dir] = (sig, (zh_to_id, en_to_id, id_to_zh))
     return zh_to_id, en_to_id, id_to_zh
 
@@ -223,6 +258,8 @@ class RecipeData:
 
     def display(self, item_id: str) -> str:
         """物品 id → 显示名:有中文用中文,附 id 方便 AI 继续查"""
+        if isinstance(item_id, str) and item_id.startswith("(chem:"):
+            return f"化学:{item_id[6:-1]}"
         zh = self.id_to_zh.get(item_id)
         return f"{zh}({item_id})" if zh else item_id
 
@@ -254,8 +291,7 @@ class RecipeData:
             # 无法合成 / 拆块配方:当作原材料(或不可获得)
             plan[item] = plan.get(item, 0) + need
             return True
-        ings = [i for i in recipe.get("ingredients", [])
-                if i.get("item") and not i["item"].startswith("(")]
+        ings = _real_ings(recipe)
         if not ings:
             # 空原料配方(如冶金灌注的灌注类型 bridge 未导出):当作"需要直接获得"
             plan[item] = plan.get(item, 0) + need
@@ -277,8 +313,7 @@ class RecipeData:
         (如 1 粗金块 → 9 粗金,反向 9 粗金 → 1 粗金块)。
         套娃展开时跳过这类配方——拆块不是"合成到原材料"的路径,
         直接把它当可获得的原材料,避免 block⇄item 每层 ×9 循环爆炸。"""
-        ings = [i for i in recipe.get("ingredients", [])
-                if i.get("item") and not i["item"].startswith("(")]
+        ings = _real_ings(recipe)
         if len(ings) != 1:
             return False
         out = recipe.get("output", {})
@@ -293,8 +328,7 @@ class RecipeData:
         for r2 in self.by_output.get(ing_item, []):
             if r2.get("output", {}).get("item") != ing_item:
                 continue
-            r2_ings = [i.get("item") for i in r2.get("ingredients", [])
-                       if i.get("item") and not i["item"].startswith("(")]
+            r2_ings = [i.get("item") for i in _real_ings(r2)]
             if out_item in r2_ings:
                 return True
         return False
@@ -307,8 +341,7 @@ class RecipeData:
             return None
 
         def nonempty(r):
-            return [i for i in r.get("ingredients", [])
-                    if i.get("item") and not i["item"].startswith("(")]
+            return _real_ings(r)
 
         cands.sort(key=lambda r: (1 if self._is_unpack(r) else 0,
                                   0 if nonempty(r) else 1,
@@ -324,8 +357,7 @@ class RecipeData:
         cands = self.by_output.get(target) or []
 
         def nonempty(r):
-            return [i for i in r.get("ingredients", [])
-                    if i.get("item") and not i["item"].startswith("(")]
+            return _real_ings(r)
 
         cands.sort(key=lambda r: (1 if self._is_unpack(r) else 0,
                                   0 if nonempty(r) else 1,
@@ -468,7 +500,7 @@ class RecipeData:
         parts = []
         for ing in recipe.get("ingredients", []):
             item = ing.get("item")
-            if item and not item.startswith("("):
+            if item and _is_real_item(item):
                 parts.append(f"{self.display(item)}×{ing.get('count', 1)}")
         s = f"{out['item']} = " + (" + ".join(parts) if parts else "(特殊工序,原料未导出)")
         return f"{s}  [{mach}]"
@@ -602,3 +634,94 @@ def load_bridge_data(game_dir: str, instance_id: str | None = None) -> RecipeDat
     return RecipeData(recipes, items,
                       source_instance=inst, exported_at=exported_at,
                       zh_to_id=zh_to_id, en_to_id=en_to_id, id_to_zh=id_to_zh)
+
+
+# ---------- 配方旁路(直接读 jar,无需进游戏)+ bridge 合并 ----------
+def load_recipe_data(game_dir: str, instance_id: str | None = None,
+                     include_bridge: bool = True, use_cache: bool = True) -> RecipeData | None:
+    """配方查询统一入口(旁路 + bridge 合并):
+
+    - **jar 数据 = 基座**:直接解析实例 mods/*.jar 与版本 jar 里的 datapack 配方,
+      已装 mod 无需进游戏即可查(recipe_datapack.py)
+    - **bridge 数据 = 覆盖**:.bridge/recipes.json(实际生效),同 id 以 bridge 为准
+    - instance 缺省:优先最新 bridge 实例;否则取有 jar 配方数据的实例
+    - 返回的 RecipeData 带 source_kind:"bridge+jar" / "jar" / "bridge"
+    """
+    # 1) 定位实例
+    inst = instance_id
+    bridge_found = None
+    if include_bridge:
+        bridge_found = locate_bridge(game_dir, inst)
+        if bridge_found:
+            inst = bridge_found[0]
+    if inst is None:
+        jinst = recipe_datapack.list_instances_with_recipes(game_dir)
+        if jinst:
+            inst = jinst[0]
+    if inst is None:
+        return None
+    base = os.path.join(game_dir, "versions", inst)
+
+    # 2) jar 旁路(基座)
+    scan = recipe_datapack.scan_instance(game_dir, inst, use_cache=use_cache)
+    jar_recipes = scan["recipes"] if scan else []
+
+    # 3) bridge(覆盖)
+    bridge_recipes, items, exported_at = [], [], None
+    if bridge_found and bridge_found[0] == inst:
+        rec_path = bridge_found[2]
+        try:
+            bridge_recipes = json.load(open(rec_path, encoding="utf-8"))
+        except Exception:
+            bridge_recipes = []
+        it_path = os.path.join(base, ".bridge", "items.json")
+        try:
+            items = json.load(open(it_path, encoding="utf-8"))
+        except Exception:
+            items = []
+        exported_at = time.strftime("%Y-%m-%d %H:%M",
+                                    time.localtime(os.path.getmtime(rec_path)))
+    if not jar_recipes and not bridge_recipes:
+        return None
+
+    # 4) 合并:bridge 覆盖同 id(实际生效),但 bridge 同 id 配方"原料未导出"(空原料)
+    #    而 jar 旁路读到了原料 → 用 jar 原料补上缺口(验收标准 4:特殊配方旁路直接补)
+    jar_by_id = {r.get("id"): r for r in jar_recipes if r.get("id")}
+    merged, used_ids = [], set()
+    for r in bridge_recipes:
+        rid = r.get("id")
+        if rid in used_ids:
+            continue
+        used_ids.add(rid)
+        jr = jar_by_id.get(rid)
+        if jr and not _real_ings(r) and _real_ings(jr):
+            r = dict(r)                       # 保留 bridge 元数据(实际生效)
+            r["ingredients"] = jr["ingredients"]   # 原料由 jar 旁路补齐
+        merged.append(r)
+    merged += [r for r in jar_recipes if r.get("id") not in used_ids]
+
+    # 5) 中文名索引:mods jar + 版本 jar(原版 en_us 等)
+    vjars = scan["version_jars"] if scan else []
+    zh_to_id, en_to_id, id_to_zh = build_zh_index(os.path.join(base, "mods"),
+                                                  extra_jars=vjars or None)
+
+    if bridge_recipes and jar_recipes:
+        source_kind = "bridge+jar"
+    elif jar_recipes:
+        source_kind = "jar"
+    else:
+        source_kind = "bridge"
+    exported_disp = exported_at
+    if not exported_disp and scan:
+        exported_disp = scan.get("scanned_at", "")
+    rd = RecipeData(merged, items, source_instance=inst, exported_at=exported_disp,
+                    zh_to_id=zh_to_id, en_to_id=en_to_id, id_to_zh=id_to_zh)
+    rd.source_kind = source_kind
+    return rd
+
+
+def instances_with_recipe_data(game_dir: str) -> list:
+    """有配方数据的实例(bridge 导出优先,其次 jar 旁路可解析),新→旧"""
+    b = instances_with_bridge(game_dir)
+    j = recipe_datapack.list_instances_with_recipes(game_dir)
+    return b + [x for x in j if x not in b]

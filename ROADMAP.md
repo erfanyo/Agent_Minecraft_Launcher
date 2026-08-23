@@ -61,15 +61,17 @@
   - 换 mod / 重装实例后提示"数据可能过期,建议重新进一次世界导出"
   - 可选:对 recipe 数量做摘要(如"共 2891 个配方,来自 neoforge-21.1.248")
 
-- [ ] **旁路:直接读 mod jar 配方(无需进游戏)**
+- [x] **旁路:直接读 mod jar 配方(无需进游戏)** — 2026-08-23 ✅
   - 现状:配方来自 bridge-mod 进游戏导出,需要用户先进一次世界
   - 方案:解析实例 mods 目录里 jar 的 `data/<mod>/recipe/*.json`(datapack 格式,含 shaped pattern+keys、smelting 等),任何已装 mod 无需进游戏即可查
   - 注意:datapack 格式与 bridge 扁平格式不同,需写 shaped 展开解析器;可能被服务端/数据包覆盖(单机无碍)
   - 建议与 bridge 数据做合并:jar 数据为基座,bridge 数据为"实际生效"的覆盖
+  - 落地:`recipe_datapack.py`(解析/合并/缓存到 AMCL/cache/recipes-jar)+ `recipe_graph.load_recipe_data`;6 条验收 PASS(见 `_agent_comms/提示词-配方旁路.md` §6)
 
-- [ ] 配方"原料未导出"缺口(bridge 导出器局限)
+- [x] 配方"原料未导出"缺口(bridge 导出器局限) — 2026-08-23(旁路已部分解决)
   - Mekanism 冶金灌注机等特殊配方(metallurgic_infusing)的灌注原料 bridge 未导出 → 树里标"需游戏内确认"
   - 改进方向:bridge-mod 的 RecipeExporter 对特殊配方类型补导出(需重编译 mod),或旁路方案直接读 jar 配方解决
+  - 落地:旁路能读到特殊配方时直接补上原料(同 id 空原料用 jar 补齐);读不到(纯代码配方)仍保留"需游戏内确认"标注
 
 ## 🧭 其他候选(用户挑选)
 
