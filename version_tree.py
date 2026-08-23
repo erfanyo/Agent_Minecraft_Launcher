@@ -54,9 +54,10 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
     返回 (正式版数, 快照数, 远古数, 愚人节数)。"""
     tree.setColumnCount(2)
     tree.setHeaderLabels(["版本", "发布年月"])
-    # 版本列加宽且可拖;年月列固定宽度(够完整显示"2025-06"+表头,右对齐但留出右缘边距)
+    # 版本列加宽且可拖(拉伸占满剩余宽度);年月列固定窄列、紧贴版本列右侧,
+    # 位置固定不随窗口漂移,年月左边不留空隙
     tree.setColumnWidth(0, 440)
-    tree.setColumnWidth(1, 100)
+    tree.setColumnWidth(1, 72)
     header = tree.header()
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
     header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
@@ -88,13 +89,13 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
             ancients.append(v)
 
     def _leaf(parent, v):
-        """加一个版本叶子:第 0 列版本(黄金版本加 🏅),第 1 列灰色年月(右对齐)"""
+        """加一个版本叶子:第 0 列版本(黄金版本加 🏅),第 1 列灰色年月(左对齐贴版本列)"""
         star = " 🏅" if v["id"] in GOLDEN_VERSIONS else ""
         item = QTreeWidgetItem([f"{v['id']}  ({v['type']}){star}",
                                 v.get("releaseTime", "")[:7]])
         item.setData(0, Qt.ItemDataRole.UserRole, v)
         item.setForeground(1, QColor("#999999"))  # 灰色年月
-        item.setTextAlignment(1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        item.setTextAlignment(1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         parent.addChild(item)
         return item
 
