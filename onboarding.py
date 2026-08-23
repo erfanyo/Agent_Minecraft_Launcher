@@ -80,6 +80,10 @@ class OnboardingDialog(QDialog):
                       "注意:发图片需要模型本身会\"看图\",本地模型通常不支持,不确定就别勾。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888888;")
+        builtin_hint = QLabel("💡 也可以直接用「内置本地 AI 模型」:离线可用、无需密钥,"
+                              "首次用到时自动下载(约 500MB,镜像优先)。")
+        builtin_hint.setWordWrap(True)
+        builtin_hint.setStyleSheet("color: #888888;")
 
         p2 = QVBoxLayout(page_ai)
         p2.addWidget(title2)
@@ -87,6 +91,7 @@ class OnboardingDialog(QDialog):
         p2.addSpacing(12)
         p2.addWidget(self.ai_form)
         p2.addWidget(hint)
+        p2.addWidget(builtin_hint)
         p2.addStretch()
 
         self.stack = QStackedWidget()

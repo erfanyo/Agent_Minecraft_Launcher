@@ -271,6 +271,7 @@ class _Signals(QObject):
     local_dl_start = Signal()              # 需要开始下载本地模型 → 主线程开下载(带进度弹窗)
     local_dl_progress = Signal(int, int)   # 本地模型下载进度(done, total)(跨线程)
     local_dl_done = Signal(str)            # 本地模型下载完成/失败的消息(跨线程)
+    local_status = Signal(str)             # 本地模型状态文字(未下载/下载中/已就绪/推理中)(跨线程)
 
 
 def _esc(text: str) -> str:
@@ -852,6 +853,7 @@ class AIChatDock(QDockWidget):
         self.signals.local_dl_start.connect(self._start_local_download)
         self.signals.local_dl_progress.connect(self._on_local_dl_progress)
         self.signals.local_dl_done.connect(self._on_local_dl_done)
+        self.signals.local_status.connect(self._on_local_status)
 
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
@@ -884,6 +886,11 @@ class AIChatDock(QDockWidget):
         top_row.addWidget(title)
         top_row.addSpacing(6)
         top_row.addWidget(self.model_label)
+        # 本地模型状态(未下载/下载中/已就绪/推理中),仅本地 provider 时显示
+        self.local_status_label = QLabel("")
+        self.local_status_label.setVisible(False)
+        top_row.addSpacing(6)
+        top_row.addWidget(self.local_status_label)
         top_row.addStretch()
         top_row.addWidget(skills_btn)
 
@@ -943,6 +950,7 @@ class AIChatDock(QDockWidget):
         self._append_system("AI 助手就绪。选中实例后提问,我会带上实例上下文;"
                             "我还能调用工具(列实例/搜 Mod/读日志等),写操作需要\"工作区可写\"权限。")
         self.update_vision_ui()        # 按模型是否支持多模态显示/隐藏图片按钮
+        self.update_local_status()     # 本地模型状态(未下载/已就绪)
 
     def update_vision_ui(self):
         """按所选模型是否支持看图(多模态)显示/隐藏图片相关按钮。
@@ -1180,6 +1188,7 @@ class AIChatDock(QDockWidget):
     def _local_tool_call(self, text: str, executor, on_tool):
         """本地路径:grammar 工具调用 → 复用 executor 执行。
         返回 (reply 文本, 是否成功);失败时上层落云端(§1.4)。"""
+        self.signals.local_status.emit("本地模型:推理中…")
         try:
             engine = self._get_local_engine()
             engine.start()   # 幂等:已启动则直接返回
@@ -1205,6 +1214,8 @@ class AIChatDock(QDockWidget):
             return ("权限拒绝:当前是只读权限,不能修改文件(可在 AI 设置中改为\"工作区可写\")", True)
         except Exception as e:
             return (f"(本地推理失败:{type(e).__name__}: {e})", False)
+        finally:
+            self.signals.local_status.emit(self._local_status_text())
 
     # ---- 本地模型下载(懒加载 §2):首次用到且未下载 → 后台下载带进度,期间走云端 ----
     def _start_local_download(self):
@@ -1214,6 +1225,7 @@ class AIChatDock(QDockWidget):
         if not bool(self.settings.get("ai_local_auto_download", True)):
             return
         self._local_downloading = True
+        self._on_local_status("本地模型:下载中 0%…")
         dlg = QProgressDialog("正在下载本地模型(约500MB,镜像优先)…", None, 0, 0, self)
         dlg.setWindowTitle("下载本地模型")
         dlg.setWindowModality(Qt.WindowModality.NonModal)
@@ -1237,22 +1249,64 @@ class AIChatDock(QDockWidget):
         threading.Thread(target=dl, daemon=True).start()
 
     def _on_local_dl_progress(self, done, total):
-        """主线程:更新下载进度弹窗(跨线程信号已搬回主线程)。"""
-        if self._local_dlg is None:
-            return
-        self._local_dlg.setMaximum(max(total, 1))
-        self._local_dlg.setValue(done)
-        if total:
-            self._local_dlg.setLabelText(
-                f"下载本地模型…  {done/1024/1024:.0f} / {total/1024/1024:.0f} MB")
+        """主线程:更新下载进度弹窗 + 状态栏文字(跨线程信号已搬回主线程)。"""
+        if self._local_dlg is not None:
+            self._local_dlg.setMaximum(max(total, 1))
+            self._local_dlg.setValue(done)
+            if total:
+                self._local_dlg.setLabelText(
+                    f"下载本地模型…  {done/1024/1024:.0f} / {total/1024/1024:.0f} MB")
+        if self._local_enabled():
+            self._on_local_status(
+                f"本地模型:下载中 {done/1024/1024:.0f}MB…" if total
+                else "本地模型:下载中…")
 
     def _on_local_dl_done(self, msg):
-        """主线程:下载结束,关弹窗 + 提示。"""
+        """主线程:下载结束,关弹窗 + 提示 + 刷新状态。"""
         self._local_downloading = False
         if self._local_dlg is not None:
             self._local_dlg.close()
             self._local_dlg = None
         self._append_system(msg)
+        self.update_local_status()
+
+    # ---- 本地模型状态显示(未下载/下载中/已就绪/推理中) ----
+    def _local_status_text(self) -> str:
+        """本地模型当前状态文字(只读,不碰 UI,可在任意线程算)。"""
+        try:
+            import model_registry
+            ready = model_registry.is_downloaded(LOCAL_MODEL_ID)
+        except Exception:
+            ready = False
+        if self._local_downloading:
+            return "本地模型:下载中…"
+        if ready:
+            return "本地模型:已就绪"
+        return "本地模型:未下载\n(首次使用会自动下载)"
+
+    def _on_local_status(self, text: str):
+        """主线程:更新顶部本地模型状态标签。"""
+        if not hasattr(self, "local_status_label"):
+            return
+        if not self._local_enabled():
+            self.local_status_label.setVisible(False)
+            return
+        self.local_status_label.setVisible(True)
+        self.local_status_label.setText(text)
+        if "推理中" in text or "下载中" in text:
+            color = "#B26A00"      # 进行中:橙
+        elif "已就绪" in text:
+            color = "#2E7D32"      # 就绪:绿
+        else:
+            color = "#8a8f98"
+        self.local_status_label.setStyleSheet(f"color: {color}; background: transparent;")
+
+    def update_local_status(self):
+        """按当前 provider/下载状态刷新本地模型状态标签(主线程)。"""
+        if self._local_enabled():
+            self._on_local_status(self._local_status_text())
+        elif hasattr(self, "local_status_label"):
+            self.local_status_label.setVisible(False)
 
     # ---- 本地引擎生命周期:游戏启动/窗口关闭时卸载(省内存/无残留进程) ----
     def stop_local_engine(self):
