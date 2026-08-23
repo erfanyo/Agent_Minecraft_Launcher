@@ -86,6 +86,18 @@ TOOLS = [
     _tool("read_crash_report", "读取某实例最新的崩溃报告(诊断崩溃用)",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("get_settings", "查看启动器当前设置(内存/用户名等)", {}, []),
+    _tool("install_instance", "下载/创建游戏实例(写操作,需要工作区写权限)。"
+          "可创建原版,或带加载器的实例(fabric/forge/neoforge)。"
+          "加载器版本留空=自动用最新;可选装 Fabric API / 光影 / 优化 Mod。"
+          "注意:加载器实例会自动下载它依赖的基础原版;整个下载可能要几分钟,"
+          "期间请等待,不要重复调用;完成后会返回实例 id",
+          {"version": {"type": "string", "description": "游戏版本,如 1.21.1 / 1.20.1 / 26.3-snapshot-8"},
+           "loader": {"type": "string", "description": "加载器:fabric/forge/neoforge,留空=原版"},
+           "loader_version": {"type": "string", "description": "可选,加载器版本(留空=最新)"},
+           "shader": {"type": "boolean", "description": "是否装光影加载器,默认 false"},
+           "optimize": {"type": "boolean", "description": "是否装优化 Mod(钠/锂等),默认 false"},
+           "fabric_api_version": {"type": "string", "description": "可选,Fabric API 版本(留空不装)"}},
+          ["version"]),
     _tool("install_mod", "给某实例安装单个 Mod(写操作,需要工作区写权限;会先自动备份)。"
           "要一次性装多个 Mod 时,用 install_mods 一次装完,别逐个调用浪费轮数",
           {"slug": {"type": "string"}, "instance": {"type": "string"},
@@ -135,7 +147,7 @@ TOOLS = [
 ]
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
-WRITE_TOOLS = {"install_mod", "install_mods", "backup_instance", "set_setting"}
+WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "backup_instance", "set_setting"}
 
 
 def build_executor(settings: dict):

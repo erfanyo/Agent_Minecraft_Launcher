@@ -432,7 +432,8 @@ class MainWindow(QMainWindow):
         lines.append(permission_instructions(self.settings))
         lines.append("你可以调用工具:list_instances / search_mods / list_mods / "
                      "read_instance_log / read_crash_report / get_settings / "
-                     "install_mod / backup_instance / set_setting / send_game_command / "
+                     "install_instance(创建/下载实例) / install_mod / install_mods(批量装 Mod) / "
+                     "backup_instance / set_setting / send_game_command / "
                      "get_command_guide / get_recipe_path / compare_items。"
                      "写操作需要工作区写权限,装 Mod 前会自动备份。")
         # 指令指南 skill:提示生成指令前先查版本写法(NBT 重点)

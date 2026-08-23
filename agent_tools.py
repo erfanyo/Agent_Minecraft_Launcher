@@ -167,18 +167,40 @@ def install_mods(slugs, instance: str, game_dir: str = None) -> str:
 
 def install_instance(version: str, loader: str = "", loader_version: str = "",
                      shader: bool = False, optimize: bool = False,
+                     fabric_api_version: str | None = None,
                      game_dir: str = None, status=print) -> str:
-    """创建实例:原版本体 + (可选)加载器 + (可选)光影/优化 Mod"""
+    """创建实例:原版本体 + (可选)加载器 + (可选)Fabric API/光影/优化 Mod。
+    加载器版本留空 = 自动用最新。成功返回实例 id。"""
+    version = (version or "").strip()
+    if not version:
+        return "错误:需要指定游戏版本(如 1.21.1)"
+    loader = (loader or "").strip().lower()
+    if loader and loader not in ("fabric", "forge", "neoforge"):
+        return f"错误:不支持的加载器 {loader}(可选 fabric/forge/neoforge,留空=原版)"
     game_dir = _gd(game_dir)
-    ensure_base(version, game_dir, status_callback=status, progress_callback=None)
+    try:
+        ensure_base(version, game_dir, status_callback=status, progress_callback=None)
+    except Exception as e:
+        return f"错误:原版 {version} 下载失败:{e}"
     instance_id = version
     if loader:
-        instance_id = install_loader(loader, version, game_dir,
-                                     loader_version=loader_version or None,
-                                     status_callback=status)
+        try:
+            instance_id = install_loader(loader, version, game_dir,
+                                         loader_version=loader_version or None,
+                                         status_callback=status)
+        except Exception as e:
+            return f"错误:{loader} 加载器安装失败:{e}"
+        mods_dir = os.path.join(game_dir, "versions", instance_id, "mods")
+        mr_loader = {"fabric": "fabric", "forge": "forge", "neoforge": "neoforge"}[loader]
+        # Fabric API(绝大多数 Fabric 模组的前置;指定版本时自动装)
+        if loader == "fabric" and fabric_api_version:
+            try:
+                filename = download_mod("fabric-api", version, "fabric", mods_dir,
+                                        version_number=fabric_api_version or None)
+                status(f"Fabric API:{filename or '无可用版本'}")
+            except Exception as e:
+                status(f"Fabric API 下载失败:{e}")
         if shader or optimize:
-            mods_dir = os.path.join(game_dir, "versions", instance_id, "mods")
-            mr_loader = {"fabric": "fabric", "forge": "forge", "neoforge": "neoforge"}.get(loader)
             if shader and mr_loader:
                 slug = SHADER_MODS.get(mr_loader)
                 if slug:
