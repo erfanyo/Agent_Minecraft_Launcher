@@ -119,7 +119,9 @@
   多模态按 provider 自动预设(local_builtin→关 / openrouter→开,可覆盖);
   新增 `ai_in_game` 下拉(off/cloud/local),游戏启动时 off/cloud 卸载本地模型、local 保留;
   窗口关闭卸载本地模型,无残留 llama-server 进程;
-  首次引导页新增「内置本地 AI 模型」提示
+  首次引导页新增「内置本地 AI 模型」提示;
+  §8.2 冷启动预加载:选中内置本地模型且模型已下载时,开机空闲期后台预热 llama-server,
+  首次本地提问不再等 server 冷启动(状态栏显示"预热中")
 - 移除死亡代码:旧「下载 Mod」页(tab_b)及其专属成员,AI 助手不依赖它
 
 ### 🧠 游戏内 AI 通道设计(§5.1,2026-08-23 决策)

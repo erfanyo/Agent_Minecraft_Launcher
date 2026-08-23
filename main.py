@@ -365,6 +365,7 @@ class MainWindow(QMainWindow):
             self.ai_dock.settings = dlg.settings
             self.ai_dock.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
             self.ai_dock.update_local_status()   # 本地模型 provider 切换 → 刷新状态
+            self.ai_dock.maybe_preload_local()   # 切到内置本地模型 → 空闲期预热 server(§8.2)
             self.skill_mgr.settings = dlg.settings   # 技能启停状态同步
             self.resource_center.set_ui_mode(dlg.settings.get("ui_mode", "beginner"))
             self.refresh_instances()   # 游戏目录可能被改了,重新扫描

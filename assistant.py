@@ -16,7 +16,7 @@ import threading
 import time
 
 import requests
-from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -946,11 +946,14 @@ class AIChatDock(QDockWidget):
         self._chat_messages = []       # 真正的对话历史(喂给 LLM 的消息,不含 system)
         self._local_engine = None      # 本地推理引擎(懒加载单例,见 _get_local_engine)
         self._local_downloading = False   # 本地模型下载中标志
+        self._local_preloading = False    # 本地模型预热中标志(§8.2 冷启动预加载)
         self._local_dlg = None            # 下载进度弹窗
         self._append_system("AI 助手就绪。选中实例后提问,我会带上实例上下文;"
                             "我还能调用工具(列实例/搜 Mod/读日志等),写操作需要\"工作区可写\"权限。")
         self.update_vision_ui()        # 按模型是否支持多模态显示/隐藏图片按钮
         self.update_local_status()     # 本地模型状态(未下载/已就绪)
+        # §8.2 冷启动预加载:若默认就是内置本地模型,开机空闲期就预热 server
+        QTimer.singleShot(2000, self.maybe_preload_local)
 
     def update_vision_ui(self):
         """按所选模型是否支持看图(多模态)显示/隐藏图片相关按钮。
@@ -1270,7 +1273,7 @@ class AIChatDock(QDockWidget):
         self._append_system(msg)
         self.update_local_status()
 
-    # ---- 本地模型状态显示(未下载/下载中/已就绪/推理中) ----
+    # ---- 本地模型状态显示(未下载/下载中/预加载/已就绪/推理中) ----
     def _local_status_text(self) -> str:
         """本地模型当前状态文字(只读,不碰 UI,可在任意线程算)。"""
         try:
@@ -1278,6 +1281,8 @@ class AIChatDock(QDockWidget):
             ready = model_registry.is_downloaded(LOCAL_MODEL_ID)
         except Exception:
             ready = False
+        if getattr(self, "_local_preloading", False):
+            return "本地模型:预热中…"
         if self._local_downloading:
             return "本地模型:下载中…"
         if ready:
@@ -1293,7 +1298,7 @@ class AIChatDock(QDockWidget):
             return
         self.local_status_label.setVisible(True)
         self.local_status_label.setText(text)
-        if "推理中" in text or "下载中" in text:
+        if "中" in text:          # 预热中/下载中/推理中 → 进行中
             color = "#B26A00"      # 进行中:橙
         elif "已就绪" in text:
             color = "#2E7D32"      # 就绪:绿
@@ -1307,6 +1312,41 @@ class AIChatDock(QDockWidget):
             self._on_local_status(self._local_status_text())
         elif hasattr(self, "local_status_label"):
             self.local_status_label.setVisible(False)
+
+    # ---- 冷启动预加载(§8.2):本地 provider 且模型已下载时,后台预热 llama-server ----
+    def maybe_preload_local(self):
+        """空闲时预热本地模型,让首次本地提问不再等 server 冷启动。
+
+        仅当:选的是内置本地模型、模型已下载、且当前未在预热/未在运行时才触发。
+        游戏启动时会按 ai_in_game 决定是否 stop(见 launch_selected),两者不冲突:
+        预热只在这不干扰游戏内存时进行。"""
+        if not self._local_enabled():
+            return
+        try:
+            import model_registry
+            if not model_registry.is_downloaded(LOCAL_MODEL_ID):
+                return
+        except Exception:
+            return
+        if getattr(self, "_local_preloading", False):
+            return
+        eng = getattr(self, "_local_engine", None)
+        if eng is not None and getattr(eng, "proc", None) and eng.proc.poll() is None:
+            return   # 已在运行
+        self._local_preloading = True
+        self._on_local_status("本地模型:预热中…")
+
+        def warm():
+            try:
+                engine = self._get_local_engine()
+                engine.start()   # 阻塞直至 /health 就绪(后台线程,不卡 UI)
+            except Exception:
+                pass
+            finally:
+                self._local_preloading = False
+                self.signals.local_status.emit(self._local_status_text())
+
+        threading.Thread(target=warm, daemon=True).start()
 
     # ---- 本地引擎生命周期:游戏启动/窗口关闭时卸载(省内存/无残留进程) ----
     def stop_local_engine(self):
