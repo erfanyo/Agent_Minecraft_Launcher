@@ -54,6 +54,10 @@ class Skill:
         """实例游戏目录(隔离开时就是实例自己的目录)"""
         return self.manager.main.game_dir_for(instance_id)
 
+    def ai_hint(self) -> str:
+        """给 AI 的提示文本(技能启用后注入 ai_context,指导 AI 行为)。默认无。"""
+        return ""
+
 
 # ================= 内置技能 =================
 
@@ -177,8 +181,31 @@ class CommandGuide(Skill):
     category = "运行辅助"
     default_enabled = True
 
+    def ai_hint(self) -> str:
+        return ("【指令指南已启用】需要给游戏生成/修改指令时,"
+                "先调用 get_command_guide 查该版本的 NBT/组件写法再生成,"
+                "避免版本语法错误。")
 
-BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide]
+
+class TaskSplit(Skill):
+    """任务拆分:长任务分成多步逐步执行,每步检查结果再继续"""
+    id = "task_split"
+    name = "任务拆分"
+    description = ("长任务自动拆成小步逐步执行(如 建实例:先原版→再加载器→再 Mod)。\n"
+                   "每步执行后检查工具返回结果,确认做完再走下一步;\n"
+                   "不确定用户意图时调用 ask_user 让用户选择/补充。")
+    category = "AI 助手"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【任务拆分已启用】长任务先拆成小步,一步一个工具,逐步完成。"
+                "每步执行后检查返回结果(成功/失败/列表)再决定下一步:"
+                "实例是否装好 → 用 list_instances 确认;Mod 是否装好 → 用 list_mods 确认;"
+                "某步失败就停下来向用户说明原因,不要硬继续。"
+                "拿不准用户想要什么时,调用 ask_user 工具让用户勾选/补充。")
+
+
+BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit]
 
 
 # ================= 管理器 =================
@@ -213,6 +240,11 @@ class SkillManager:
 
     def get(self, skill_id: str):
         return next((sk for sk in self.skills if sk.id == skill_id), None)
+
+    def ai_hints(self) -> list:
+        """已启用技能给 AI 的提示文本列表(注入 ai_context)"""
+        return [sk.ai_hint() for sk in self.skills
+                if self.is_enabled(sk.id) and sk.ai_hint()]
 
     # ---- 游戏生命周期分发 ----
     def on_game_start(self, process, instance_id: str):

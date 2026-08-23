@@ -575,16 +575,11 @@ class MainWindow(QMainWindow):
                      "read_instance_log / read_crash_report / get_settings / "
                      "install_instance(创建/下载实例) / install_mod / install_mods(批量装 Mod) / "
                      "backup_instance / set_setting / send_game_command / "
-                     "get_command_guide / get_recipe_path / compare_items。"
+                     "get_command_guide / get_recipe_path / compare_items / ask_user(向用户确认)。"
                      "写操作需要工作区写权限,装 Mod 前会自动备份。")
-        # 指令指南 skill:提示生成指令前先查版本写法(NBT 重点)
-        try:
-            if self.skill_mgr.is_enabled("command_guide"):
-                lines.append("【指令指南已启用】需要给游戏生成/修改指令时,"
-                             "先调用 get_command_guide 查该版本的 NBT/组件写法再生成,"
-                             "避免版本语法错误。")
-        except Exception:
-            pass
+        # 技能提示:任务拆分 / 指令指南 等启用的技能注入行为指导
+        for hint in self.skill_mgr.ai_hints():
+            lines.append(hint)
         return "\n".join(lines)
 
     # ---- 查看:图标/列表视图切换 ----

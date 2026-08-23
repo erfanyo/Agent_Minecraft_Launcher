@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -98,6 +99,13 @@ TOOLS = [
            "optimize": {"type": "boolean", "description": "是否装优化 Mod(钠/锂等),默认 false"},
            "fabric_api_version": {"type": "string", "description": "可选,Fabric API 版本(留空不装)"}},
           ["version"]),
+    _tool("ask_user", "拿不准用户想要什么时调用:向用户弹出选择框(可多选,可输入补充),"
+          "用户的选择会作为结果返回给你。用于任务拆分中途确认方向/确认选项,"
+          "不要用一次调用问太多问题",
+          {"question": {"type": "string", "description": "问题,如 你想装哪些 Mod?"},
+           "options": {"type": "array", "items": {"type": "string"},
+                       "description": "候选选项,用户可多选(如 [\"钠\",\"锂\",\"玉\",\"JEI\"])"}},
+          ["question"]),
     _tool("install_mod", "给某实例安装单个 Mod(写操作,需要工作区写权限;会先自动备份)。"
           "要一次性装多个 Mod 时,用 install_mods 一次装完,别逐个调用浪费轮数",
           {"slug": {"type": "string"}, "instance": {"type": "string"},
@@ -184,11 +192,12 @@ def build_executor(settings: dict):
 
 def chat_with_tools(messages: list, settings: dict, tools: list,
                     executor, max_rounds: int = 10, on_tool=None,
-                    return_messages: bool = False):
+                    on_user_ask=None, return_messages: bool = False):
     """带工具调用的对话循环:LLM 提议 → 执行 → 结果回传 → 直到完成。
 
     tools 为 None 时退化为普通对话。
     on_tool(name, args, result) 每执行一个工具就回调一次(供界面显示过程)。
+    on_user_ask(question, options) 处理 ask_user 交互工具(主线程弹窗,返回用户选择文本)。
     return_messages=True 时返回 (回复文本, 完整消息历史)——调用方保存历史
     即可实现真正的多轮对话记忆(含工具调用过程)。默认返回回复文本。"""
     url = settings["ai_base_url"].rstrip("/") + "/chat/completions"
@@ -216,12 +225,20 @@ def chat_with_tools(messages: list, settings: dict, tools: list,
                 args = json.loads(call["function"]["arguments"] or "{}")
             except json.JSONDecodeError:
                 args = {}
-            try:
-                result = executor(name, args)
-            except PermissionDenied as e:
-                result = f"权限拒绝:{e}"
-            except Exception as e:
-                result = f"工具执行失败:{type(e).__name__}: {e}"
+            if name == "ask_user":
+                # 交互工具:不是静态执行,而是问用户(主线程弹选择框,结果回传)
+                if on_user_ask:
+                    result = on_user_ask(args.get("question", ""),
+                                         args.get("options") or [])
+                else:
+                    result = "(当前没有用户交互通道,请根据上下文自行判断或说明)"
+            else:
+                try:
+                    result = executor(name, args)
+                except PermissionDenied as e:
+                    result = f"权限拒绝:{e}"
+                except Exception as e:
+                    result = f"工具执行失败:{type(e).__name__}: {e}"
             if on_tool:
                 on_tool(name, args, result)
             working.append({"role": "tool", "tool_call_id": call["id"], "content": result})
@@ -235,6 +252,7 @@ class _Signals(QObject):
     no_tool = Signal()
     self_test = Signal(bool)
     tool_called = Signal(str, dict, str)   # 工具调用过程展示(从 worker 线程 emit,主线程渲染)
+    user_ask = Signal(str, list, object, object)   # (问题, 选项, 结果列表引用, 事件) 主线程弹窗
 
 
 def _esc(text: str) -> str:
@@ -490,6 +508,47 @@ class AISettingsDialog(QDialog):
         super().accept()
 
 
+class AskUserDialog(QDialog):
+    """AI 拿不准用户意图时弹出:多选选项 + 可输入补充(保留输入框)。
+    返回:用户勾选的选项 + 手动输入的补充。"""
+
+    def __init__(self, question: str, options: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("AI 需要你确认")
+        self.setMinimumWidth(420)
+        self.question_label = QLabel(question or "你想要哪个?")
+        self.question_label.setWordWrap(True)
+        self.checks = [QCheckBox(o) for o in (options or [])]
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("选项不够?直接输入补充(可多选后再补充)...")
+        self.input.setToolTip("多选下面的选项,或在输入框补充说明;都会发给 AI")
+
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(cancel_btn)
+        row.addWidget(ok_btn)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.question_label)
+        for c in self.checks:
+            layout.addWidget(c)
+        layout.addSpacing(6)
+        layout.addWidget(self.input)
+        layout.addLayout(row)
+
+    def selected(self) -> list:
+        """收集:勾选项 + 输入补充(非空)"""
+        picked = [c.text() for c in self.checks if c.isChecked()]
+        extra = self.input.text().strip()
+        if extra:
+            picked.append(extra)
+        return picked
+
+
 class SendWithRing(QWidget):
     """发送按钮 + 外圈上下文占用环(表示方式与下载指示器一致):
     发送按钮缩小居中,外圈环形显示上下文已用比例,绿→黄→红。"""
@@ -648,6 +707,8 @@ class AIChatDock(QDockWidget):
         self.signals.self_test.connect(self._on_self_test)
         # 工具调用过程展示:worker 线程只 emit 信号,渲染回到主线程(跨线程操作 UI 会崩)
         self.signals.tool_called.connect(self._show_tool)
+        # ask_user 交互:worker 线程请求 → 主线程弹窗 → 结果回传
+        self.signals.user_ask.connect(self._on_user_ask_ui)
 
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
@@ -898,6 +959,8 @@ class AIChatDock(QDockWidget):
         images = list(self.pending_images)
         if not text and not images:
             return
+        if not self._confirm_if_heavy(text):
+            return   # 用户取消:保留输入,不发送
         self.input.clear()
         if text.startswith("/"):
             # 以 / 开头的输入 = 直接给运行中的游戏发指令(如 /summon zombie),不走 AI
@@ -944,7 +1007,8 @@ class AIChatDock(QDockWidget):
         def worker():
             try:
                 result = chat_with_tools(messages, s, TOOLS, executor,
-                                         on_tool=on_tool, return_messages=True)
+                                         on_tool=on_tool, on_user_ask=self.on_user_ask,
+                                         return_messages=True)
                 if isinstance(result, tuple):
                     reply, working = result
                     # 存回完整历史(去掉 system,下次重新生成)
@@ -970,6 +1034,22 @@ class AIChatDock(QDockWidget):
             return estimate_tokens(text)
         return estimate_tokens(str(content or ""))
 
+    def _confirm_if_heavy(self, new_text: str) -> bool:
+        """对话已用较多上下文时,发送前弹提示(这可需要不少 token),问是否继续。
+        用户取消 → 保留输入框内容,不发送。"""
+        from PySide6.QtWidgets import QMessageBox
+        limit = int(self.settings.get("context_window", 65536) or 65536)
+        used = sum(self._est_message(m) for m in self._chat_messages)
+        used += estimate_tokens(new_text)
+        if used <= int(limit * 0.6):
+            return True
+        ret = QMessageBox.question(
+            self, "继续对话?",
+            f"当前对话已用约 {used / 1000:.1f}k tokens(占上下文 {used * 100 // limit}%)。\n"
+            "继续这一轮会消耗不少 token,确定要继续吗?\n\n"
+            "(选择\"No\"可保留输入内容,或开启新对话后重发)")
+        return ret == QMessageBox.StandardButton.Yes
+
     def _trim_history(self):
         """上下文超限时丢弃最早的消息(保留最近的,让对话能继续)"""
         limit = int(self.settings.get("context_window", 65536) or 65536)
@@ -986,6 +1066,29 @@ class AIChatDock(QDockWidget):
             "⚠️ 本轮对话模型没有调用任何工具。如果它只是说\"我将...\"而没动手,"
             "说明当前模型不支持工具调用(小模型常见),建议换更强的模型,"
             "或用 🛠 自测确认。")
+
+    # ---- ask_user 交互:AI 不确定时弹选择框(多选 + 输入补充) ----
+    def on_user_ask(self, question: str, options: list) -> str:
+        """worker 线程调用:请求主线程弹窗,阻塞等用户选择,返回选择文本"""
+        result_box = []
+        ev = threading.Event()
+        self.signals.user_ask.emit(question, options, result_box, ev)
+        ev.wait()   # 等主线程弹窗完成
+        picked = result_box[0] if result_box else []
+        if not picked:
+            return "用户取消了选择(未给答案)。请根据上下文自行处理,或向用户说明你需要的选择。"
+        return "用户选择了:" + "、".join(str(p) for p in picked)
+
+    def _on_user_ask_ui(self, question, options, result_box, ev):
+        """主线程:弹 AskUserDialog,结果放回 result_box 并唤醒 worker"""
+        try:
+            dlg = AskUserDialog(question, options, self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                result_box.append(dlg.selected())
+            else:
+                result_box.append([])
+        finally:
+            ev.set()
 
     # ---- 自测工具调用 ----
     def self_test_tools(self):
