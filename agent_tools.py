@@ -216,6 +216,48 @@ def backup_instance(instance: str, game_dir: str = None) -> str:
     return f"已备份到:{_backup_impl(instance, _gd(game_dir))}"
 
 
+def launch_game(instance: str, game_dir: str = None) -> str:
+    """启动某实例的游戏(写操作,需要工作区写权限)。
+    注意:这样启动的进程启动器不跟踪日志/退出,关闭游戏窗口即退出。"""
+    import os as _os
+    import subprocess
+    from java_manager import ensure_java
+    from launcher import build_launch_command, resolve_inherited_json
+    gd = _gd(game_dir)
+    inst = next((i for i in scan_instances(gd) if i["id"] == instance), None)
+    if inst is None:
+        return f"错误:没有实例 {instance}(可用 list_instances 查看)"
+    try:
+        d = resolve_inherited_json(inst["id"], gd)
+    except Exception as e:
+        return f"错误:读取 {inst['id']} 版本数据失败:{e}"
+    required_java = (d.get("javaVersion") or {}).get("majorVersion", 8)
+    try:
+        java_exe = ensure_java(_os.path.join(gd, "runtime"), required_java)
+    except Exception as e:
+        return f"错误:准备 Java 失败:{e}"
+    game_dir_run = _os.path.join(gd, "versions", inst["id"])   # PCL2 风格实例目录
+    try:
+        cmd = build_launch_command(
+            d, game_dir_run, java_exe,
+            username="Player", memory_gb=2,
+            assets_dir=_os.path.join(gd, "assets"),
+            install_dir=gd)
+    except Exception as e:
+        return f"错误:构建启动命令失败:{e}"
+    # javaw:无控制台黑框
+    javaw = _os.path.join(_os.path.dirname(java_exe), "javaw.exe")
+    if _os.path.isfile(javaw):
+        cmd = [javaw] + cmd[1:]
+    creationflags = subprocess.CREATE_NO_WINDOW if _os.name == "nt" else 0
+    try:
+        p = subprocess.Popen(cmd, cwd=game_dir_run, creationflags=creationflags)
+    except Exception as e:
+        return f"错误:启动失败:{e}"
+    return (f"✅ 已启动 {inst['id']}(PID {p.pid})。"
+            f"注意:这样启动的进程启动器不跟踪日志,关闭游戏窗口即退出。")
+
+
 def send_game_command(instance: str, command: str, game_dir: str = None) -> str:
     """向运行中的游戏发送指令(如 /summon zombie)。
 

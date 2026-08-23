@@ -106,6 +106,10 @@ TOOLS = [
            "options": {"type": "array", "items": {"type": "string"},
                        "description": "候选选项,用户可多选(如 [\"钠\",\"锂\",\"玉\",\"JEI\"])"}},
           ["question"]),
+    _tool("launch_game", "启动某实例的游戏(写操作,需要工作区写权限)。"
+          "这样启动的进程启动器不跟踪日志/退出,关闭游戏窗口即退出",
+          {"instance": {"type": "string", "description": "实例 id(用 list_instances 查)"}},
+          ["instance"]),
     _tool("install_mod", "给某实例安装单个 Mod(写操作,需要工作区写权限;会先自动备份)。"
           "要一次性装多个 Mod 时,用 install_mods 一次装完,别逐个调用浪费轮数",
           {"slug": {"type": "string"}, "instance": {"type": "string"},
@@ -155,7 +159,8 @@ TOOLS = [
 ]
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
-WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "backup_instance", "set_setting"}
+WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "launch_game",
+               "backup_instance", "set_setting"}
 
 
 def build_executor(settings: dict):

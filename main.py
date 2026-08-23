@@ -68,7 +68,7 @@ import paths  # 游戏目录(可配置,设置/引导里可改)
 from paths import GAME_DIR, RUNTIME_DIR  # 兼容旧引用(测试用);内部统一用 paths.GAME_DIR
 from settings import load_settings, save_settings  # 启动器配置
 from skill_manager import SkillManager, SkillManagerDialog  # 技能(运行时辅助)系统
-from ui_style import arrow_style, card_style, hint_style, inner_style
+from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style
 from version_tree import fill_version_tree  # 版本树构建(与下载选项卡共用)
 
 # 推荐 Mod(下载 Mod 页「推荐 Mod ▾」):优化/管理/指令类,一键装到目标实例
@@ -225,12 +225,9 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()  # 启动器配置(用户名/内存/版本隔离)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
-        # ---- 顶部:设置(刷新列表已隐藏,入口移到 文件菜单) ----
+        # ---- 顶部(已精简,设置移入菜单栏) ----
         top_bar = QHBoxLayout()
         top_bar.addStretch()
-        settings_btn = QPushButton(t("设置", "Settings"))
-        settings_btn.clicked.connect(self.open_settings)
-        top_bar.addWidget(settings_btn)
 
         # ---- 菜单栏(基础启动器的骨架) ----
         menubar = self.menuBar()
@@ -251,6 +248,11 @@ class MainWindow(QMainWindow):
             lambda on: on and self.set_view_mode(self.instance_list, True, "instances"))
         self._inst_list_action.toggled.connect(
             lambda on: on and self.set_view_mode(self.instance_list, False, "instances"))
+
+        # ---- 设置:和"文件"平级 ----
+        settings_menu = menubar.addMenu(t("设置", "Settings"))
+        settings_menu.addAction(t("设置对话框…", "Settings…"), self.open_settings)
+        settings_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
 
         # ---- AI 助手:顶级菜单(和"查看"同级,更显眼) ----
         ai_menu = menubar.addMenu("AI")
@@ -273,6 +275,7 @@ class MainWindow(QMainWindow):
         self.instance_list = QListWidget()
         self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)  # 双击启动
         self.launch_btn = QPushButton(t("启动所选实例", "Launch Selected"))
+        self.launch_btn.setStyleSheet(primary_btn_style())   # 蓝底白字(深浅色各一版)
         self.launch_btn.clicked.connect(self.launch_selected_instance)
         refresh_inst_btn = QPushButton(t("刷新", "Refresh"))
         refresh_inst_btn.clicked.connect(self.refresh_instances)
@@ -575,7 +578,7 @@ class MainWindow(QMainWindow):
         lines.append("你可以调用工具:list_instances / search_mods / list_mods / "
                      "read_instance_log / read_crash_report / get_settings / "
                      "install_instance(创建/下载实例) / install_mod / install_mods(批量装 Mod) / "
-                     "backup_instance / set_setting / send_game_command / "
+                     "launch_game(启动实例) / backup_instance / set_setting / send_game_command / "
                      "get_command_guide / get_recipe_path / compare_items / ask_user(向用户确认)。"
                      "写操作需要工作区写权限,装 Mod 前会自动备份。")
         # 技能提示:任务拆分 / 指令指南 等启用的技能注入行为指导

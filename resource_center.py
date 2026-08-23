@@ -74,6 +74,17 @@ class ResourceBrowser(QWidget):
         search_btn = QPushButton(t("搜索", "Search"))
         search_btn.clicked.connect(self.do_search)
 
+        # 排序(默认按下载量)+ 标签筛选
+        self.sort_combo = QComboBox()
+        for lbl, val in [("按下载量排序", "downloads"),
+                         ("按相关度排序", "relevance"),
+                         ("按最近更新", "updated")]:
+            self.sort_combo.addItem(t(lbl, lbl), val)
+        self.tag_edit = QLineEdit()
+        self.tag_edit.setPlaceholderText(
+            t("标签筛选,如 performance,utility(逗号分隔,回车生效)", "Tags (comma): performance,utility"))
+        self.tag_edit.returnPressed.connect(self.do_search)
+
         # 目标实例(折叠):装到哪个实例的对应目录
         self.inst_cards_toggle = QPushButton("▸ 目标实例: 未选择")
         self.inst_cards_toggle.setCheckable(True)
@@ -163,6 +174,7 @@ class ResourceBrowser(QWidget):
         layout.addWidget(self.instance_cards_box)
         layout.addWidget(self.custom_label)
         layout.addLayout(self._row(self.filter_version, self.filter_loader))
+        layout.addLayout(self._row(self.sort_combo, self.tag_edit))
         layout.addLayout(self._row(self.search_edit, search_btn))
         layout.addWidget(self.split, 1)
 
@@ -243,7 +255,9 @@ class ResourceBrowser(QWidget):
             hits = modrinth.search_mods_cn(
                 query, self.filter_version.currentText().strip(),
                 self.filter_loader.currentData(), limit=30,
-                project_type=self.project_type)
+                project_type=self.project_type,
+                order_by=self.sort_combo.currentData() or "downloads",
+                tags=self.tag_edit.text().strip())
         except Exception as e:
             hits = []
             self.result_list.clear()

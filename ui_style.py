@@ -45,6 +45,27 @@ def arrow_style() -> str:
     return "QPushButton { border: none; background: transparent; color: #888888; }"
 
 
+def primary_btn_style() -> str:
+    """主操作按钮(蓝底白字):深浅色模式用不同蓝色适配,可读性更好"""
+    if is_dark_mode():
+        # 深色模式用亮一些的蓝,白字更醒目
+        return (
+            "QPushButton { background: #2E6FD8; color: #FFFFFF; border: none;"
+            " border-radius: 6px; padding: 6px 14px; font-weight: bold; }"
+            "QPushButton:hover { background: #3D80E8; }"
+            "QPushButton:pressed { background: #265FB8; }"
+            "QPushButton:disabled { background: #44506A; color: #9AA4B8; }"
+        )
+    # 浅色模式用标准蓝
+    return (
+        "QPushButton { background: #1E6FD9; color: #FFFFFF; border: none;"
+        " border-radius: 6px; padding: 6px 14px; font-weight: bold; }"
+        "QPushButton:hover { background: #2F7FE8; }"
+        "QPushButton:pressed { background: #175CB5; }"
+        "QPushButton:disabled { background: #B9C4D6; color: #EEF1F6; }"
+    )
+
+
 def hint_style() -> str:
     """灰色提示文字(两种主题下都可读)"""
     return "color: #888888;"

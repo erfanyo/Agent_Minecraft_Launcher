@@ -35,9 +35,9 @@ def get_project(slug: str) -> dict:
 
 
 def _facets(game_version: str, loader: str | None,
-            project_type: str | None = None) -> str:
-    """构造搜索过滤条件:版本 + (可选)加载器 + (可选)项目类型(mod/datapack/shader 等)。
-    版本为空 = 不过滤版本(放宽搜索用)。"""
+            project_type: str | None = None, tags: str = "") -> str:
+    """构造搜索过滤条件:版本 + (可选)加载器 + (可选)项目类型 + (可选)分类标签。
+    版本为空 = 不过滤版本(放宽搜索用);tags 逗号分隔,按 Modrinth 分类过滤。"""
     parts = []
     if game_version:
         parts.append([f"versions:{game_version}"])
@@ -45,17 +45,23 @@ def _facets(game_version: str, loader: str | None,
         parts.append([f"categories:{loader}"])
     if project_type:
         parts.append([f"project_type:{project_type}"])
+    if tags:
+        tag_list = [t.strip() for t in tags.replace("，", ",").split(",") if t.strip()]
+        if tag_list:
+            parts.append([f"categories:{t}" for t in tag_list])
     return json.dumps(parts)
 
 
 def search_mods_cn(query: str, game_version: str, loader: str | None = None,
-                   limit: int = 20, project_type: str | None = None) -> list:
+                   limit: int = 20, project_type: str | None = None,
+                   order_by: str = "downloads", tags: str = "") -> list:
     """中文增强搜索。
 
     - 关键词含中文 → 先查本地中文名库 → 命中 slug 就去 Modrinth 取详情(按版本/加载器过滤)
     - 查不到或关键词是英文 → 走 Modrinth 原生搜索
     - 返回的结果统一标注中文名(有库就用,没有就用原名)
     - project_type: 限定项目类型(mod / datapack / shader 等,数据包/光影下载用)
+    - order_by / tags: 排序与分类标签过滤(透传给原生搜索)
     """
     if has_cjk(query):
         cn_hits = []
@@ -92,7 +98,8 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
 
         # 中文没命中本地库:继续走原生搜索(用户可能搜的是英文或平台别名)
 
-    hits = search_mods(query, game_version, loader, limit, project_type)
+    hits = search_mods(query, game_version, loader, limit, project_type,
+                       order_by=order_by, tags=tags)
     for h in hits:
         cn = CN_NAMES.get(h["slug"])
         if cn:
@@ -101,16 +108,21 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
 
 
 def search_mods(query: str, game_version: str, loader: str | None = None,
-                limit: int = 20, project_type: str | None = None) -> list:
-    """搜索 Mod,返回 [{slug, title, description, downloads, categories}, ...]
+                limit: int = 20, project_type: str | None = None,
+                order_by: str = "downloads", tags: str = "") -> list:
+    """搜索 Mod,返回 [{slug, title, description, downloads, author, categories}, ...]
     project_type: mod / datapack / shader 等(默认 None = 全部)。
+    order_by: relevance(相关度) / downloads(下载量,默认) / updated(最近更新)。
+    tags: 逗号分隔的分类标签(如 performance,utility),按 Modrinth 分类过滤。
     指定版本搜不到时,自动去掉版本过滤再试一次(很多项目只标了较新的版本,
     比如 lanserverproperties 没标 1.21.1,但实际能用)。"""
-    resp = requests.get(BASE + "/search", params={
+    params = {
         "query": query,
-        "facets": _facets(game_version, loader, project_type),
+        "facets": _facets(game_version, loader, project_type, tags),
         "limit": limit,
-    }, timeout=20)
+        "index": order_by,
+    }
+    resp = requests.get(BASE + "/search", params=params, timeout=20)
     resp.raise_for_status()
     hits = resp.json().get("hits", [])
     if not hits and game_version:
@@ -118,8 +130,9 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
         try:
             resp2 = requests.get(BASE + "/search", params={
                 "query": query,
-                "facets": _facets("", loader, project_type),
+                "facets": _facets("", loader, project_type, tags),
                 "limit": limit,
+                "index": order_by,
             }, timeout=20)
             hits = resp2.json().get("hits", [])
         except Exception:

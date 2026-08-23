@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QSplitter,
     QStackedWidget,
     QTreeWidget,
     QVBoxLayout,
@@ -34,7 +35,7 @@ from fetch_versions import fetch_version_manifest
 from instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions
 from modrinth import list_mod_versions
-from ui_style import arrow_style, card_style, hint_style, inner_style
+from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style
 from version_tree import fill_version_tree
 
 
@@ -79,8 +80,9 @@ class DownloadTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.download_btn = QPushButton("开始下载实例")
+        self.download_btn.setStyleSheet(primary_btn_style())   # 蓝底白字
         self.download_btn.clicked.connect(self._on_start)
-        self.download_btn.setEnabled(False)
+        # 按钮始终可点:没选版本时点击会给明确提示(见 _on_start)
 
         bottom = QHBoxLayout()
         bottom.addWidget(self.status_label)
@@ -88,13 +90,28 @@ class DownloadTab(QWidget):
         bottom.addWidget(self.progress_bar)
         bottom.addWidget(self.download_btn)
 
-        center = QHBoxLayout()
+        # 左侧菜单与右侧面板之间用 QSplitter:分隔线可拖到任意位置
+        center = QSplitter(Qt.Orientation.Horizontal)
+        self.menu.setFixedWidth(140)
         center.addWidget(self.menu)
-        center.addWidget(self.stack, 1)
+        center.addWidget(self.stack)
+        center.setStretchFactor(0, 0)
+        center.setStretchFactor(1, 1)
+        center.setSizes([140, 860])   # 版本面板默认更宽
 
         layout = QVBoxLayout(self)
-        layout.addLayout(center)
+        layout.addWidget(center)
         layout.addLayout(bottom)
+
+    def _on_start(self):
+        """点"开始下载实例":没选版本时给出明确提示(先选版本,再选加载器)"""
+        if not self.mc:
+            self.status_label.setText("⚠️ 请先到「游戏版本」选择一个版本(如 1.21.1)")
+            self.status_label.setStyleSheet("color: #E53935;")
+            self.menu.setCurrentRow(0)
+            return
+        self.status_label.setStyleSheet(hint_style())
+        self.on_start_requested.emit() if hasattr(self, "on_start_requested") else None
 
     # ================= 面板构建 =================
     def _build_version_panel(self):
@@ -342,6 +359,18 @@ class DownloadTab(QWidget):
         if show:
             self._request_loader_versions(key)   # 只刷这一张,异步
 
+    def _fill_loader_combo(self, combo: QComboBox, versions: list):
+        """加载器版本填充:空时明确提示'该版本暂无此加载器'"""
+        combo.clear()
+        if not versions:
+            combo.addItem("(该版本暂无此加载器可用)", None)
+            combo.setEnabled(False)
+            return
+        for v in versions:
+            combo.addItem(v, v)
+        combo.setEnabled(True)
+        combo.setCurrentIndex(0)
+
     def _request_loader_versions(self, key=None):
         """异步加载某加载器的版本列表(只刷 key,不重复请求其他加载器)"""
         key = self.loader_key if key is None else key
@@ -367,7 +396,7 @@ class DownloadTab(QWidget):
                 return list_forge_versions(self.mc)
             return list_neoforge_versions(self.mc)
 
-        self._async(ck, fetch, lambda vs, c=combo: self._fill_combo(c, vs))
+        self._async(ck, fetch, lambda vs, c=combo: self._fill_loader_combo(c, vs))
 
     # ================= 光影 =================
     def _request_shader(self):
@@ -425,11 +454,11 @@ class DownloadTab(QWidget):
 
     # ================= 汇总与下载 =================
     def _update_ready(self):
-        ok = bool(self.mc)  # 原版 = 不选加载器,同样可以下载
-        self.download_btn.setEnabled(ok)
-        if ok:
+        # 按钮始终可点:没选版本时点击会给出明确提示(见 _on_start)
+        if self.mc:
             loader_name = self.loader_key or "原版(无加载器)"
             self.status_label.setText(f"已选版本:{self.mc} | 加载器:{loader_name}")
+            self.status_label.setStyleSheet(hint_style())
 
     def state(self) -> dict:
         """汇总全部选择"""
@@ -454,12 +483,9 @@ class DownloadTab(QWidget):
         self.progress_bar.setValue(done)
 
     def set_busy(self, busy: bool):
-        self.download_btn.setEnabled(not busy and bool(self.mc))
+        self.download_btn.setEnabled(not busy)
         self.menu.setEnabled(not busy)
 
-    def _on_start(self):
-        self.on_start_requested.emit() if hasattr(self, "on_start_requested") else None
-
     def bind_start(self, callback):
-        """绑定"开始下载"回调"""
+        """绑定"开始下载"回调(与 _on_start 并存,先检查版本再触发下载)"""
         self.download_btn.clicked.connect(callback)
