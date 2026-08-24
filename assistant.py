@@ -274,6 +274,9 @@ class _Signals(QObject):
     local_dl_progress = Signal(int, int)   # 本地模型下载进度(done, total)(跨线程)
     local_dl_done = Signal(str)            # 本地模型下载完成/失败的消息(跨线程)
     local_status = Signal(str)             # 本地模型状态文字(未下载/下载中/已就绪/推理中)(跨线程)
+    # ---- t13 修复:worker 线程禁止直接碰 Qt 部件,一律走队列信号回主线程 ----
+    system_msg = Signal(str)               # worker → 主线程:追加一条系统消息(_append_system)
+    ring_update = Signal()                 # worker → 主线程:刷新上下文占用环(_update_ctx_ring)
 
 
 def _esc(text: str) -> str:
@@ -1037,6 +1040,9 @@ class AIChatDock(QDockWidget):
         self.signals.local_dl_progress.connect(self._on_local_dl_progress)
         self.signals.local_dl_done.connect(self._on_local_dl_done)
         self.signals.local_status.connect(self._on_local_status)
+        # t13 修复:worker 线程的系统消息/上下文环更新也走队列信号(跨线程直接碰 UI 会原生崩溃)
+        self.signals.system_msg.connect(self._append_system)
+        self.signals.ring_update.connect(self._update_ctx_ring)
 
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
@@ -1247,8 +1253,13 @@ class AIChatDock(QDockWidget):
         return len(t) > 130
 
     def _render_all(self):
-        """按条目重绘整个对话流(工具结果/长回答 展开收起都在这里决定)"""
-        self.history.clear()
+        """按条目重绘整个对话流(工具结果/长回答 展开收起都在这里决定)。
+        t13 防御:仅主线程调用(worker 走 system_msg/reply/tool_called 等队列信号);
+        QTextBrowser 部件销毁中(关闭窗口竞态)迟到调用直接忽略。"""
+        try:
+            self.history.clear()
+        except RuntimeError:
+            return
         for idx, e in enumerate(self._entries):
             kind = e[0]
             if kind == "system":
@@ -1287,10 +1298,19 @@ class AIChatDock(QDockWidget):
         self._update_ctx_ring()
 
     def _update_ctx_ring(self):
-        """按真实对话历史估算已用上下文 tokens,更新发送按钮外圈的占用环(绿→黄→红)"""
-        used = sum(self._est_message(m) for m in self._chat_messages)
-        limit = int(self.settings.get("context_window", 65536) or 65536)
-        self.input.send_btn.set_usage(used, limit)
+        """按真实对话历史估算已用上下文 tokens,更新发送按钮外圈的占用环(绿→黄→红)。
+        t13 防御:仅主线程调用(worker 走 ring_update 信号);部件销毁中(关闭窗口)迟到调用直接忽略。"""
+        try:
+            inp = getattr(self, "input", None)
+            if inp is None or getattr(inp, "send_btn", None) is None:
+                return
+            used = sum(self._est_message(m) for m in self._chat_messages)
+            limit = int(self.settings.get("context_window", 65536) or 65536)
+            inp.send_btn.set_usage(used, limit)
+        except RuntimeError:
+            pass   # C++ 对象已销毁(窗口关闭竞态)→ 忽略
+        except Exception:
+            pass
 
     def _show_tool(self, name: str, args: dict, result: str):
         """把一次工具调用记入历史。结果太长默认折叠,点 [展开] 看全文。"""
@@ -1594,34 +1614,37 @@ class AIChatDock(QDockWidget):
 
         仅当:选的是内置本地模型、模型已下载、且当前未在预热/未在运行时才触发。
         游戏启动时会按 ai_in_game 决定是否 stop(见 launch_selected),两者不冲突:
-        预热只在这不干扰游戏内存时进行。"""
-        if not self._local_enabled():
-            return
+        预热只在这不干扰游戏内存时进行。t13 防御:整体兜底,定时器回调异常不冒泡。"""
         try:
-            import model_registry
-            if not model_registry.is_downloaded(LOCAL_MODEL_ID):
+            if not self._local_enabled():
                 return
-        except Exception:
-            return
-        if getattr(self, "_local_preloading", False):
-            return
-        eng = getattr(self, "_local_engine", None)
-        if eng is not None and getattr(eng, "proc", None) and eng.proc.poll() is None:
-            return   # 已在运行
-        self._local_preloading = True
-        self._on_local_status("本地模型:预热中…")
-
-        def warm():
             try:
-                engine = self._get_local_engine()
-                engine.start()   # 阻塞直至 /health 就绪(后台线程,不卡 UI)
+                import model_registry
+                if not model_registry.is_downloaded(LOCAL_MODEL_ID):
+                    return
             except Exception:
-                pass
-            finally:
-                self._local_preloading = False
-                self.signals.local_status.emit(self._local_status_text())
+                return
+            if getattr(self, "_local_preloading", False):
+                return
+            eng = getattr(self, "_local_engine", None)
+            if eng is not None and getattr(eng, "proc", None) and eng.proc.poll() is None:
+                return   # 已在运行
+            self._local_preloading = True
+            self._on_local_status("本地模型:预热中…")
 
-        threading.Thread(target=warm, daemon=True).start()
+            def warm():
+                try:
+                    engine = self._get_local_engine()
+                    engine.start()   # 阻塞直至 /health 就绪(后台线程,不卡 UI)
+                except Exception:
+                    pass
+                finally:
+                    self._local_preloading = False
+                    self.signals.local_status.emit(self._local_status_text())
+
+            threading.Thread(target=warm, daemon=True).start()
+        except Exception:
+            pass   # 预热失败不影响主流程(懒加载兜底)
 
     # ---- 本地引擎生命周期:游戏启动/窗口关闭时卸载(省内存/无残留进程) ----
     def stop_local_engine(self):
@@ -1702,6 +1725,9 @@ class AIChatDock(QDockWidget):
             self.signals.tool_called.emit(name, args, result)   # 跨线程安全:信号回主线程渲染
 
         def worker():
+            # t13 修复:worker 线程【禁止】直接调用任何 Qt 部件方法(_append_system/_update_ctx_ring
+            # 等),跨线程碰 UI 是未定义行为,实测可原生崩溃(0xC0000005/0x8 空指针)。
+            # 全部改走队列信号:signals.system_msg / signals.ring_update → 主线程槽执行。
             try:
                 # 路由分流(§1):本地 provider 时先判规则/难度/歧义;ai_strategy 三档 + 追问降级
                 if is_local and not images:
@@ -1717,7 +1743,7 @@ class AIChatDock(QDockWidget):
                     if decision["target"] == "rule":
                         reply = match_rule(text) or "(没想好怎么答,稍后再试试)"
                         self.signals.reply.emit(reply)
-                        self._update_ctx_ring()
+                        self.signals.ring_update.emit()
                         setattr(self, "_cheap_replied", True)   # 规则答过 → 下轮追问强制转模型
                         return
                     if decision["target"] == "chat":
@@ -1726,24 +1752,24 @@ class AIChatDock(QDockWidget):
                             reply, ok = self._local_chat(text)
                             if ok:
                                 self.signals.reply.emit(reply)
-                                self._update_ctx_ring()
+                                self.signals.ring_update.emit()
                                 setattr(self, "_cheap_replied", True)   # chat 答过 → 下轮追问转模型
                                 return
                             # 本地 chat 失败 → 有云端则落云端,否则友好提示
                             if self._cloud_available():
-                                self._append_system("本地对话未成功,已转云端处理…")
+                                self.signals.system_msg.emit("本地对话未成功,已转云端处理…")
                             else:
                                 self.signals.reply.emit(self._cloud_unavailable_hint())
-                                self._update_ctx_ring()
+                                self.signals.ring_update.emit()
                                 return
                         else:
-                            self._append_system("本地模型未下载,先走云端…")
+                            self.signals.system_msg.emit("本地模型未下载,先走云端…")
                             self.signals.local_dl_start.emit()
                             if not self._cloud_available():
                                 self.signals.reply.emit(
                                     "本地模型还没下载,而且当前没有可用的云端服务。"
                                     "模型正在后台下载,下载完成后就能离线用了。")
-                                self._update_ctx_ring()
+                                self.signals.ring_update.emit()
                                 return
                     if decision["target"] == "local":
                         if self._local_model_ready():
@@ -1752,19 +1778,20 @@ class AIChatDock(QDockWidget):
                                 if tools_called:
                                     self.signals.no_tool.emit()
                                 self.signals.reply.emit(reply)
-                                self._update_ctx_ring()
+                                self.signals.ring_update.emit()
                                 return
                             # 本地失败 → 有云端则落云端,否则友好提示(§1.3/§1.4)
                             if self._cloud_available():
-                                self._append_system("本地推理未成功,已转云端处理…")
+                                self.signals.system_msg.emit("本地推理未成功,已转云端处理…")
                             else:
                                 self.signals.reply.emit(self._cloud_unavailable_hint())
-                                self._update_ctx_ring()
+                                self.signals.ring_update.emit()
                                 return
                         else:
                             # 模型未下载(§2 懒加载):提示后走云端;同时后台触发下载(带进度弹窗)
-                            self._append_system("本地模型未下载,先走云端(设置里可关本地模型)。"
-                                                "首次使用会在后台下载约 500MB…")
+                            self.signals.system_msg.emit(
+                                "本地模型未下载,先走云端(设置里可关本地模型)。"
+                                "首次使用会在后台下载约 500MB…")
                             self.signals.local_dl_start.emit()
                             if not self._cloud_available():
                                 # 本地模型也没下、云端也没有 → 无法继续,友好提示
@@ -1772,13 +1799,13 @@ class AIChatDock(QDockWidget):
                                     "本地模型还没下载,而且当前没有可用的云端服务。"
                                     "模型正在后台下载,下载完成后就能离线用了;"
                                     "或者到设置里配置云端服务(如 DeepSeek)。")
-                                self._update_ctx_ring()
+                                self.signals.ring_update.emit()
                                 return
                     # decision==ask 或模型未就绪:落云端(ask 由云端循环触发 ask_user 交互)
                     if not self._cloud_available():
                         # 本地模式下路由判到 cloud/ask 但没有云端通道 → 友好提示,不拼空 URL
                         self.signals.reply.emit(self._cloud_unavailable_hint())
-                        self._update_ctx_ring()
+                        self.signals.ring_update.emit()
                         return
                 result = chat_with_tools(messages, s, TOOLS, executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
@@ -1793,7 +1820,7 @@ class AIChatDock(QDockWidget):
                 if not tools_called:
                     self.signals.no_tool.emit()
                 self.signals.reply.emit(reply)
-                self._update_ctx_ring()
+                self.signals.ring_update.emit()
             except Exception as e:
                 self.signals.error.emit(str(e))
 

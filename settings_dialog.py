@@ -6,9 +6,14 @@
 - AI 助手:服务商 / 接口 / 密钥 / 模型 / 文件权限 / 多模态(图片输入)
 - 镜像源:选择下载镜像源(官方 / BMCLAPI / 自定义),管理自定义镜像
 点"确定"时把各标签页内容写进 config.json。
+
+AI 助手页另含「下载本地模型」按钮:主动点击触发后台下载(镜像优先),进度同步到
+启动器左下角环形下载指示器,按钮三态(未下载/下载中/已就绪)。
 """
+import threading
 import uuid
 
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 import i18n
+from i18n import t
 import paths
 from assistant import AISettingsForm
 from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
@@ -35,12 +41,22 @@ from settings import save_settings
 
 
 class SettingsDialog(QDialog):
+    # 下载进度/结果从 worker 线程搬回主线程更新 UI(跨线程安全)
+    _dl_progress = Signal(int, int)      # (done, total)
+    _dl_finished = Signal(bool, str)     # (ok, message)
+
     def __init__(self, settings: dict, parent=None, tab: str | None = None):
         super().__init__(parent)
         self.setWindowTitle("启动器设置")
         self.setMinimumWidth(470)
         self.settings = dict(settings)  # 复制一份,点确定才真正生效
         self._custom_mirrors = [dict(c) for c in self.settings.get("custom_mirrors", []) or []]
+
+        self._model_downloading = False        # 本地模型是否正在下载
+        self._mod_translate_check = None       # 惰性创建,见 AI tab
+        # 下载信号:worker 线程 emit → 主线程槽(用 QueuedConnection 保证线程安全)
+        self._dl_progress.connect(self._on_model_dl_progress)
+        self._dl_finished.connect(self._on_model_dl_finished)
 
         # ---------- 标签页:游戏 / 界面 / AI 助手 / 镜像源 ----------
         self.tabs = QTabWidget()
@@ -193,6 +209,18 @@ class SettingsDialog(QDialog):
         mod_ai_row.addWidget(self.mod_translate_check)
         mod_ai_row.addStretch()
 
+        # 下载本地模型按钮(三态):主动点击触发后台下载,进度同步到左下角环形指示器
+        self.model_dl_btn = QPushButton(t("下载本地模型", "Download local model"))
+        self.model_dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.model_dl_btn.clicked.connect(self._start_model_download)
+        self.model_dl_status = QLabel("")
+        self.model_dl_status.setWordWrap(True)
+        self.model_dl_status.setStyleSheet("color: #888888;")
+        model_dl_row = QHBoxLayout()
+        model_dl_row.addWidget(self.model_dl_btn)
+        model_dl_row.addWidget(self.model_dl_status, 1)
+        self._init_model_dl_button()
+
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addLayout(ai_strategy_row)
@@ -200,6 +228,7 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.ai_form)
         lay.addLayout(mod_ai_row)
         lay.addWidget(mod_ai_hint)
+        lay.addLayout(model_dl_row)
         lay.addWidget(ai_hint)
         lay.addStretch()
         return w
@@ -364,3 +393,86 @@ class SettingsDialog(QDialog):
         i18n.set_language(self.settings["language"])
         paths.set_game_dir(self.settings["game_dir"])  # 改路径立即全局生效
         super().accept()
+
+    # ================= 下载本地模型(主动点击,进度同步到环形指示器) =================
+    def _is_model_downloaded(self) -> bool:
+        """内置本地模型是否已下载。"""
+        try:
+            import model_registry
+            return model_registry.is_downloaded("qwen3.5-0.8b-xlam-q4km")
+        except Exception:
+            return False
+
+    def _init_model_dl_button(self):
+        """根据当前下载状态初始化按钮三态。"""
+        ready = self._is_model_downloaded()
+        if ready:
+            self.model_dl_btn.setText(t("已就绪", "Ready"))
+            self.model_dl_btn.setEnabled(False)
+            self.model_dl_status.setText(t("本地模型已下载,可直接使用",
+                                           "Local model downloaded, ready"))
+        else:
+            self.model_dl_btn.setText(t("下载本地模型", "Download local model"))
+            self.model_dl_btn.setEnabled(True)
+            self.model_dl_status.setText(t("未下载(约 500MB,点按钮开始)",
+                                           "Not downloaded (~500MB, click to start)"))
+
+    def _start_model_download(self):
+        """点击「下载本地模型」:后台线程下载(镜像优先),进度同步到左下角环形指示器。"""
+        if self._model_downloading:
+            return   # 下载中再点无效
+        if self._is_model_downloaded():
+            self._init_model_dl_button()
+            return
+        self._model_downloading = True
+        self.model_dl_btn.setEnabled(False)
+        self.model_dl_btn.setText(t("下载中 0%…", "Downloading 0%…"))
+        self.model_dl_status.setText(t("正在后台下载本地模型(镜像优先)…",
+                                       "Downloading local model (mirror first)…"))
+
+        # 左下角环形指示器开始读条(若宿主 MainWindow 有 dl_indicator)
+        ring = getattr(self.parent(), "dl_indicator", None) if self.parent() else None
+        if ring is not None:
+            ring.set_progress(0, 1)
+            ring.setToolTip("正在下载本地模型,点击查看详情")
+            ring.show()
+
+        def worker():
+            ok, msg = True, "✅ 本地模型下载完成,之后可用内置本地模型。"
+            try:
+                import model_registry
+                model_registry.download(
+                    "qwen3.5-0.8b-xlam-q4km",
+                    progress_callback=lambda d, t: self._dl_progress.emit(d, t))
+            except Exception as e:
+                ok = False
+                msg = f"❌ 本地模型下载失败:{type(e).__name__}: {str(e)[:200]}(可稍后重新触发)"
+            self._dl_finished.emit(ok, msg)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_model_dl_progress(self, done, total):
+        """主线程:更新按钮百分比 + 环形指示器进度。"""
+        pct = int(done * 100 / total) if total else 0
+        self.model_dl_btn.setText(t(f"下载中 {pct}%…", f"Downloading {pct}%…"))
+        ring = getattr(self.parent(), "dl_indicator", None) if self.parent() else None
+        if ring is not None:
+            ring.set_progress(done, total)
+
+    def _on_model_dl_finished(self, ok, msg):
+        """主线程:下载结束,恢复按钮状态 + 提示 + 停环形指示器。"""
+        self._model_downloading = False
+        self.model_dl_status.setText(msg)
+        ring = getattr(self.parent(), "dl_indicator", None) if self.parent() else None
+        if ring is not None:
+            ring.set_progress(1, 1)
+            ring.setToolTip("本地模型下载" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(2000, ring.hide)
+        if ok:
+            self.model_dl_btn.setText(t("已就绪", "Ready"))
+            self.model_dl_btn.setEnabled(False)
+        else:
+            # 失败 → 可重试
+            self.model_dl_btn.setText(t("下载本地模型", "Download local model"))
+            self.model_dl_btn.setEnabled(True)
