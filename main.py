@@ -576,12 +576,16 @@ class MainWindow(QMainWindow):
             self._dl_timer = QTimer(self)
             self._dl_timer.timeout.connect(self._drain_download)
             self._dl_timer.start(80)
-        # 左下角指示器:显示 + 归零
+        # 左下角指示器:显示 + 归零;下载 tab 进度条也归零
         self._dl_log = []
         self._dl_progress = (0, 1)
         self.dl_indicator.set_progress(0, 1)
         self.dl_indicator.setToolTip("下载中,点击查看详情")
         self.dl_indicator.show()
+        try:
+            self.download_tab.set_progress(0, 1)
+        except Exception:
+            pass
 
         def status(msg):
             self._dl_queue.put(("status", str(msg)))
@@ -1078,7 +1082,7 @@ class MainWindow(QMainWindow):
 
     # ---- 下载 Mod 选项卡 ----
     def refresh_instances(self):
-        """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的打小抄"""
+        """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的实例记录"""
         self._tidy_base_versions()   # 把纯基础原版收进 _versions 仓库(一次性迁移)
         instances = scan_instances(paths.GAME_DIR)
 
@@ -1101,7 +1105,7 @@ class MainWindow(QMainWindow):
         # 同步到首页面板(实例数量 + 当前选择态)
         self.home_panel.set_current_instances(shown)
 
-        # 3) 打小抄(实例清单备忘,可手动编辑)
+        # 3) 实例记录(实例清单备忘,可手动编辑补充)
         self.write_cheat_sheet(shown)
 
         # 4) 资源中心的目标实例卡片(Mod/光影/数据包浏览器)
@@ -1226,19 +1230,43 @@ class MainWindow(QMainWindow):
         return QIcon(pixmap)
 
     def write_cheat_sheet(self, instances: list):
-        """在 versions 目录生成"打小抄.txt":一份实例清单备忘,可手动编辑补充说明"""
-        path = os.path.join(paths.GAME_DIR, "versions", "打小抄.txt")
-        lines = [
-            "我的实例小抄(启动器自动生成,可手动编辑补充,如每行后面加说明)",
-            "=" * 32,
-        ]
-        for inst in instances:
-            lines.append(f"{inst['id']}  ({inst['loader'] or '原版'} ← {inst['base']})")
+        """在 versions 目录生成「实例记录.json」:实例清单备忘,可手动编辑补充说明。
+        用户手动加过的备注(note)会在刷新时保留,不覆盖;旧版「打小抄.txt」自动清理。"""
+        import json
+        import datetime
+        path = os.path.join(paths.GAME_DIR, "versions", "实例记录.json")
+        old_notes = {}
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    old = json.load(f)
+                for it in old.get("instances", []):
+                    if isinstance(it, dict) and it.get("id") and it.get("note"):
+                        old_notes[it["id"]] = it["note"]
+            except Exception:
+                pass
+        data = {
+            "note": "实例记录(启动器自动生成,可手动编辑补充说明;每实例的 note 会保留)",
+            "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "instances": [
+                {"id": inst["id"], "loader": inst.get("loader") or "原版",
+                 "base": inst.get("base", ""), "note": old_notes.get(inst["id"], "")}
+                for inst in instances
+            ],
+        }
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
+                json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
-            pass  # 备忘文件写不写都不影响功能
+            pass  # 记录文件写不写都不影响功能
+
+        # 清理旧版(打小抄.txt → 实例记录.json)
+        old_txt = os.path.join(paths.GAME_DIR, "versions", "打小抄.txt")
+        try:
+            if os.path.exists(old_txt):
+                os.remove(old_txt)
+        except Exception:
+            pass
 
     def launch_selected_instance(self):
         """启动"我的版本"里选中的实例(双击或按钮)"""

@@ -190,7 +190,7 @@ def _coord_path(coord: str, lib_dir: str) -> str:
 
 def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
                           java_exe: str, maven_ver: str,
-                          status_callback=None) -> None:
+                          status_callback=None, progress_callback=None) -> None:
     """跑 installer 的 processors:把补丁打到原版 jar 上,生成 loader 的 client jar。
 
     Forge/NeoForge 的 client jar 不在任何仓库里,是安装器现场用 BINARYPATCH 打出来的。
@@ -284,6 +284,9 @@ def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
         if result.returncode != 0:
             tail = (result.stdout or "")[-400:] + (result.stderr or "")[-400:]
             raise RuntimeError(f"Forge 补丁步骤 {i + 1} 失败:\n{tail}")
+        # 每跑完一个处理器报一次进度,让进度条在"打补丁"阶段也动(而不是卡着)
+        if progress_callback:
+            progress_callback(i + 1, len(processors))
 
 
 def _download_maven_path(path: str, dest: str) -> None:
@@ -379,7 +382,8 @@ def install_loader(loader: str, mc: str, game_dir: str,
                 from java_manager import ensure_java
                 java_exe = ensure_java(os.path.join(game_dir, "runtime"), 17)
             _forge_run_processors(installer_profile, forge_installer, game_dir, java_exe,
-                                  maven_ver=loader_ver, status_callback=status_callback)
+                                  maven_ver=loader_ver, status_callback=status_callback,
+                                  progress_callback=progress_callback)
 
         # 4) 保存加载器版本 JSON + 拷贝原版 jar 到实例目录
         inst_dir = os.path.join(game_dir, "versions", version_id)
