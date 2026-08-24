@@ -174,6 +174,62 @@ TOOLS = [
 WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "launch_game",
                "backup_instance", "set_setting"}
 
+# ================= t16 云端工具按需挂载 =================
+# 目标:云端每轮请求不再全量带 17 个工具 schema(每轮浪费几千 token),
+# 按请求意图只挂 通用 + 相关组;同时工具集合在轮次间保持稳定,利于 DeepSeek 前缀缓存。
+# 关键约束:本地路径(local_ai.schemas_from_assistant_tools()/build_gbnf()/评审器)
+# 继续用全量 TOOLS——按需挂载只影响云端 body["tools"]。
+
+# 云端回复最大长度(限制长回复;多轮工具调用轮次同用)
+CLOUD_MAX_TOKENS = 1024
+# 云端单请求工具数量上限(通用 + 相关组;防多组同时命中时工具集膨胀)
+CLOUD_MAX_TOOLS = 10
+
+# 任何请求都带的通用工具(交互确认 / 通用查询 / 实例查询——模型经常先查实例再执行)
+GENERAL_TOOLS = ["ask_user", "get_settings", "list_instances"]
+
+# 工具分组(请求意图 → 相关工具)
+TOOL_GROUPS = {
+    "settings": ["set_setting"],
+    "instance": ["install_instance", "launch_game", "backup_instance"],
+    "mod": ["search_mods", "install_mod", "install_mods", "list_mods"],
+    "recipe": ["get_recipe_path", "compare_items"],
+    "command": ["send_game_command", "get_command_guide"],
+    "log": ["read_instance_log", "read_crash_report"],
+    "keybind": ["get_key_bindings"],
+}
+
+# 分组命中关键词(请求文本命中即挂该组;宁可多挂不可漏挂——漏挂会导致模型选不到工具)
+TOOL_GROUP_KEYWORDS = {
+    "settings": ["设置", "内存", "用户名", "权限", "改成", "修改", "memory", "username"],
+    "instance": ["建", "创建", "下载", "实例", "启动", "备份", "原版", "装一个", "install"],
+    "mod": ["mod", "模组", "装", "安装", "钠", "锂", "玉", "jei", "sodium", "lithium",
+            "jade", "搜", "搜索", "fabric", "forge"],
+    "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
+    "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
+    "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因"],
+    "keybind": ["按键", "绑定", "键位", "keybind", "空格"],
+}
+
+
+def mount_tools_for(text: str) -> list:
+    """云端按需挂载工具 schema:通用工具 + 请求文本命中关键词的组(按 TOOL_GROUPS)。
+    返回 TOOLS 的子集(每轮请求固定,轮间稳定利于前缀缓存)。
+    本地路径不受影响(schemas_from_assistant_tools 仍返回全量 TOOLS)。"""
+    tl = (text or "").lower()
+    names = list(GENERAL_TOOLS)
+    for g, kws in TOOL_GROUP_KEYWORDS.items():
+        if any(k.lower() in tl for k in kws):
+            for n in TOOL_GROUPS[g]:
+                if n not in names:
+                    names.append(n)
+    by_name = {t["function"]["name"]: t for t in TOOLS}
+    mounted = [by_name[n] for n in names if n in by_name]
+    if len(mounted) > CLOUD_MAX_TOOLS:
+        # 超限截断:保通用(前 3 个),砍掉排后的组工具
+        mounted = mounted[:CLOUD_MAX_TOOLS]
+    return mounted
+
 
 def build_executor(settings: dict):
     """构造工具执行器:LLM 只能"提议",真正执行在这里,权限检查也在这里。
@@ -224,10 +280,14 @@ def chat_with_tools(messages: list, settings: dict, tools: list,
 
     working = list(messages)
     for _round in range(max_rounds):
-        body = {"model": settings["ai_model"], "messages": working}
+        body = {"model": settings["ai_model"], "messages": working,
+                "max_tokens": CLOUD_MAX_TOKENS}   # t16:限制云端长回复
         if tools:
             body["tools"] = tools
-        resp = requests.post(url, headers=headers, json=body, timeout=180)
+        resp = requests.post(url, headers=headers, json=body, timeout=(15, 180))
+        # t15 修复:超时拆分 (connect, read)——连接 15 秒快速失败(API 配置错误/网络不通不再干等
+        # 3 分钟),读取 180 秒(长回复/多工具轮用);resp.raise_for_status() 的 HTTPError
+        # 由调用方 worker 用 _friendly_cloud_error 翻译成业务化中文提示。
         resp.raise_for_status()
         msg = resp.json()["choices"][0]["message"]
         working.append(msg)
@@ -261,6 +321,35 @@ def chat_with_tools(messages: list, settings: dict, tools: list,
             working.append({"role": "tool", "tool_call_id": call["id"], "content": result})
     reply = "(达到最大工具轮数,已停止。可以让我继续,或拆分任务。)"
     return (reply, working) if return_messages else reply
+
+
+def _friendly_cloud_error(e: Exception) -> str:
+    """把云端请求异常翻译成业务化中文提示(参考 _cloud_unavailable_hint 风格,不抛技术栈)。
+
+    分类:
+      - HTTPError 401 → API Key 无效/未配置;402 → 余额不足;404 → 接口地址/模型名不存在;
+        429 → 太频繁;其他 4xx/5xx → 服务返回错误码
+      - ConnectionError / Timeout → 无法连接(网络/接口地址)
+      - 其他 → 原样(保留排查信息)
+    """
+    import requests
+    if isinstance(e, requests.exceptions.HTTPError):
+        resp = getattr(e, "response", None)
+        code = resp.status_code if resp is not None else None
+        if code == 401:
+            return "云端服务拒绝了请求:API Key 无效或未配置(设置 → AI 助手 → 检查密钥)。"
+        if code == 402:
+            return "云端服务返回 402:账户余额不足,请充值后再试。"
+        if code == 404:
+            return "云端服务返回 404:接口地址或模型名不存在,请检查设置里的接口地址/模型名。"
+        if code == 429:
+            return "云端服务返回 429:请求太频繁,请稍后再试。"
+        return (f"云端服务返回错误 {code if code is not None else '?'}:"
+                f"请检查设置(接口地址/模型名/密钥)是否正确。")
+    if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return ("无法连接云端服务:请检查网络,或确认设置里的接口地址正确"
+                "(可先在浏览器打开该地址验证)。")
+    return str(e) or f"{type(e).__name__}"
 
 
 class _Signals(QObject):
@@ -483,15 +572,23 @@ _LOCAL_MODES = [
 class AISettingsForm(QWidget):
     """AI 模型设置(拆分云端 / 本地两大块)。
 
-    - 顶部「当前使用」:云端模型 / 本地模型(单选)—— 决定 AI 对话走哪边。
+    - 顶部「当前使用」:AI 策略三档(本地优先 / 云端优先 / 混合)——决定 AI 对话走哪边,
+      同时决定上方显示云端还是本地配置块(混合两者都显示)。
     - 云端块:服务商(DeepSeek/OpenRouter/硅基流动/智谱/通义/自定义)+ 接口地址 + API 密钥 + 模型。
     - 本地块:本地类型(内置 / Ollama / LM Studio)+
       内置:模型下载状态 + 自动下载;Ollama/LM Studio:服务地址 + 模型名。
     - 通用:文件权限、上下文窗口、图片输入(按模型自动)、游戏内 AI 通道。
 
-    保存时据当前来源推导「生效」的 ai_provider / ai_base_url / ai_api_key / ai_model,
-    后端(chat/task_router/local 路由)读到的是统一的一套,零改动。
+    保存时据当前策略/来源推导「生效」的 ai_provider / ai_base_url / ai_api_key / ai_model,
+    以及 ai_strategy / ai_source,后端(chat/task_router/local 路由)读到的是统一的一套。
     """
+
+    # AI 策略三档:值 → (文案, 生效来源 cloud/local, 是否两边都显示)
+    _STRATEGIES = [
+        ("local_first", "本地优先(省钱)", "local", False),
+        ("cloud_first", "云端优先(更强)", "cloud", False),
+        ("hybrid", "混合(平衡)", "cloud", True),
+    ]
 
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
@@ -501,12 +598,16 @@ class AISettingsForm(QWidget):
         self._apply_source_visibility()
 
     def _build_ui(self):
-        # ---------- 当前使用(来源单选) ----------
-        self.source_cloud = QRadioButton("☁ 云端模型")
-        self.source_local = QRadioButton("🖥 本地模型")
-        self.source_cloud.setToolTip("走云端 API(DeepSeek / OpenRouter / 硅基流动 / 智谱 / 通义 / 自定义)")
-        self.source_local.setToolTip("本地推理(内置小模型 / Ollama / LM Studio),离线可用")
-        self.source_cloud.toggled.connect(self._apply_source_visibility)
+        # ---------- 当前使用(AI 策略三档,合并了原"云端/本地"单选) ----------
+        self.strategy_combo = QComboBox()
+        for _key, label, _src, _both in self._STRATEGIES:
+            self.strategy_combo.addItem(label, _key)
+        self.strategy_combo.setToolTip(
+            "决定 AI 对话默认怎么分流:\n"
+            "· 本地优先(省钱):简单操作用本地小模型,复杂任务自动转云端;\n"
+            "· 云端优先(更强):一切走云端大模型(需联网,未配云端会自动降级);\n"
+            "· 混合(平衡):按规则分流 + 模型复核,本地/云端平衡。")
+        self.strategy_combo.currentIndexChanged.connect(self._apply_source_visibility)
 
         # ---------- 云端块 ----------
         self.cloud_provider = QComboBox()
@@ -596,12 +697,10 @@ class AISettingsForm(QWidget):
 
         # ---------- 布局 ----------
         source_row = QHBoxLayout()
-        source_row.addWidget(self.source_cloud)
-        source_row.addWidget(self.source_local)
-        source_row.addStretch()
+        source_row.addWidget(self.strategy_combo, 1)
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
-        layout.addWidget(QLabel("当前使用:"))
+        layout.addWidget(QLabel("当前使用(AI 策略):"))
         layout.addLayout(source_row)
         layout.addWidget(cloud_box)
         layout.addWidget(local_box)
@@ -622,9 +721,13 @@ class AISettingsForm(QWidget):
         """从 settings 载入(组合/文本设置时屏蔽信号,避免 _fill_* 覆盖用户已存值)。"""
         s = self._settings
         self.blockSignals(True)
-        source = s.get("ai_source", "cloud")
-        self.source_cloud.setChecked(source != "local")
-        self.source_local.setChecked(source == "local")
+        # AI 策略:优先读 ai_strategy;旧配置没有时按 ai_source 推导
+        strategy = s.get("ai_strategy", "") or ""
+        idx = self.strategy_combo.findData(strategy)
+        if idx < 0:
+            idx = self.strategy_combo.findData(
+                "local" if s.get("ai_source", "cloud") == "local" else "cloud_first")
+        self.strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
         # 云端
         self.cloud_provider.setCurrentIndex(
             self.cloud_provider.findData(s.get("ai_cloud_provider", "deepseek")) if self.cloud_provider.findData(
@@ -649,14 +752,34 @@ class AISettingsForm(QWidget):
         idx = self.ai_in_game.findData(ig)
         self.ai_in_game.setCurrentIndex(idx if idx >= 0 else 0)
         self.blockSignals(False)
-        self._toggle_local_visibility()   # 仅切换显隐,不改用户已存值
+        self._apply_source_visibility()    # 按策略显示云端/本地块
+        self._toggle_local_visibility()    # 仅切换子区显隐,不改用户已存值
         self._refresh_local_status()
 
-    # ---- 来源/本地类型切换 ----
+    # ---- 当前策略 / 来源切换 ----
+    def _current_strategy(self) -> str:
+        return self.strategy_combo.currentData() or "local_first"
+
+    def _is_cloud(self) -> bool:
+        """当前生效来源是否云端(local_first→本地;cloud_first/hybrid→云端生效)。"""
+        strategy = self._current_strategy()
+        for _key, _label, src, _both in self._STRATEGIES:
+            if _key == strategy:
+                return src == "cloud"
+        return False
+
     def _apply_source_visibility(self, *_):
-        is_cloud = self.source_cloud.isChecked()
-        self.cloud_box.setVisible(is_cloud)
-        self.local_box.setVisible(not is_cloud)
+        """按 AI 策略显示云端/本地配置块:本地优先只显本地、云端优先只显云端、混合两边都显。"""
+        strategy = self._current_strategy()
+        both = False
+        for _key, _label, _src, _b in self._STRATEGIES:
+            if _key == strategy:
+                both = _b
+                break
+        show_cloud = both or self._is_cloud()
+        show_local = both or not self._is_cloud()
+        self.cloud_box.setVisible(show_cloud)
+        self.local_box.setVisible(show_local)
 
     def _toggle_local_visibility(self, *_):
         """仅按本地类型切换子区显隐 + 内置模型只读,不改用户已存值。"""
@@ -716,7 +839,7 @@ class AISettingsForm(QWidget):
 
     def _auto_vision(self):
         """切服务商/模型时,按所选(生效的)模型是否能看图自动设定「图片输入」开关。"""
-        if self.source_cloud.isChecked():
+        if self._is_cloud():
             prov, model = self.cloud_provider.currentData(), self.cloud_model.text().strip()
         else:
             prov = "local_builtin" if self.local_mode.currentData() == "builtin" else self.local_mode.currentData()
@@ -730,8 +853,8 @@ class AISettingsForm(QWidget):
             self.vision_check.setToolTip("该模型不支持看图(多模态),图片功能已自动关闭。")
 
     def values(self) -> dict:
-        """收集表单内容为设置字段,并据当前来源推导「生效」的一组 ai_provider/... 给后端。"""
-        if self.source_cloud.isChecked():
+        """收集表单内容为设置字段,并据当前策略推导「生效」的一组 ai_provider/... 给后端。"""
+        if self._is_cloud():
             source = "cloud"
             provider = self.cloud_provider.currentData()
             base_url = self.cloud_base_url.text().strip()
@@ -746,6 +869,7 @@ class AISettingsForm(QWidget):
             model = LOCAL_MODEL_ID if mode == "builtin" else self.local_model.text().strip()
         return {
             "ai_source": source,
+            "ai_strategy": self._current_strategy(),
             # 云端组
             "ai_cloud_provider": self.cloud_provider.currentData(),
             "ai_cloud_base_url": self.cloud_base_url.text().strip(),
@@ -967,16 +1091,35 @@ class _ChatInput(QPlainTextEdit):
         # 📷/🖼 是图片相关按钮,模型不支持多模态时隐藏(见 set_vision_enabled)
         self._corner_btns = [self.send_btn, self.test_btn, self.img_btn, self.recent_btn]
         self._vision = True
+        self._has_model = True            # 是否已选择模型(未选择时隐藏发送/自测按钮)
+
+    def set_has_model(self, on: bool):
+        """未选择模型时隐藏「发送」与「自测工具调用」按钮,并禁用发送,避免空模型空转。"""
+        self._has_model = bool(on)
+        self.send_btn.setVisible(self._has_model)
+        self.test_btn.setVisible(self._has_model)
+        self._refresh_placeholder()
+        self._layout_corner_buttons()   # 重新摆放右下角按钮
+
+    def model_selected(self) -> bool:
+        return self._has_model
 
     def set_vision_enabled(self, on: bool):
         """按模型是否支持多模态显示/隐藏图片相关按钮(📷 添加图片、🖼 最近截图)"""
         self._vision = bool(on)
         self.img_btn.setVisible(self._vision)
         self.recent_btn.setVisible(self._vision)
-        self.setPlaceholderText(
-            "问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)" if self._vision
-            else "问 AI 任何问题…(Enter 发送, Shift+Enter 换行)")
+        self._refresh_placeholder()      # 重新生成占位文案(考虑是否已选模型)
         self._layout_corner_buttons()   # 重新摆放右下角按钮
+
+    def _refresh_placeholder(self):
+        """根据 已选模型 与 多模态 状态生成输入框占位文案。"""
+        if not self._has_model:
+            self.setPlaceholderText("请先在设置 → AI 助手里选择模型")
+        elif self._vision:
+            self.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)")
+        else:
+            self.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行)")
 
     def vision_enabled(self) -> bool:
         return self._vision
@@ -1158,6 +1301,10 @@ class AIChatDock(QDockWidget):
         else:
             on = vis
         self.input.set_vision_enabled(on)
+        # 未选择模型 → 隐藏发送/自测按钮,占位提示去设置里选
+        has_model = bool((self.settings.get("ai_model") or "").strip()) \
+            or bool((self.settings.get("ai_local_model") or "").strip())
+        self.input.set_has_model(has_model)
         # 模型不支持图片时,清掉还没发送的图片(按钮已隐藏,防止残留)
         if not on and self.pending_images:
             self.pending_images = []
@@ -1668,6 +1815,11 @@ class AIChatDock(QDockWidget):
         self.send()
 
     def send(self):
+        # 未选择模型 → 提示去设置里选,不发(按钮虽已隐藏,这里兜底)
+        if not ((self.settings.get("ai_model") or "").strip()
+                or (self.settings.get("ai_local_model") or "").strip()):
+            self._append_system("尚未选择 AI 模型,请先在 设置 → AI 助手 里选择一个模型。")
+            return
         text = self.input.text().strip()
         images = list(self.pending_images)
         if images and not self._vision_on():
@@ -1807,7 +1959,14 @@ class AIChatDock(QDockWidget):
                         self.signals.reply.emit(self._cloud_unavailable_hint())
                         self.signals.ring_update.emit()
                         return
-                result = chat_with_tools(messages, s, TOOLS, executor,
+                # t15 修复:纯云端路径(is_local=False)进 chat_with_tools 前也校验云端通道——
+                # ai_base_url 无效(空/无 http scheme)时不发起请求,直接友好提示
+                # (is_local 分支内已有同款检查,这里补云端 provider 直通路径的漏网)。
+                if not self._cloud_available():
+                    self.signals.reply.emit(self._cloud_unavailable_hint())
+                    self.signals.ring_update.emit()
+                    return
+                result = chat_with_tools(messages, s, mount_tools_for(text), executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
                                          return_messages=True)
                 if isinstance(result, tuple):
@@ -1822,7 +1981,9 @@ class AIChatDock(QDockWidget):
                 self.signals.reply.emit(reply)
                 self.signals.ring_update.emit()
             except Exception as e:
-                self.signals.error.emit(str(e))
+                # t15 修复:请求异常翻译成业务化中文(401/402/404/429/连接失败/超时),
+                # 不再把技术栈原样冒泡给用户
+                self.signals.error.emit(_friendly_cloud_error(e))
 
         threading.Thread(target=worker, daemon=True).start()
 

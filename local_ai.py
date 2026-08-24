@@ -291,10 +291,12 @@ class GrammarToolEngine:
         _ensure_llama_runtime()
         if not os.path.exists(SERVER_EXE):
             raise RuntimeError(f"llama-server 不存在:{SERVER_EXE}(先运行 .tmp/full_llamacpp.py)")
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.proc = subprocess.Popen(
             [SERVER_EXE, "-m", model_path, "--port", str(self.port),
              "-c", "2048", "--no-webui", "-np", "1", "--log-disable"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=flags)
         for _ in range(wait):
             try:
                 if requests.get(f"{self.base}/health", timeout=3).status_code == 200:

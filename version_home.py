@@ -59,6 +59,8 @@ _AVATAR_PALETTE = ["#5B8DEF", "#6BCB77", "#FF6B6B", "#FFD93D", "#B980F0",
 # 头像尺寸:默认 64,窗口/卡片很小时主动缩小,避免与昵称/登录方式重叠
 _AVATAR_BASE = 64
 _AVATAR_MIN = 28
+# 头像随卡片实际高度缩放:高度越紧,头像越小(避免卡在内容最小高度上不缩)
+_AVATAR_SCALE = 0.5
 
 
 def _avatar_pixmap(name: str, size: int = _AVATAR_BASE) -> QPixmap:
@@ -161,13 +163,18 @@ class LoginCard(QWidget):
         self._apply_avatar_size()
 
     def _apply_avatar_size(self):
-        """按卡片可用空间计算合适头像尺寸(太小则缩小),并同步昵称字号。
+        """按卡片实际高度计算头像尺寸(高度越紧越小),并同步昵称字号。
 
-        头像随卡片宽度/高度成比例缩放:空间宽裕 → 回到 64;空间紧张 → 主动缩小,
-        避免头像与昵称/登录方式在小窗口里重叠。"""
-        avail = max(36, min(self.width(), self.height()) - 40)
-        # 0.55 系数:卡片可用空间约 116px 时头像降到 64 以下并继续随空间缩小
-        size = int(round(max(_AVATAR_MIN, min(_AVATAR_BASE, avail * 0.55))))
+        之前按"可用空间"算,但卡片有 ~156px 内容最小高度,空间一直够,头像不缩;
+        且卡片被布局压到 ~142px 时头像仍 64,昵称会叠到头像上。
+        这里改为:高度宽裕(≥150)用默认 64;高度不足时用「卡片高 − 下方信息固定高」,
+        保证昵称/登录方式始终有空间,不再重叠。"""
+        h = self.height()
+        if h >= 150:
+            size = _AVATAR_BASE
+        else:
+            # 下方昵称/状态/登录按钮 + 内边距约需 92px,头像只占剩余
+            size = int(round(max(_AVATAR_MIN, min(_AVATAR_BASE, h - 92))))
         if size != self._avatar_size:
             self._avatar_size = size
             self.avatar_label.setFixedSize(size, size)

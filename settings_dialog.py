@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -60,10 +61,10 @@ class SettingsDialog(QDialog):
 
         # ---------- 标签页:游戏 / 界面 / AI 助手 / 镜像源 ----------
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_game_tab(), "游戏")
-        self.tabs.addTab(self._build_ui_tab(), "界面")
-        self.tabs.addTab(self._build_ai_tab(), "AI 助手")
-        self.tabs.addTab(self._build_mirror_tab(), "镜像源")
+        self.tabs.addTab(self._wrap_scroll(self._build_game_tab()), "游戏")
+        self.tabs.addTab(self._wrap_scroll(self._build_ui_tab()), "界面")
+        self.tabs.addTab(self._wrap_scroll(self._build_ai_tab()), "AI 助手")
+        self.tabs.addTab(self._wrap_scroll(self._build_mirror_tab()), "镜像源")
         if tab == "mirror":
             self.tabs.setCurrentIndex(self.tabs.count() - 1)
 
@@ -76,6 +77,15 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self.tabs)
         layout.addWidget(buttons)
+
+    def _wrap_scroll(self, content: QWidget) -> QWidget:
+        """把标签页内容包进一个可滚动区域:内容高过窗口时出现滚轮,不再被裁剪/重叠。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
 
     # ================= 游戏 =================
     def _build_game_tab(self) -> QWidget:
@@ -167,30 +177,9 @@ class SettingsDialog(QDialog):
     def _build_ai_tab(self) -> QWidget:
         from PySide6.QtWidgets import QWidget
 
-        # AI 策略三档:决定 AI 对话走本地/云端/混合(业务化文案,保存到 ai_strategy)
-        self.ai_strategy_combo = QComboBox()
-        for label, value in (("本地优先(省钱)", "local_first"),
-                             ("云端优先(更强)", "cloud_first"),
-                             ("混合(平衡)", "hybrid")):
-            self.ai_strategy_combo.addItem(label, value)
-        cur_strategy = self.settings.get("ai_strategy", "local_first") or "local_first"
-        idx = self.ai_strategy_combo.findData(cur_strategy)
-        self.ai_strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.ai_strategy_combo.setToolTip(
-            "决定 AI 对话默认怎么分流:\n"
-            "· 本地优先(省钱):简单操作用本地小模型,复杂任务自动转云端;\n"
-            "· 云端优先(更强):一切走云端大模型(需联网,未配云端会自动降级);\n"
-            "· 混合(平衡):按规则分流 + 模型复核,本地/云端平衡。")
-        ai_strategy_hint = QLabel("AI 策略:本地更省钱、云端更强;切换后立即生效,无需重启。")
-        ai_strategy_hint.setWordWrap(True)
-        ai_strategy_hint.setStyleSheet("color: #888888;")
-        ai_strategy_row = QHBoxLayout()
-        ai_strategy_row.addWidget(QLabel("AI 策略:"))
-        ai_strategy_row.addWidget(self.ai_strategy_combo, 1)
-
         self.ai_form = AISettingsForm(self.settings)
         ai_hint = QLabel("AI 设置会自动保存,下次打开启动器仍然有效。\n"
-                         "· 云/本地两块分开配:顶部选「当前使用」哪边,AI 对话就走哪边;\n"
+                         "· 云/本地两块分开配:顶部选「当前使用(AI 策略)」哪档,AI 对话就走哪边;\n"
                          "· 发图片(多模态):只有所选模型本身会\"看图\"才有效,内置本地模型自动关闭;\n"
                          "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
         ai_hint.setWordWrap(True)
@@ -223,8 +212,6 @@ class SettingsDialog(QDialog):
 
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.addLayout(ai_strategy_row)
-        lay.addWidget(ai_strategy_hint)
         lay.addWidget(self.ai_form)
         lay.addLayout(mod_ai_row)
         lay.addWidget(mod_ai_hint)
@@ -383,8 +370,7 @@ class SettingsDialog(QDialog):
         self.settings["game_dir"] = self.game_dir_edit.text().strip()
         self.settings["language"] = self.language_combo.currentData()
         self.settings["ui_mode"] = self.ui_mode_combo.currentData()
-        self.settings.update(self.ai_form.values())   # 含 ai_multimodal(多模态图片输入)
-        self.settings["ai_strategy"] = self.ai_strategy_combo.currentData()
+        self.settings.update(self.ai_form.values())   # 含 ai_strategy/ai_source/ai_multimodal(多模态图片输入)
         self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
@@ -430,12 +416,16 @@ class SettingsDialog(QDialog):
         self.model_dl_status.setText(t("正在后台下载本地模型(镜像优先)…",
                                        "Downloading local model (mirror first)…"))
 
-        # 左下角环形指示器开始读条(若宿主 MainWindow 有 dl_indicator)
-        ring = getattr(self.parent(), "dl_indicator", None) if self.parent() else None
-        if ring is not None:
-            ring.set_progress(0, 1)
-            ring.setToolTip("正在下载本地模型,点击查看详情")
-            ring.show()
+        # 左下角环形指示器开始读条(优先经宿主 MainWindow 写日志,详情对话框可见进度)
+        host = self.parent()
+        if host is not None and hasattr(host, "model_download_progress"):
+            host.model_download_progress("正在下载本地模型(约500MB,镜像优先)…", 0, 1)
+        else:
+            ring = getattr(host, "dl_indicator", None) if host else None
+            if ring is not None:
+                ring.set_progress(0, 1)
+                ring.setToolTip("正在下载本地模型,点击查看详情")
+                ring.show()
 
         def worker():
             ok, msg = True, "✅ 本地模型下载完成,之后可用内置本地模型。"
@@ -452,23 +442,31 @@ class SettingsDialog(QDialog):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_model_dl_progress(self, done, total):
-        """主线程:更新按钮百分比 + 环形指示器进度。"""
+        """主线程:更新按钮百分比 + 环形指示器进度(并写入主窗口下载日志/详情)。"""
         pct = int(done * 100 / total) if total else 0
         self.model_dl_btn.setText(t(f"下载中 {pct}%…", f"Downloading {pct}%…"))
-        ring = getattr(self.parent(), "dl_indicator", None) if self.parent() else None
-        if ring is not None:
-            ring.set_progress(done, total)
+        host = self.parent()
+        if host is not None and hasattr(host, "model_download_progress"):
+            host.model_download_progress("", done, total)
+        else:
+            ring = getattr(host, "dl_indicator", None) if host else None
+            if ring is not None:
+                ring.set_progress(done, total)
 
     def _on_model_dl_finished(self, ok, msg):
-        """主线程:下载结束,恢复按钮状态 + 提示 + 停环形指示器。"""
+        """主线程:下载结束,恢复按钮状态 + 提示 + 停环形指示器(并写主窗口下载日志)。"""
         self._model_downloading = False
         self.model_dl_status.setText(msg)
-        ring = getattr(self.parent(), "dl_indicator", None) if self.parent() else None
-        if ring is not None:
-            ring.set_progress(1, 1)
-            ring.setToolTip("本地模型下载" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(2000, ring.hide)
+        host = self.parent()
+        if host is not None and hasattr(host, "model_download_done"):
+            host.model_download_done(ok, msg)
+        else:
+            ring = getattr(host, "dl_indicator", None) if host else None
+            if ring is not None:
+                ring.set_progress(1, 1)
+                ring.setToolTip("本地模型下载" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
+                from PySide6.QtCore import QTimer
+                QTimer.singleShot(2000, ring.hide)
         if ok:
             self.model_dl_btn.setText(t("已就绪", "Ready"))
             self.model_dl_btn.setEnabled(False)

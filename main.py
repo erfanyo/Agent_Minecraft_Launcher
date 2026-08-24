@@ -446,12 +446,8 @@ class MainWindow(QMainWindow):
             lines.append(f"当前选中的实例: {inst['id']}"
                          f"(加载器:{inst['loader'] or '原版'}, 基础版本:{inst['base']})")
         lines.append(permission_instructions(self.settings))
-        lines.append("你可以调用工具:list_instances / search_mods / list_mods / "
-                     "read_instance_log / read_crash_report / get_settings / "
-                     "install_instance(创建/下载实例) / install_mod / install_mods(批量装 Mod) / "
-                     "launch_game(启动实例) / backup_instance / set_setting / send_game_command / "
-                     "get_command_guide / get_recipe_path / compare_items / ask_user(向用户确认)。"
-                     "写操作需要工作区写权限,装 Mod 前会自动备份。")
+        # t16:不再在 system 里枚举工具名——工具 schema 由请求 body 提供(云端按需挂载),
+        # 枚举既冗余(每轮多花几百 token)又会误导模型去调用未挂载的工具。
         # 技能提示:任务拆分 / 指令指南 等启用的技能注入行为指导
         for hint in self.skill_mgr.ai_hints():
             lines.append(hint)
@@ -618,6 +614,29 @@ class MainWindow(QMainWindow):
         self.dl_indicator.set_progress(done, total)
         self.dl_indicator.setToolTip("下载中,点击查看详情")
         self.dl_indicator.show()
+
+    def model_download_progress(self, status: str, done: int, total: int):
+        """本地模型下载进度回调:写进下载日志 + 更新左下角圆环指示器,
+        这样点圆环 → 下载详情也能看到模型下载进度(不只是主界面圆环动)。"""
+        if status:
+            self._dl_log.append(status)
+        self._dl_progress = (done, total)
+        self.dl_indicator.set_progress(done, total)
+        if status and "失败" in status:
+            self.dl_indicator.setToolTip("本地模型下载失败,点击查看详情")
+        elif status and ("完成" in status or "已就绪" in status.lower()):
+            self.dl_indicator.setToolTip("本地模型下载完成,点击查看详情")
+        else:
+            self.dl_indicator.setToolTip("正在下载本地模型,点击查看详情")
+        self.dl_indicator.show()
+
+    def model_download_done(self, ok: bool, msg: str):
+        """本地模型下载结束:写日志 + 满环 + 收起(2s)。"""
+        self._dl_log.append(msg)
+        self._dl_progress = (1, 1)
+        self.dl_indicator.set_progress(1, 1)
+        self.dl_indicator.setToolTip("本地模型下载" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
+        QTimer.singleShot(2000, self.dl_indicator.hide)
 
     def game_dir_for(self, version_id: str) -> str:
         """PCL2 风格:versions/<版本ID>/ 就是该版本的实例(游戏目录)。
