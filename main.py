@@ -1255,6 +1255,9 @@ class MainWindow(QMainWindow):
         self.log_timer.timeout.connect(self._drain_log)
         self.log_timer.start(100)
 
+        # 记录本次运行起点,用于判断"本次是否新产生了崩溃报告"(即使退出码为 0)
+        self._game_started_at = time.time()
+
     def _read_process(self):
         """后台线程:一行行读游戏输出,放进队列(生产)"""
         for line in self.game_process.stdout:
@@ -1287,6 +1290,9 @@ class MainWindow(QMainWindow):
                     pass
                 if code not in (0, None):
                     self._auto_debug(code)   # 异常退出 → 自动收集日志给 AI 分析
+                elif self._detect_log_crash():
+                    # 很多崩溃(尤其 F3+C 调试崩溃/Mod 崩溃)退出码其实是 0,但留下了崩溃报告或日志特征
+                    self._auto_debug(0)
                 return
             self.log_view.appendPlainText(line)
             self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(自动重启等)
@@ -1299,8 +1305,37 @@ class MainWindow(QMainWindow):
             self.instance_details.shell.switch_by_label("游戏日志")
 
     # ---- 自动 debug:游戏异常退出时收集日志,让 AI 分析 ----
+    def _detect_log_crash(self) -> bool:
+        """很多崩溃(如 F3+C 调试崩溃、Mod 崩溃)退出码是 0,但留下了崩溃报告或日志特征。
+        这里只判断"本次运行是否发生崩溃",不弹窗。"""
+        inst_id = getattr(self, "_running_instance_id", None)
+        game_dir = self.game_dir_for(inst_id) if inst_id else paths.GAME_DIR
+        # 1) 本次运行期间是否新产生了崩溃报告
+        cr_dir = os.path.join(game_dir, "crash-reports")
+        start = float(getattr(self, "_game_started_at", 0) or 0)
+        if os.path.isdir(cr_dir):
+            try:
+                for f in os.listdir(cr_dir):
+                    p = os.path.join(cr_dir, f)
+                    if os.path.isfile(p) and os.path.getmtime(p) >= start:
+                        return True
+            except Exception:
+                pass
+        # 2) 日志里是否有明显崩溃标记
+        log_path = os.path.join(game_dir, "logs", "latest.log")
+        if os.path.isfile(log_path):
+            try:
+                tail = open(log_path, encoding="utf-8", errors="replace").read()[-8000:].lower()
+            except Exception:
+                tail = ""
+            marks = ("---- minecraft crash report ----", "a fatal error has been detected",
+                     "failed to start the minecraft server", "outofmemoryerror", "java.lang.nullpointer")
+            if any(m in tail for m in marks):
+                return True
+        return False
+
     def _auto_debug(self, code: int):
-        """游戏进程异常退出(退出码非 0):自动抓最新日志 + 崩溃报告,问用户是否让 AI 分析"""
+        """游戏异常退出(退出码非 0 或检测到本次崩溃):自动抓最新日志 + 崩溃报告,问用户是否让 AI 分析"""
         inst_id = getattr(self, "_running_instance_id", None)
         game_dir = self.game_dir_for(inst_id) if inst_id else paths.GAME_DIR
         parts = [f"游戏进程异常退出(退出码 {code})。"]
