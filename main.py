@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QDockWidget,
 )
 
 from downloader import download_with_mirror  # 下载工具:镜像 + 进度 + sha1 校验
@@ -324,9 +325,9 @@ class MainWindow(QMainWindow):
         # 允许拖动(可浮出成子窗口)、可关闭;标签页之间点击切换显示/隐藏。
         self.ai_dock = AIChatDock(self, self.settings)
         self.ai_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.ai_dock.setFeatures(QDockWidget.DockWidgetFeature.DockMovable
-                                 | QDockWidget.DockWidgetFeature.DockFloatable
-                                 | QDockWidget.DockWidgetFeature.DockClosable)
+        self.ai_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable
+                                 | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+                                 | QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
         self.ai_dock.visibilityChanged.connect(self._on_ai_visibility)
         self.ai_dock.show()
@@ -334,9 +335,9 @@ class MainWindow(QMainWindow):
         # 游戏日志 dock(标签页,和 AI 并列)
         self.log_dock = QDockWidget(t("游戏日志", "Game Log"), self)
         self.log_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.log_dock.setFeatures(QDockWidget.DockWidgetFeature.DockMovable
-                                  | QDockWidget.DockWidgetFeature.DockFloatable
-                                  | QDockWidget.DockWidgetFeature.DockClosable)
+        self.log_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable
+                                  | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+                                  | QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.log_dock.setWidget(self.log_view)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.log_dock)
         self.tabifyDockWidget(self.ai_dock, self.log_dock)   # 并成一个 tab:点击标签切换 AI/日志
