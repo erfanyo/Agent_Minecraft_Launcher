@@ -1009,7 +1009,8 @@ class ResourceCenter(QWidget):
                 ("🧩 " + t("Mod", "Mods"), ""),
                 ("🌄 " + t("光影包", "Shaders"), ""),
                 ("🗂 " + t("数据包", "Datapacks"), ""),
-                ("🎨 " + t("资源包", "Resourcepacks"), "")]:
+                ("🎨 " + t("资源包", "Resourcepacks"), ""),
+                ("🧩 " + t("启动器插件", "Plugins"), "")]:
             self.menu.add_item(label, icon)
         self.menu.itemClicked.connect(self.switch_to)
 
@@ -1046,6 +1047,9 @@ class ResourceCenter(QWidget):
             br.setObjectName(f"browser_{ptype}")
             self.browsers[ptype] = br
             self.stack.addWidget(br)                        # 3..6
+
+        # 启动器插件:占位页(插件生态建设中,先给入口)
+        self.stack.addWidget(self._build_plugins_placeholder())   # 7
 
         # ---- 布局 ----
         layout = QHBoxLayout(self)
@@ -1101,6 +1105,7 @@ class ResourceCenter(QWidget):
             ("🌄 " + t("光影包", "Shaders"), 4),
             ("🗂 " + t("数据包", "Datapacks"), 5),
             ("🎨 " + t("资源包", "Resourcepacks"), 6),
+            ("🧩 " + t("启动器插件", "Plugins"), 7),
         ]
         for text, idx in entries:
             b = QPushButton(text)
@@ -1125,6 +1130,53 @@ class ResourceCenter(QWidget):
             self._guide_labels.append(l)
         layout.addStretch()
         return home
+
+    def _build_plugins_placeholder(self) -> QWidget:
+        """启动器插件:占位页(插件生态建设中)。以后可在这里浏览/安装插件。"""
+        import plugin_manager
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+        title = QLabel("🧩 启动器插件")
+        title.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {text_color()};")
+        layout.addWidget(title)
+        note = QLabel("插件 = 启动器的可选功能模块(联机方案中心 / Mod 依赖网络 / MCP 集成等),"
+                      "可在 设置 → 插件 里启用/停用。\n"
+                      "「插件生态」正在建设中,这里以后会提供插件浏览/一键安装;"
+                      "目前请到 设置 → 插件 管理已安装的插件。")
+        note.setWordWrap(True); note.setStyleSheet(hint_style())
+        layout.addWidget(note)
+        # 当前已安装插件一览
+        cur = QLabel("已装载的插件:")
+        cur.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
+        layout.addWidget(cur)
+        metas = plugin_manager.discover_plugins_meta()
+        if metas:
+            for pid, meta in metas.items():
+                lbl = QLabel(f"• {meta.get('name') or pid}  <small>({pid}.py)</small>")
+                lbl.setStyleSheet(hint_style())
+                layout.addWidget(lbl)
+        else:
+            empty = QLabel("还没有插件。以后插件生态完善后,这里会显示可安装的插件。")
+            empty.setWordWrap(True); empty.setStyleSheet(hint_style())
+            layout.addWidget(empty)
+        # 打开插件管理(设置→插件)
+        open_btn = QPushButton(t("打开插件管理(设置→插件)", "Open plugin manager"))
+        set_style(open_btn, card_btn_style); open_btn.setMinimumHeight(34)
+        open_btn.clicked.connect(self._open_plugin_settings)
+        layout.addWidget(open_btn)
+        layout.addStretch()
+        return w
+
+    def _open_plugin_settings(self):
+        """打开 设置(切到插件页)。"""
+        try:
+            win = self.window()
+            if win is not None and hasattr(win, "settings_center"):
+                win.settings_center.shell.switch_by_label(t("插件", "Plugins"))
+        except Exception:
+            pass
 
     def set_ui_mode(self, mode: str):
         """界面模式(对外叫「全面 / 摘要」,内部 beginner/expert 兼容旧配置):
