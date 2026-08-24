@@ -17,8 +17,10 @@
 import os
 import queue
 import threading
+import urllib.parse
 
-from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -236,6 +238,13 @@ class ResourceBrowser(QWidget):
         self.desc_note_label.setWordWrap(True)
         self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
         self.desc_note_label.setVisible(False)
+        # 「在 MC百科查看」链接:仅选中时显示,点击用系统浏览器打开 mcmod 按名搜索页。
+        self.mcmod_link = QLabel()
+        self.mcmod_link.setTextFormat(Qt.TextFormat.RichText)
+        self.mcmod_link.setOpenExternalLinks(False)   # 点击走 QDesktopServices,统一 URL 构造
+        self.mcmod_link.linkActivated.connect(self._open_mcmod_link)
+        self.mcmod_link.setStyleSheet("color: #5B8DEF; font-size: 12px;")
+        self.mcmod_link.setVisible(False)
         self.gv_combo = QComboBox()
         self.loader_combo = QComboBox()
         self.ver_combo = QComboBox()
@@ -253,6 +262,7 @@ class ResourceBrowser(QWidget):
         p.addWidget(self.meta_label)
         p.addWidget(self.desc_label)
         p.addWidget(self.desc_note_label)
+        p.addWidget(self.mcmod_link)
         for _lbl, combo in [(t("游戏版本:", "Game version:"), self.gv_combo),
                             (t("加载器:", "Loader:"), self.loader_combo),
                             (t("版本:", "Version:"), self.ver_combo)]:
@@ -477,11 +487,22 @@ class ResourceBrowser(QWidget):
         self._auto_loaded = (getattr(self, "_last_query", "") == "")
 
     # ---- 详情面板 ----
+    def _mcmod_url(self, display_name: str) -> str:
+        """构造在 MC百科(mcmod.cn)按名搜索该 Mod 的链接;用 quote 编码中文/特殊字符。
+        mcmod 用自己的 class id,与 Modrinth slug 非 1:1,故用「按名搜索」最稳。"""
+        return "https://search.mcmod.cn/s?key=" + urllib.parse.quote(display_name)
+
+    def _open_mcmod_link(self, url: str):
+        """点击链接 → 系统浏览器打开 mcmod 搜索页。仅用户主动打开,无爬取/缓存/入库。"""
+        QDesktopServices.openUrl(QUrl(url))
+
     def _on_selected(self, current, _prev):
         if current is None:
+            self.mcmod_link.setVisible(False)
             return
         h = current.data(Qt.ItemDataRole.UserRole)
         if not h:
+            self.mcmod_link.setVisible(False)
             return
         self._current = h
         for w in (self.icon_label, self.title_label, self.meta_label,
@@ -490,6 +511,21 @@ class ResourceBrowser(QWidget):
             w.setVisible(True)
         self.empty_label.setVisible(False)
         self.title_label.setText(h["title"])
+        # 「在 MC百科查看」链接:用显示名(优先已替换的中文名)按名搜索,中文最准;
+        # 标题为空 → 退回 slug/描述(纯英文标题即 Modrinth 原名,也直接可用)。
+        name = (h.get("title") or "").strip()
+        if not name:
+            name = (h.get("slug") or "").strip()
+        if not name:
+            name = (h.get("description") or "").strip()[:80]
+        if name:
+            self.mcmod_link.setText(
+                '<a href="%s">🔗 %s</a>' % (
+                    self._mcmod_url(name),
+                    t("在 MC百科查看", "View on MC百科 (mcmod.cn)")))
+            self.mcmod_link.setVisible(True)
+        else:
+            self.mcmod_link.setVisible(False)
         meta = []
         if h.get("author"):
             meta.append(f"作者:{h['author']}")
