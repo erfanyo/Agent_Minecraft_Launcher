@@ -20,7 +20,7 @@ import threading
 import urllib.parse
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -29,10 +29,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QScrollArea,
     QSplitter,
     QStackedWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +50,43 @@ RESOURCE_CATEGORIES = [
     ("datapack", "🗂 数据包", "datapacks"),
     ("resourcepack", "🎨 资源包", "resourcepacks"),
 ]
+
+# 标签(分类)多级菜单结构:按逻辑分组(中文组名→Modrinth 分类)。替代以前"手输标签"。
+# - mod/modpack 的 Modrinth 分类全是 header="categories"(扁平)→ 按语义分组;
+# - shader/resourcepack 用 Modrinth 的 header 分组(特性/风格/分辨率/性能影响);
+# - datapack 在 Modrinth 暂无分类标签 → 空(按钮禁用)。
+_CATEGORY_GROUPS = {
+    "mod": [
+        ("玩法", ["adventure", "cursed", "game-mechanics", "magic", "minigame", "mobs", "worldgen"]),
+        ("内容", ["decoration", "economy", "equipment", "food", "storage", "transportation"]),
+        ("功能", ["library", "management", "social", "technology", "utility"]),
+        ("性能", ["optimization"]),
+    ],
+    "modpack": [
+        ("玩法", ["adventure", "combat", "magic", "quests", "multiplayer"]),
+        ("内容", ["kitchen-sink", "challenging"]),
+        ("性能", ["optimization", "lightweight"]),
+    ],
+    "shader": [
+        ("特性", ["atmosphere", "bloom", "colored-lighting", "foliage", "path-tracing",
+                  "pbr", "reflections", "shadows"]),
+        ("风格", ["cartoon", "cursed", "fantasy", "realistic", "semi-realistic", "vanilla-like"]),
+        ("性能影响", ["high", "low", "medium", "potato", "screenshot"]),
+    ],
+    "resourcepack": [
+        ("分辨率", ["128x", "16x", "256x", "32x", "48x", "512x+", "64x", "8x-"]),
+        ("特性", ["audio", "blocks", "core-shaders", "entities", "environment", "equipment",
+                  "fonts", "gui", "items", "locale", "models"]),
+        ("风格", ["combat", "cursed", "decoration", "modded", "realistic", "simplistic",
+                  "themed", "tweaks", "utility", "vanilla-like"]),
+    ],
+    "datapack": [],   # 数据包暂无分类标签
+}
+
+
+def _tag_groups(project_type: str) -> list:
+    """项目类型 → [(中文组名, [Modrinth 分类...]), ...];空 = 该类型无分类。"""
+    return _CATEGORY_GROUPS.get(project_type, [])
 
 # MC 社区资源结构科普(首页展示,让想自己挑资源的人先看懂"都是些什么";
 # ui_mode=全面 时显示,摘要 时隐藏)
@@ -174,10 +213,16 @@ class ResourceBrowser(QWidget):
                          ("按相关度排序", "relevance"),
                          ("按最近更新", "updated")]:
             self.sort_combo.addItem(t(lbl, lbl), val)
-        self.tag_edit = QLineEdit()
-        self.tag_edit.setPlaceholderText(
-            t("标签筛选,如 performance,utility(逗号分隔,回车生效)", "Tags (comma): performance,utility"))
-        self.tag_edit.returnPressed.connect(self.do_search)
+
+        # 标签(分类)多级菜单:替代以前"手输标签"。点开是一棵分组菜单,可多选。
+        self.tag_btn = QToolButton()
+        self.tag_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.tag_btn.setStyleSheet(card_btn_style())
+        self.tag_btn.setToolTip("按分类标签筛选(可多选;组内是子菜单)")
+        self._selected_tags = set()
+        self.tag_menu = QMenu(self.tag_btn)
+        self.tag_btn.setMenu(self.tag_menu)
+        self._build_tag_menu()
 
         # ---- 目标实例(折叠):装到哪个实例的对应目录(全局共享) ----
         self.inst_cards_toggle = QPushButton("▸ 目标实例: 未选择")
@@ -314,7 +359,11 @@ class ResourceBrowser(QWidget):
             layout.addWidget(self.cards_scroll)
             layout.addWidget(self.custom_label)
         layout.addLayout(self._row(self.filter_version, self.filter_loader))
-        layout.addLayout(self._row(self.sort_combo, self.tag_edit))
+        # 排序(占 1)+ 标签多级菜单(不拉宽)
+        tags_row = QHBoxLayout()
+        tags_row.addWidget(self.sort_combo, 1)
+        tags_row.addWidget(self.tag_btn)
+        layout.addLayout(tags_row)
         layout.addLayout(self._row(self.search_edit, search_btn))
         layout.addWidget(self.split, 1)
 
@@ -326,6 +375,53 @@ class ResourceBrowser(QWidget):
         for w in widgets:
             r.addWidget(w, 1)
         return r
+
+    # ---- 标签多级菜单 ----
+    def _build_tag_menu(self):
+        """重建标签菜单:先清空,再按 project_type 的结构重建(勾选态跟 self._selected_tags)。"""
+        self.tag_menu.clear()
+        self._tag_actions = []
+        groups = _tag_groups(self.project_type)
+        if not groups:
+            self.tag_btn.setEnabled(False)
+            self.tag_btn.setText(t("无标签", "No tags"))
+            return
+        self.tag_btn.setEnabled(True)
+        for group_label, cats in groups:
+            sub = self.tag_menu.addMenu(t(group_label, group_label))
+            for cat in cats:
+                a = sub.addAction(cat)
+                a.setCheckable(True)
+                a.setData(cat)
+                a.setChecked(cat in self._selected_tags)
+                # triggered 在 Qt 勾选态变更之后发出,isChecked() 即最新勾选态(真实菜单点击下可靠)
+                a.triggered.connect(lambda _ch=False, act=a: self._on_tag_toggled(act))
+                self._tag_actions.append(a)
+        self.tag_menu.addSeparator()
+        clr = self.tag_menu.addAction(t("清除所有标签", "Clear all tags"))
+        clr.setEnabled(bool(self._selected_tags))
+        clr.triggered.connect(self._clear_tags)
+        self._update_tag_btn()
+
+    def _on_tag_toggled(self, act: QAction):
+        cat = act.data()
+        if act.isChecked():
+            self._selected_tags.add(cat)
+        else:
+            self._selected_tags.discard(cat)
+        self._update_tag_btn()
+        # 开启/取消标签时,若有默认浏览(空关键词)也刷一下,让结果跟着分类走
+        self.do_search()
+
+    def _update_tag_btn(self):
+        n = len(self._selected_tags)
+        self.tag_btn.setText(f"标签 {n}✓ ▾" if n else "标签 ▾")
+
+    def _clear_tags(self):
+        if self._selected_tags:
+            self._selected_tags.clear()
+            self._build_tag_menu()   # 重建,取消所有勾选 + 清空项禁用
+            self.do_search()
 
     # ---- 目标实例(全局共享) ----
     def _set_target_hooks(self, getter, setter):
@@ -456,7 +552,7 @@ class ResourceBrowser(QWidget):
         gv = self.filter_version.currentText().strip()
         loader = self.filter_loader.currentData()
         order = self.sort_combo.currentData() or "downloads"
-        tags = self.tag_edit.text().strip()
+        tags = ",".join(sorted(self._selected_tags))
         self._last_query = query
         self.result_list.clear()
         QListWidgetItem(t("搜索中...", "Searching..."), self.result_list)
