@@ -293,9 +293,13 @@ def import_modpack(path: str, game_dir: str,
         _extract_zip_to(path, inst_dir, "client-overrides/", status_callback)
 
     if cf:
+        listed = len((manifest.get("files") or []))
         if status_callback:
-            status_callback("CurseForge 清单里的文件需 CurseForge API,已跳过;"
-                            "已解压 overrides(配置/覆盖文件),mod 请用工具从 CurseForge 另行导入")
+            if listed:
+                status_callback(f"CurseForge 清单里还有 {listed} 个文件需 CurseForge API,已跳过;"
+                                "已解压 overrides(配置/覆盖文件),mod 请用工具从 CurseForge 另行导入")
+            else:
+                status_callback("已解压 overrides(含 mods/配置/覆盖文件),无需 CurseForge 额外下载")
 
     if index is None and not cf:
         # 扁平:整个 zip 解压成实例(去掉可能存在的单一顶层文件夹)
