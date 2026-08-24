@@ -39,6 +39,10 @@ GUI_PAGES = {}        # label -> build_fn(返回 QWidget)        (GUI 章节,挂
 SETTINGS = {}         # key -> {description, ...}              (设置项,占位登记)
 SKILLS = []           # [Skill子类]                            (技能)
 
+# ---- 插件元数据(从插件模块读取):默认启禁 / 独立设置页 ----
+# discover_plugins 返回 [(name, path, meta)];meta 含 default_enabled / has_settings / settings_page
+_PLUGIN_META = {}     # name -> {default_enabled(bool), settings_build_fn(callable|None), name, description}
+
 
 class PluginAPI:
     """插件注册时拿到的 api,提供各注册点的登记函数。"""
@@ -64,13 +68,33 @@ class PluginAPI:
         """技能(Skill 子类,与 skill_manager.BUILTIN_SKILLS 同款接口)。"""
         SKILLS.append(skill_cls)
 
+    def register_settings_page(self, build_fn):
+        """为插件注册一个【独立设置页】(build_fn() 返回 QWidget)。
+        设置左菜单会为它单开一行(按插件名)。"""
+        _PLUGIN_META.setdefault(self.plugin_id, {})
+        _PLUGIN_META[self.plugin_id]["settings_build_fn"] = build_fn
+
 
 def build_api(plugin_id: str) -> PluginAPI:
     return PluginAPI(plugin_id)
 
 
+def _read_plugin_meta(mod) -> dict:
+    """从插件模块读元数据:PLUGIN_NAME/PLUGIN_DESCRIPTION/PLUGIN_DEFAULT_ENABLED。"""
+    try:
+        default_enabled = bool(getattr(mod, "PLUGIN_DEFAULT_ENABLED", True))
+    except Exception:
+        default_enabled = True
+    return {
+        "name": getattr(mod, "PLUGIN_NAME", None),
+        "description": getattr(mod, "PLUGIN_DESCRIPTION", ""),
+        # 注意:register() 里的 register_settings_page 会写入 _PLUGIN_META[name]["settings_build_fn"]
+        "default_enabled": default_enabled,
+    }
+
+
 def discover_plugins() -> list:
-    """返回 plugins/ 下所有可用插件(名, 路径)。忽略非 .py、以下划线开头的。"""
+    """返回 plugins/ 下所有可用插件 [(name, path)]。忽略非 .py、以下划线开头的。"""
     result = []
     if not os.path.isdir(PLUGIN_DIR):
         return result
@@ -78,6 +102,51 @@ def discover_plugins() -> list:
         if f.endswith(".py") and not f.startswith("_"):
             result.append((f[:-3], os.path.join(PLUGIN_DIR, f)))
     return result
+
+
+def discover_plugins_meta() -> dict:
+    """扫描插件,返回 {name: {default_enabled, name, description, has_settings}}。
+    只读插件模块元数据;has_settings 通过 inspect register 里是否调用 register_settings_page 判断。
+    不污染全局 registry(_PLUGIN_META / TOOLS 等)。"""
+    meta_out = {}
+    for name, path in discover_plugins():
+        base = {"default_enabled": True, "name": name, "description": "", "has_settings": False}
+        try:
+            mod = _load_plugin_module(path)
+            m = _read_plugin_meta(mod)
+            # 用隔离的临时容器测"是否注册了设置页":替换 plugin 模块看到的全局 SETTINGS/TOOLS/_PLUGIN_META
+            import plugin_manager as _pm
+            saved = (_pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS, _pm.SKILLS, _pm._PLUGIN_META)
+            try:
+                _pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS = {}, {}, {}
+                _pm.SKILLS, _pm._PLUGIN_META = [], {}
+                if hasattr(mod, "register"):
+                    mod.register(build_api(name))
+                m["has_settings"] = bool(_pm._PLUGIN_META.get(name, {}).get("settings_build_fn"))
+            finally:
+                (_pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS, _pm.SKILLS, _pm._PLUGIN_META) = saved
+            m["name"] = m["name"] or name
+            meta_out[name] = m
+        except Exception:
+            meta_out[name] = base
+        meta_out[name].setdefault("description", "")
+    return meta_out
+
+
+def plugin_settings_page(name: str):
+    """返回某插件注册的独立设置页 build_fn(None=没有)。"""
+    meta = _PLUGIN_META.get(name, {})
+    return meta.get("settings_build_fn")
+
+
+def plugin_is_disabled(settings: dict, name: str) -> bool:
+    """判断插件当前是否被禁用:设置里显式禁用,或没标记但插件默认关闭(PLUGIN_DEFAULT_ENABLED=False)。"""
+    disabled = set(settings.get("plugins_disabled", []) or [])
+    if name in disabled:
+        return True
+    # 没禁用但插件默认关闭(且用户没显式启用):通过 plugins_enabled 白名单判断
+    # 逻辑见 load_all:默认关但未启用 => 禁用
+    return False
 
 
 def _load_plugin_module(path: str):
@@ -106,14 +175,29 @@ def load_plugin(name: str, path: str, disabled: set) -> bool:
         return False
 
 
-def load_all(disabled: set | None = None) -> dict:
-    """启动时装载所有插件。disabled = 被禁用的插件 id 集合。
-    返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
-    global TOOLS, GUI_PAGES, SETTINGS, SKILLS
-    TOOLS, GUI_PAGES, SETTINGS, SKILLS = {}, {}, {}, []
+def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
+    """启动时装载所有插件。disabled = 被禁用的插件 id 集合(显式禁用)。
+    额外考虑"默认关闭"插件:PLUGIN_DEFAULT_ENABLED=False 且未被显式启用(settings['plugins_enabled'])
+    的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
+    global TOOLS, GUI_PAGES, SETTINGS, SKILLS, _PLUGIN_META
+    TOOLS, GUI_PAGES, SETTINGS, SKILLS, _PLUGIN_META = {}, {}, {}, [], {}
     disabled = set(disabled or [])
+    # 显式启用的白名单(用于"默认关闭"插件)
+    enabled_list = (settings or {}).get("plugins_enabled", []) or []
+    enabled_set = set(enabled_list) if enabled_list else set()
     loaded = {}
     for name, path in discover_plugins():
+        # 判断是否装载:显式禁用 → 否;默认关且未显式启用 → 否;否则装
+        if name in disabled:
+            loaded[name] = False
+            continue
+        mod = _load_plugin_module(path)
+        default_on = True
+        if mod is not None:
+            default_on = bool(getattr(mod, "PLUGIN_DEFAULT_ENABLED", True))
+        if not default_on and name not in enabled_set:
+            loaded[name] = False
+            continue
         loaded[name] = load_plugin(name, path, disabled)
     return loaded
 

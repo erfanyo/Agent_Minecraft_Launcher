@@ -221,6 +221,16 @@ class MainWindow(QMainWindow):
         load_theme_from_settings(self.settings)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
+        # ---- 插件系统:启动时静态装载插件(plugins/*.py),登记工具/页面/设置/技能 ----
+        # 被禁用的插件(settings["plugins_disabled"])跳过;默认关闭的插件需显式启用。
+        # 提前到这里装载(先于 设置中心/技能管理器 创建),让插件登记内容立即可见。
+        try:
+            import plugin_manager
+            _loaded = plugin_manager.load_all(self.settings)
+            print(f"[插件] 装载 {len([k for k, v in _loaded.items() if v])} 个插件")
+        except Exception as e:
+            print(f"[插件] 装载异常:{type(e).__name__}: {e}")
+
         # ---- 无边框自定义标题栏(名称位置按平台,见 frameless_titlebar.py) ----
         self.setWindowTitle("AMCL")   # 任务栏/系统标题
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
@@ -337,16 +347,6 @@ class MainWindow(QMainWindow):
 
         # ---- AI 助手被 × / 隐藏时:收窄成贴在右边缘的小条(留「展开」) ----
         self._build_ai_strip()
-
-        # ---- 插件系统:启动时静态装载插件(plugins/*.py),登记工具/页面/设置/技能 ----
-        # 被禁用的插件(settings["plugins_disabled"])跳过。每个插件 register(api) 登记内容。
-        try:
-            import plugin_manager
-            _disabled = set(self.settings.get("plugins_disabled", []) or [])
-            _loaded = plugin_manager.load_all(disabled=_disabled)
-            print(f"[插件] 装载 {len([k for k, v in _loaded.items() if v])} 个插件")
-        except Exception as e:
-            print(f"[插件] 装载异常:{type(e).__name__}: {e}")
 
         # ---- 技能管理器(游戏运行时辅助功能,可插拔) ----
         self.skill_mgr = SkillManager(self, self.settings)

@@ -42,6 +42,17 @@ def register(api):
 
     api.register_gui_page(label="示例·打招呼", build_fn=build_page)
 
+    # 2b) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
+    def build_settings_page():
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(QLabel("这是「示例:打招呼」插件的独立设置页。"))
+        lay.addWidget(QLabel("设置→左菜单 会为它单独开一行;可放插件自己的选项。"))
+        return w
+
+    api.register_settings_page(build_settings_page)
+
     # 3) 设置项(占位登记)
     api.register_setting(
         key="greeting", description="打招呼文案", default="你好")

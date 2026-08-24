@@ -85,6 +85,19 @@ class SettingsCenter(QWidget):
         self.shell.add_section(t("AI 助手", "AI"), self._build_ai)
         self.shell.add_section(t("镜像源", "Mirror"), self._build_mirror)
         self.shell.add_section(t("插件", "Plugins"), self._build_plugins)
+        # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)
+        self._plugin_settings_rows = []
+        try:
+            import plugin_manager
+            pm_meta = plugin_manager.discover_plugins_meta()
+            for pid in sorted(pm_meta.keys()):
+                if pm_meta[pid].get("has_settings"):
+                    build_fn = plugin_manager.plugin_settings_page(pid)
+                    if build_fn:
+                        self.shell.add_section(t(f"插件:{pm_meta[pid].get('name') or pid}"), build_fn)
+                        self._plugin_settings_rows.append(pid)
+        except Exception:
+            pass
         if initial_tab:
             self.shell.switch_by_label(initial_tab)
 
@@ -558,32 +571,49 @@ class SettingsCenter(QWidget):
         l.addWidget(head)
 
         disabled = set(self.settings.get("plugins_disabled", []) or [])
+        enabled_override = set(self.settings.get("plugins_enabled", []) or [])
+        # 插件元数据(默认启禁 / 是否有独立设置页)
+        metas = plugin_manager.discover_plugins_meta()
         for name, path in plugin_manager.discover_plugins():
+            meta = metas.get(name, {})
+            pname = meta.get("name") or name
+            pdesc = meta.get("description", "")
+            default_on = meta.get("default_enabled", True)
+            # 实际是否启用:默认关且未显式启用 / 显式禁用 → 关
+            is_on = (name not in disabled) and (default_on or name in enabled_override)
             card = QWidget(); set_style(card, panel_style)
             cl = QVBoxLayout(card); cl.setContentsMargins(10, 8, 10, 8); cl.setSpacing(4)
             row = QHBoxLayout()
             # 启禁开关(勾选=启用)
             cb = QCheckBox("启用")
-            cb.setChecked(name not in disabled)
+            cb.setChecked(is_on)
             cb.toggled.connect(lambda ch, n=name: self._toggle_plugin(n, ch))
-            # 名称 + 状态
-            mod = plugin_manager._load_plugin_module(path)
-            pname = getattr(mod, "PLUGIN_NAME", name)
-            pdesc = getattr(mod, "PLUGIN_DESCRIPTION", "")
             title = QLabel(f"{pname}  <small>({name}.py)</small>")
             title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
             row.addWidget(title, 1); row.addWidget(cb)
             cl.addLayout(row)
+            if not default_on:
+                note = QLabel("🔒 默认关闭:需勾选启用后才生效(适合 MCP 服务器等按需功能)")
+                note.setWordWrap(True); note.setStyleSheet("color:#c78a2e; font-size:11px;")
+                cl.addWidget(note)
             if pdesc:
                 d = QLabel(pdesc); d.setWordWrap(True)
                 d.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
                 cl.addWidget(d)
-            # 展示注册的内容(工具/页面/设置/技能)
-            contents = self._describe_plugin(name, mod)
+            # 展示注册的内容(工具/页面/设置/技能)+ 是否有独立设置页
+            contents = self._describe_plugin(name, None)
             if contents:
                 c = QLabel(contents); c.setWordWrap(True)
                 c.setStyleSheet("color:#8a93a0; font-size:11px;")
                 cl.addWidget(c)
+            if meta.get("has_settings"):
+                srow = QHBoxLayout()
+                for other_btn in ():
+                    pass
+                lbl = QLabel("⚙ 有独立设置页")
+                lbl.setStyleSheet("color:#8a93a0; font-size:11px;")
+                srow.addWidget(lbl); srow.addStretch()
+                cl.addLayout(srow)
             l.addWidget(card)
 
         if not plugin_manager.discover_plugins():
@@ -637,13 +667,18 @@ class SettingsCenter(QWidget):
         return "注册内容: " + " · ".join(bits) if bits else ""
 
     def _toggle_plugin(self, name: str, checked: bool):
-        """切换插件启禁状态(存 settings,下次启动生效)。checked=True=启用。"""
+        """切换插件启禁状态(存 settings,下次启动生效)。checked=True=启用。
+        默认关闭的插件启用时记入 plugins_enabled;禁用时从 plugins_disabled 移除。"""
         disabled = set(self.settings.get("plugins_disabled", []) or [])
+        enabled_over = set(self.settings.get("plugins_enabled", []) or [])
         if checked:
             disabled.discard(name)
+            enabled_over.add(name)     # 默认关/被禁的都显式启用
         else:
             disabled.add(name)
+            enabled_over.discard(name)
         self.settings["plugins_disabled"] = sorted(disabled)
+        self.settings["plugins_enabled"] = sorted(enabled_over)
 
     def _on_strategy_changed(self):
         self._update_strategy_hint()
