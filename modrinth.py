@@ -62,6 +62,8 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
     - 返回的结果统一标注中文名(有库就用,没有就用原名)
     - project_type: 限定项目类型(mod / datapack / shader 等,数据包/光影下载用)
     - order_by / tags: 排序与分类标签过滤(透传给原生搜索)
+    - query 为空串:has_cjk("")=False → 直接走原生 search_mods(""),即「无关键词默认浏览」
+      (全站按 order_by 排序返回),不会因中文过滤或截断返回空。
     """
     if has_cjk(query):
         cn_hits = []
@@ -115,7 +117,12 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
     order_by: relevance(相关度) / downloads(下载量,默认) / updated(最近更新)。
     tags: 逗号分隔的分类标签(如 performance,utility),按 Modrinth 分类过滤。
     指定版本搜不到时,自动去掉版本过滤再试一次(很多项目只标了较新的版本,
-    比如 lanserverproperties 没标 1.21.1,但实际能用)。"""
+    比如 lanserverproperties 没标 1.21.1,但实际能用)。
+
+    query 为空串时的行为:Modrinth 把空 query 当作「无查询」,返回全站按 index
+    (order_by) 排序的列表,即纯浏览(不是报错也不截断)。因此该函数天然支持
+    「无关键词浏览」:空 query + order_by=downloads/relevance/updated 即得默认浏览页。
+    """
     params = {
         "query": query,
         "facets": _facets(game_version, loader, project_type, tags),
