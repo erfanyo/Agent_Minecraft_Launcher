@@ -11,7 +11,8 @@ import uuid
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QStackedWidget,
+    QVBoxLayout, QWidget,
 )
 
 from assistant import AISettingsForm
@@ -21,7 +22,7 @@ from i18n import t
 from paths import DEFAULT_GAME_DIR
 from settings import save_settings
 from ui_style import (card_btn_style, muted_color, set_style,
-                      COLOR_BLIND_PRESETS, check_readability)
+                      COLOR_BLIND_PRESETS, check_readability, panel_style, text_color)
 
 
 def _fmt_mcp_entry(c: dict) -> str:
@@ -83,6 +84,7 @@ class SettingsCenter(QWidget):
         self.shell.add_section(t("界面", "UI"), self._build_ui)
         self.shell.add_section(t("AI 助手", "AI"), self._build_ai)
         self.shell.add_section(t("镜像源", "Mirror"), self._build_mirror)
+        self.shell.add_section(t("插件", "Plugins"), self._build_plugins)
         if initial_tab:
             self.shell.switch_by_label(initial_tab)
 
@@ -544,6 +546,104 @@ class SettingsCenter(QWidget):
         l.addWidget(QLabel("自定义镜像(与 BMCLAPI 同构:填 base 地址,自动映射 libraries/ assets/ version/ 等路径)"))
         l.addLayout(add_row); l.addWidget(self.custom_list); l.addLayout(del_row); l.addStretch()
         return w
+
+    def _build_plugins(self) -> QWidget:
+        """插件管理:列出 plugins/*.py(默认安装,可启禁),显示各插件注册的 工具/页面/设置/技能。
+        也是「一切皆插件」的入口:核心组件不在此,只列非核心/可选功能插件。"""
+        import plugin_manager
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(8)
+        head = QLabel("插件 = 启动器的可选功能模块(默认安装,可点开关停用)。\n"
+                      "核心组件(启动/实例/下载/设置/AI)不在插件列表里,保证稳定。")
+        head.setWordWrap(True); head.setStyleSheet(f"color: {muted_color()};")
+        l.addWidget(head)
+
+        disabled = set(self.settings.get("plugins_disabled", []) or [])
+        for name, path in plugin_manager.discover_plugins():
+            card = QWidget(); set_style(card, panel_style)
+            cl = QVBoxLayout(card); cl.setContentsMargins(10, 8, 10, 8); cl.setSpacing(4)
+            row = QHBoxLayout()
+            # 启禁开关(勾选=启用)
+            cb = QCheckBox("启用")
+            cb.setChecked(name not in disabled)
+            cb.toggled.connect(lambda ch, n=name: self._toggle_plugin(n, ch))
+            # 名称 + 状态
+            mod = plugin_manager._load_plugin_module(path)
+            pname = getattr(mod, "PLUGIN_NAME", name)
+            pdesc = getattr(mod, "PLUGIN_DESCRIPTION", "")
+            title = QLabel(f"{pname}  <small>({name}.py)</small>")
+            title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
+            row.addWidget(title, 1); row.addWidget(cb)
+            cl.addLayout(row)
+            if pdesc:
+                d = QLabel(pdesc); d.setWordWrap(True)
+                d.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+                cl.addWidget(d)
+            # 展示注册的内容(工具/页面/设置/技能)
+            contents = self._describe_plugin(name, mod)
+            if contents:
+                c = QLabel(contents); c.setWordWrap(True)
+                c.setStyleSheet("color:#8a93a0; font-size:11px;")
+                cl.addWidget(c)
+            l.addWidget(card)
+
+        if not plugin_manager.discover_plugins():
+            empty = QLabel("还没有插件。把 .py 插件放进启动器的 plugins/ 目录即可;"
+                           "或让 AI 按模板生成一个(见「插件模板」)。")
+            empty.setWordWrap(True); empty.setStyleSheet(f"color: {muted_color()};")
+            l.addWidget(empty)
+        # 插件注册的 GUI 页面(章节):嵌入预览(启用即显示)
+        gui_pages = plugin_manager.GUI_PAGES
+        if gui_pages:
+            l.addSpacing(8)
+            pg_title = QLabel("插件页面:")
+            pg_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+            l.addWidget(pg_title)
+            self._plugin_page_host = QStackedWidget()
+            self._plugin_page_labels = []
+            for label, build_fn in gui_pages.items():
+                try:
+                    self._plugin_page_host.addWidget(build_fn())
+                    self._plugin_page_labels.append(label)
+                except Exception:
+                    pass
+            if self._plugin_page_labels:
+                btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+                for i, label in enumerate(self._plugin_page_labels):
+                    b = QPushButton(label)
+                    set_style(b, card_btn_style); b.setMinimumHeight(30)
+                    b.clicked.connect(lambda _c, i=i: self._plugin_page_host.setCurrentIndex(i))
+                    btn_row.addWidget(b)
+                l.addLayout(btn_row)
+                l.addWidget(self._plugin_page_host, 1)
+        l.addStretch()
+        return w
+
+    def _describe_plugin(self, name: str, mod) -> str:
+        """给插件页面显示该插件注册了哪些内容。"""
+        import plugin_manager
+        bits = []
+        ntools = sum(1 for k in plugin_manager.TOOLS if k.startswith(f"{name}__"))
+        if ntools:
+            bits.append(f"AI 工具 ×{ntools}")
+        ngui = sum(1 for k in plugin_manager.GUI_PAGES)
+        if ngui:
+            bits.append(f"页面 ×{ngui}")
+        nset = sum(1 for k in plugin_manager.SETTINGS if k.startswith(f"{name}."))
+        if nset:
+            bits.append(f"设置项 ×{nset}")
+        nsk = sum(1 for c in plugin_manager.SKILLS if c.id.startswith(f"{name}_"))
+        if nsk:
+            bits.append(f"技能 ×{nsk}")
+        return "注册内容: " + " · ".join(bits) if bits else ""
+
+    def _toggle_plugin(self, name: str, checked: bool):
+        """切换插件启禁状态(存 settings,下次启动生效)。checked=True=启用。"""
+        disabled = set(self.settings.get("plugins_disabled", []) or [])
+        if checked:
+            disabled.discard(name)
+        else:
+            disabled.add(name)
+        self.settings["plugins_disabled"] = sorted(disabled)
 
     def _on_strategy_changed(self):
         self._update_strategy_hint()

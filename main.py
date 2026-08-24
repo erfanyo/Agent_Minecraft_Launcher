@@ -338,6 +338,16 @@ class MainWindow(QMainWindow):
         # ---- AI 助手被 × / 隐藏时:收窄成贴在右边缘的小条(留「展开」) ----
         self._build_ai_strip()
 
+        # ---- 插件系统:启动时静态装载插件(plugins/*.py),登记工具/页面/设置/技能 ----
+        # 被禁用的插件(settings["plugins_disabled"])跳过。每个插件 register(api) 登记内容。
+        try:
+            import plugin_manager
+            _disabled = set(self.settings.get("plugins_disabled", []) or [])
+            _loaded = plugin_manager.load_all(disabled=_disabled)
+            print(f"[插件] 装载 {len([k for k, v in _loaded.items() if v])} 个插件")
+        except Exception as e:
+            print(f"[插件] 装载异常:{type(e).__name__}: {e}")
+
         # ---- 技能管理器(游戏运行时辅助功能,可插拔) ----
         self.skill_mgr = SkillManager(self, self.settings)
 

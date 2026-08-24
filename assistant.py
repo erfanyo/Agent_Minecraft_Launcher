@@ -204,6 +204,19 @@ TOOLS = [
 WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "install_modpack",
                "launch_game", "backup_instance", "set_setting"}
 
+# ---- 插件注册的 AI 工具(plugin_manager.TOOLS)合并进 TOOLS --------
+def _merge_plugin_tools() -> list:
+    """把 plugin_manager.TOOLS 里登记的插件工具并入 TOOLS schemas。
+    返回新增(或完整)的接插件工具的 TOOLS 列表。"""
+    try:
+        import plugin_manager
+        extra = []
+        for full, (desc, params, _handler) in plugin_manager.TOOLS.items():
+            extra.append(_tool(full, desc, params, params.get("required", [])))
+        return TOOLS + extra
+    except Exception:
+        return TOOLS
+
 # ================= t16 云端工具按需挂载 =================
 # 目标:云端每轮请求不再全量带 17 个工具 schema(每轮浪费几千 token),
 # 按请求意图只挂 通用 + 相关组;同时工具集合在轮次间保持稳定,利于 DeepSeek 前缀缓存。
@@ -258,15 +271,14 @@ def mcp_tools_schemas(settings: dict) -> list:
 
 
 def available_tools(settings: dict) -> list:
-    """内置 TOOLS + 配置的外部 MCP 服务器工具(完整 schema,供模型选择调用 MCP 工具)。"""
-    return list(TOOLS) + mcp_tools_schemas(settings)
+    """内置 TOOLS + 插件工具 + 配置的外部 MCP 服务器工具(完整 schema,供模型选择调用)。"""
+    return _merge_plugin_tools() + mcp_tools_schemas(settings)
 
 
 def mount_tools_for(text: str, settings: dict | None = None) -> list:
     """云端按需挂载工具 schema:通用工具 + 请求文本命中关键词的组(按 TOOL_GROUPS)。
     返回 TOOLS 的子集(每轮请求固定,轮间稳定利于前缀缓存)。
-    settings 非空时,额外追加配置的外部 MCP 工具 schema(追加在截断之后,绝不砍掉)。
-    本地路径不受影响(schemas_from_assistant_tools 仍返回全量 TOOLS)。"""
+    插件 + MCP 工具追加在截断之后(绝不砍掉)。本地路径不受影响(仍返回全量)。"""
     tl = (text or "").lower()
     names = list(GENERAL_TOOLS)
     for g, kws in TOOL_GROUP_KEYWORDS.items():
@@ -281,6 +293,15 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list:
         mounted = mounted[:CLOUD_MAX_TOOLS]
     if settings:
         mounted = mounted + mcp_tools_schemas(settings)
+    # 插件注册的工具:追加在截断之后(始终让模型看得见、可调用)
+    try:
+        import plugin_manager
+        extra = []
+        for full, (desc, params, _h) in plugin_manager.TOOLS.items():
+            extra.append(_tool(full, desc, params, params.get("required", [])))
+        mounted = mounted + extra
+    except Exception:
+        pass
     return mounted
 
 
@@ -303,6 +324,17 @@ def build_executor(settings: dict, progress_cb=None):
         if name in _mcp_callers:
             from mcp_client import mcp_tool_call
             return mcp_tool_call(_mcp_callers, name, args)
+        # 插件注册的工具(plugin_manager.TOOLS)优先于内置 getattr 兜底
+        try:
+            import plugin_manager
+            if name in plugin_manager.TOOLS:
+                _desc, _params, handler = plugin_manager.TOOLS[name]
+                try:
+                    return str(handler(dict(args or {})))
+                except Exception as e:
+                    return f"插件工具执行失败:{type(e).__name__}: {e}"
+        except Exception:
+            pass
         # 动态查找:函数名 == 工具名,便于测试打桩与后续扩展
         fn = getattr(agent_tools, name, None)
         if fn is None:

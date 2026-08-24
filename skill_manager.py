@@ -327,6 +327,16 @@ class SkillManager:
         self.main = main_window
         self.settings = settings
         self.skills = [cls(self) for cls in BUILTIN_SKILLS]
+        # 插件注册的技能(plugin_manager.SKILLS):附属到内置技能之后,同样受启停控制
+        try:
+            import plugin_manager
+            for skcls in plugin_manager.SKILLS:
+                try:
+                    self.skills.append(skcls(self))
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def is_enabled(self, skill_id: str) -> bool:
         s = self.settings.get("skills", {}) or {}
