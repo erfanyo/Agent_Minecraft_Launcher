@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import t
-from ui_style import card_btn_style, launch_btn_style, muted_color, panel_style
+from ui_style import card_btn_style, launch_btn_style, muted_color, panel_style, set_style
 
 
 def _open_url(url: str):
@@ -571,7 +571,7 @@ class OnlineCenter(QWidget):
         v.addWidget(desc)
         start_btn = QPushButton(t("开始推荐(答是 / 否)", "Start recommend (yes/no)"))
         start_btn.setMinimumHeight(40)
-        start_btn.setStyleSheet(launch_btn_style())
+        set_style(start_btn, launch_btn_style)
         start_btn.clicked.connect(
             lambda: self.shell.switch_by_label(t("帮我推荐", "Recommend")))
         v.addWidget(start_btn)
@@ -586,7 +586,7 @@ class OnlineCenter(QWidget):
     def _card(self, name: str, desc: str, url: str) -> QWidget:
         """方案卡片:名称 + 描述 + 打开官网,点击卡片也可打开。"""
         c = QWidget()
-        c.setStyleSheet(panel_style())
+        set_style(c, panel_style)
         lay = QVBoxLayout(c)
         lay.setContentsMargins(12, 10, 12, 10)
         name_label = QLabel(name)
@@ -596,7 +596,7 @@ class OnlineCenter(QWidget):
         desc_label.setStyleSheet(f"color: {muted_color()};")
         open_btn = QPushButton(t("打开官网", "Open website"))
         open_btn.setFixedWidth(90)
-        open_btn.setStyleSheet(card_btn_style())
+        set_style(open_btn, card_btn_style)
         open_btn.clicked.connect(lambda _c, u=url: _open_url(u))
         c.mousePressEvent = lambda _e, u=url: _open_url(u)   # 点击卡片主题也可打开
         r = QHBoxLayout()

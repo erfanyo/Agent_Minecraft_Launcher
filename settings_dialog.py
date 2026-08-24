@@ -39,7 +39,7 @@ import paths
 from assistant import AISettingsForm
 from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
 from settings import save_settings
-from ui_style import card_btn_style, muted_color
+from ui_style import card_btn_style, muted_color, set_style
 
 
 class SettingsDialog(QDialog):
@@ -192,7 +192,7 @@ class SettingsDialog(QDialog):
                 row.addWidget(info, 1)
                 if d.get("reopen") == "tutorial":
                     open_btn = QPushButton("临时查看")
-                    open_btn.setStyleSheet(card_btn_style())
+                    set_style(open_btn, card_btn_style)
                     open_btn.clicked.connect(self._reopen_tutorial)
                     row.addWidget(open_btn)
                 lay.addLayout(row)

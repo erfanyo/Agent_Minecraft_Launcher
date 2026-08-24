@@ -273,8 +273,8 @@ class MainWindow(QMainWindow):
 
         # ---- 主选项卡(我的实例 / 实例详情 / 下载新资源 / 联机 / 设置) ----
         self.main_tabs = QTabWidget()
-        from ui_style import tab_style
-        self.main_tabs.setStyleSheet(tab_style())   # 外层标签页:圆角+字体放大(14px)
+        from ui_style import tab_style, set_style
+        set_style(self.main_tabs, tab_style)   # 外层标签页:圆角+字体放大(14px)
         self.main_tabs.addTab(tab_a, t("我的实例", "My Instances"))
         self._my_inst_tab_idx = 0   # 「我的实例」= 主标签第 0 页(拖入文件 → 当作整合包安装)
         # 实例详情:放在「我的版本」右边;未选择实例时隐藏,选择后出现(带滑入/淡入动画)
@@ -536,9 +536,8 @@ class MainWindow(QMainWindow):
         lbl.setStyleSheet(f"font-weight: bold; color: {text_color()};")
         expand_btn = QPushButton("▶\n展开")
         expand_btn.setFixedHeight(68)
-        expand_btn.setStyleSheet(
-            "QPushButton{background:#2b2f3a;color:#e8ecf2;border:1px solid #3a4150;"
-            "border-radius:8px;font-weight:bold;} QPushButton:hover{border-color:#5B8DEF;}")
+        from ui_style import set_style, accent_border_style
+        set_style(expand_btn, accent_border_style)
         expand_btn.clicked.connect(self._expand_ai)
         sv.addWidget(lbl)
         sv.addWidget(expand_btn)

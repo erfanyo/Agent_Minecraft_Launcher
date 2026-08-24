@@ -40,7 +40,7 @@ from changelog import changelog_html, load_changelog
 from i18n import t
 from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
-                      muted_color, panel_style, tab_style, text_color)
+                      muted_color, panel_style, tab_style, text_color, set_style)
 
 # 登录方式:目前仅支持离线(昵称可改);正版/外置为规划占位,不伪造后端能力
 LOGIN_OFFLINE = "offline"
@@ -315,7 +315,7 @@ class VersionHome(QWidget):
         self.import_btn = QPushButton(t("导入整合包", "Import Modpack"))
         self.import_btn.setMinimumHeight(44)
         self.import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.import_btn.setStyleSheet(card_btn_style())
+        set_style(self.import_btn, card_btn_style)
         self.import_btn.clicked.connect(self.import_modpack_requested.emit)
         tool_row.addWidget(self.import_btn, 1)
 
@@ -325,7 +325,7 @@ class VersionHome(QWidget):
         self.config_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.config_btn.setMinimumHeight(44)
         self.config_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.config_btn.setStyleSheet(card_btn_style())
+        set_style(self.config_btn, card_btn_style)
         cfg_menu = QMenu(self.config_btn)
         bridge_item = cfg_menu.addAction(
             t("一键配置 bridge-mod(本地指令口,推荐)",
@@ -344,7 +344,7 @@ class VersionHome(QWidget):
         self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
         self.launch_btn.setMinimumHeight(56)
         self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.launch_btn.setStyleSheet(launch_btn_style())
+        set_style(self.launch_btn, launch_btn_style)
         lay.addWidget(self.launch_btn)
 
         return left
@@ -358,7 +358,7 @@ class VersionHome(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.tabs.setStyleSheet(tab_style())
+        set_style(self.tabs, tab_style)
 
         self._version_tab_index = self.tabs.addTab(self._build_version_tab(), t("实例", "Instances"))
         self.tabs.addTab(self._build_changelog_tab(), t("更新日志", "Changelog"))
@@ -391,7 +391,7 @@ class VersionHome(QWidget):
         # 「我的实例」标题与「刷新」按钮已移除:标签页文本显示实例数,切回本页自动刷新
 
         self.instance_list = QListWidget()
-        self.instance_list.setStyleSheet(list_style())
+        set_style(self.instance_list, list_style)
         self.instance_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.instance_list.currentItemChanged.connect(self._on_selection_changed)
         lay.addWidget(self.instance_list, 1)
@@ -410,7 +410,7 @@ class VersionHome(QWidget):
         self.changelog_status.setStyleSheet(f"color: {muted_color()};")
         self.changelog_status.setWordWrap(True)
         self.changelog_refresh_btn = QPushButton(t("刷新", "Refresh"))
-        self.changelog_refresh_btn.setStyleSheet(card_btn_style())
+        set_style(self.changelog_refresh_btn, card_btn_style)
         self.changelog_refresh_btn.setMinimumHeight(30)
         self.changelog_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.changelog_refresh_btn.clicked.connect(self._load_changelog_async)

@@ -35,7 +35,7 @@ from fetch_versions import fetch_version_manifest
 from instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions
 from modrinth import list_mod_versions
-from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style
+from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style, set_style
 from version_tree import fill_version_tree
 
 
@@ -80,7 +80,7 @@ class DownloadTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.download_btn = QPushButton("开始下载实例")
-        self.download_btn.setStyleSheet(primary_btn_style())   # 蓝底白字
+        set_style(self.download_btn, primary_btn_style)   # 蓝底白字
         self.download_btn.clicked.connect(self._on_start)
         # 按钮始终可点:没选版本时点击会给明确提示(见 _on_start)
 

@@ -86,6 +86,72 @@ def load_theme_from_settings(settings: dict) -> None:
     set_custom_colors((settings or {}).get("ui_custom_colors"))
 
 
+# ---------------- 实时配色刷新 ----------------
+# 自定义配色改了以后,要让整应用立即变色,而不只是下次重启。
+# 机制:各页面在构造时把"用到 ui_style 颜色槽的控件"登记进来(register_refresh_widget),
+# 换色后 refresh_theme() 遍历所有登记的控件重新 setStyleSheet(样式函数用最新 current_color)。
+# 这样不用改每个页面的 setStyleSheet 调用(它们仍按原样写在构造处)。
+_REFRESH_WIDGETS = {}   # id(widget) -> (callable_or_none, style_fn, args)
+
+
+def register_refresh_widget(widget, style_fn, *args) -> None:
+    """登记一个需要跟随配色刷新的控件。
+    style_fn: 每次调用返回该控件样式表字符串的函数(如 card_btn_style / 自定义 lambda)。
+    args: 传给 style_fn 的额外参数(如自定义的色变量)。"""
+    try:
+        _REFRESH_WIDGETS[id(widget)] = (widget, style_fn, args)
+    except Exception:
+        pass
+
+
+def unregister_refresh_widget(widget) -> None:
+    try:
+        _REFRESH_WIDGETS.pop(id(widget), None)
+    except Exception:
+        pass
+
+
+def refresh_widget(widget) -> None:
+    """立即重刷某个已登记控件的样式(用最新配色)。"""
+    entry = _REFRESH_WIDGETS.get(id(widget))
+    if not entry:
+        return
+    _w, fn, args = entry
+    try:
+        _w.setStyleSheet(fn(*args))
+    except Exception:
+        pass
+
+
+def refresh_theme() -> None:
+    """换色后实时刷遍所有登记过的控件。供设置中心在改色/重置后调用。"""
+    for _w, fn, args in list(_REFRESH_WIDGETS.values()):
+        try:
+            _w.setStyleSheet(fn(*args))
+        except Exception:
+            pass
+    # 也把全局调色板改成最新配色(未登记/用默认色的对话框、菜单、下拉等跟随)
+    try:
+        app = QApplication.instance()
+        if app is not None:
+            apply_global_dark_palette(app)
+    except Exception:
+        pass
+
+
+def set_style(widget, style_fn, *args) -> None:
+    """给控件上样式并登记为「跟随配色刷新」。
+    用法:ui_style.set_style(btn, card_btn_style) 代替 btn.setStyleSheet(card_btn_style()).
+    这样换色后 refresh_theme() 会用最新配色重刷该控件。"""
+    widget.setStyleSheet(style_fn(*args))
+    register_refresh_widget(widget, style_fn, *args)
+
+
+def clear_registered_styles() -> None:
+    """清空所有登记(窗口关闭/重建时调用,避免泄漏无效引用)。"""
+    _REFRESH_WIDGETS.clear()
+
+
 # ---------------- 基础配色 ---------------- 
 def _tz(dark: str, light: str) -> str:
     """按当前主题返回 dark 或 light 值"""
@@ -208,6 +274,19 @@ def card_style() -> str:
     )
 
 
+def accent_border_style() -> str:
+    """右侧 AI 条展开按钮:暗底 + 圆角 + 悬停强调色边框。跟随配色刷新。"""
+    bg = current_color("btn_bg")
+    border = current_color("btn_border")
+    text = text_color()
+    return (
+        f"QPushButton {{ background: {bg}; color: {text}; border: 1px solid {border};"
+        f" border-radius: 8px; font-weight: bold; }}"
+        f"QPushButton:hover {{ border-color: {current_color('accent')}; }}"
+        f"QPushButton:pressed {{ background: {current_color('btn_bg_pressed')}; }}"
+    )
+
+
 def arrow_style() -> str:
     """卡片右侧的展开箭头按钮"""
     return "QPushButton { border: none; background: transparent; color: #888888; }"
@@ -248,7 +327,7 @@ def apply_global_dark_palette(app) -> None:
     base = QColor("#1a1d23")
     text = QColor("#e7ecf5")
     muted = QColor("#8b96a8")
-    accent = QColor("#5B8DEF")
+    accent = QColor(current_color("accent"))
     p.setColor(QPalette.ColorRole.Window, bg)
     p.setColor(QPalette.ColorRole.WindowText, text)
     p.setColor(QPalette.ColorRole.Base, base)

@@ -20,7 +20,7 @@ from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
 from i18n import t
 from paths import DEFAULT_GAME_DIR
 from settings import save_settings
-from ui_style import card_btn_style, muted_color
+from ui_style import card_btn_style, muted_color, set_style
 
 
 def _fmt_mcp_entry(c: dict) -> str:
@@ -86,7 +86,7 @@ class SettingsCenter(QWidget):
             self.shell.switch_by_label(initial_tab)
 
         save_btn = QPushButton(t("保存设置", "Save settings"))
-        save_btn.setStyleSheet(card_btn_style())
+        set_style(save_btn, card_btn_style)
         save_btn.setMinimumHeight(38)
         save_btn.clicked.connect(self.apply)
         self._save_btn = save_btn
@@ -165,7 +165,7 @@ class SettingsCenter(QWidget):
             info.setWordWrap(True); info.setTextFormat(Qt.TextFormat.RichText)
             row = QHBoxLayout(); row.addWidget(info, 1)
             if d.get("reopen") == "tutorial":
-                open_btn = QPushButton("临时查看"); open_btn.setStyleSheet(card_btn_style())
+                open_btn = QPushButton("临时查看"); set_style(open_btn, card_btn_style)
                 open_btn.clicked.connect(self._reopen_tutorial); row.addWidget(open_btn)
             l.addLayout(row)
         # 检查更新 / 重播引导教程(原在菜单栏,现并入设置 → 界面;重播按钮不放在最外层)
@@ -173,7 +173,7 @@ class SettingsCenter(QWidget):
         upd_btn = QPushButton(t("检查更新…", "Check for Updates…"))
         tut_btn = QPushButton(t("重播引导教程", "Replay guided tutorial"))
         for b in (upd_btn, tut_btn):
-            b.setStyleSheet(card_btn_style()); b.setMinimumHeight(32)
+            set_style(b, card_btn_style); b.setMinimumHeight(32)
         upd_btn.clicked.connect(self._open_update)
         tut_btn.clicked.connect(self._open_guide)
         more_row = QHBoxLayout(); more_row.addWidget(upd_btn); more_row.addWidget(tut_btn); more_row.addStretch()
@@ -188,15 +188,15 @@ class SettingsCenter(QWidget):
         cbtn_row = QHBoxLayout(); cbtn_row.setSpacing(8)
         for slot, label in [("accent", "强调色"), ("text", "文字色"), ("panel_bg", "背景色")]:
             b = QPushButton(label)
-            b.setStyleSheet(card_btn_style())
+            set_style(b, card_btn_style)
             b.clicked.connect(lambda _c, s=slot, lb=label: self._pick_color(s, lb))
             cbtn_row.addWidget(b, 1)
             self._color_btns[slot] = b
-        reset_btn = QPushButton("重置默认"); reset_btn.setStyleSheet(card_btn_style())
+        reset_btn = QPushButton("重置默认"); set_style(reset_btn, card_btn_style)
         reset_btn.clicked.connect(self._reset_colors)
         cbtn_row.addWidget(reset_btn)
         l.addLayout(cbtn_row)
-        color_hint = QLabel("配色改完保存后,**整个启动器**在下次启动/重建时生效;当前设置页立即预览强调色。")
+        color_hint = QLabel("配色改完**立即覆盖整个启动器**(实时上色,不用等重启);当前设置页同步预览。")
         color_hint.setWordWrap(True); color_hint.setStyleSheet("color:#8a93a0;")
         l.addWidget(color_hint)
         self._refresh_color_btn_text()
@@ -216,9 +216,9 @@ class SettingsCenter(QWidget):
         mcp_lbl = QLabel(f"HTTP 链接: {self._mcp_url}")
         mcp_lbl.setStyleSheet("color:#8a93a0;")
         mcp_row.addWidget(mcp_lbl, 1)
-        copy_btn = QPushButton("复制链接"); copy_btn.setStyleSheet(card_btn_style())
+        copy_btn = QPushButton("复制链接"); set_style(copy_btn, card_btn_style)
         copy_btn.clicked.connect(self._copy_mcp_link); mcp_row.addWidget(copy_btn)
-        gen_btn = QPushButton("生成配置文件"); gen_btn.setStyleSheet(card_btn_style())
+        gen_btn = QPushButton("生成配置文件"); set_style(gen_btn, card_btn_style)
         gen_btn.clicked.connect(self._gen_mcp_files); mcp_row.addWidget(gen_btn)
         l.addLayout(mcp_row)
         self._mcp_status = QLabel("")
@@ -296,6 +296,7 @@ class SettingsCenter(QWidget):
         self.settings["ui_custom_colors"] = cols
         save_settings(self.settings)
         self._refresh_color_btn_text()
+        self._retheme()
 
     def _reset_colors(self):
         from ui_style import clear_custom_colors
@@ -303,6 +304,15 @@ class SettingsCenter(QWidget):
         self.settings["ui_custom_colors"] = {}
         save_settings(self.settings)
         self._refresh_color_btn_text()
+        self._retheme()
+
+    def _retheme(self):
+        """自定义配色改了 → 实时重刷整应用上色(之前要重启才生效)。"""
+        try:
+            from ui_style import refresh_theme
+            refresh_theme()
+        except Exception:
+            pass
 
     def _open_update(self):
         p = self.window()

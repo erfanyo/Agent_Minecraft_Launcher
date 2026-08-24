@@ -13,7 +13,7 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QPushButton, QVBoxLayout, QWidget
 
-from ui_style import menu_btn_style
+from ui_style import menu_btn_style, set_style
 
 
 class LeftMenu(QWidget):
@@ -36,7 +36,7 @@ class LeftMenu(QWidget):
         b = QPushButton(text)
         b.setCheckable(True)
         b.setFixedHeight(40)     # 固定行高 → 行距均匀、靠上排列
-        b.setStyleSheet(menu_btn_style())
+        set_style(b, menu_btn_style)
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         idx = len(self._buttons)
         b.clicked.connect(lambda _c=False, i=idx: self._select(i))

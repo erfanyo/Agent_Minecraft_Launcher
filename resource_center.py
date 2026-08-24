@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 
 from i18n import t
 from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
-                      muted_color, panel_style, text_color)
+                      muted_color, panel_style, text_color, set_style)
 
 # 资源分类(左侧菜单 + Modrinth project_type + 安装目录子文件夹)
 RESOURCE_CATEGORIES = [
@@ -206,7 +206,7 @@ class ResourceBrowser(QWidget):
         self.search_edit.returnPressed.connect(self.do_search)
         search_btn = QPushButton(t("搜索", "Search"))
         search_btn.clicked.connect(self.do_search)
-        search_btn.setStyleSheet(card_btn_style())
+        set_style(search_btn, card_btn_style)
 
         self.sort_combo = QComboBox()
         for lbl, val in [("按下载量排序", "downloads"),
@@ -217,7 +217,7 @@ class ResourceBrowser(QWidget):
         # 标签(分类)多级菜单:替代以前"手输标签"。点开是一棵分组菜单,可多选。
         self.tag_btn = QToolButton()
         self.tag_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.tag_btn.setStyleSheet(card_btn_style())
+        set_style(self.tag_btn, card_btn_style)
         self.tag_btn.setToolTip("按分类标签筛选(可多选;组内是子菜单)")
         self._selected_tags = set()
         self.tag_menu = QMenu(self.tag_btn)
@@ -229,7 +229,7 @@ class ResourceBrowser(QWidget):
         self.inst_cards_toggle.setCheckable(True)
         self.inst_cards_toggle.setChecked(False)
         self.inst_cards_toggle.clicked.connect(self._toggle_cards)
-        self.inst_cards_toggle.setStyleSheet(card_btn_style())
+        set_style(self.inst_cards_toggle, card_btn_style)
         self.instance_cards_box = QWidget()
         self.instance_cards_layout = QVBoxLayout(self.instance_cards_box)
         self.instance_cards_layout.setContentsMargins(0, 0, 0, 0)
@@ -265,11 +265,11 @@ class ResourceBrowser(QWidget):
         # ---- 结果列表 + 详情面板 ----
         self.result_list = QListWidget()
         self.result_list.setWordWrap(True)
-        self.result_list.setStyleSheet(list_style())
+        set_style(self.result_list, list_style)
         self.result_list.currentItemChanged.connect(self._on_selected)
 
         self.panel = QWidget()
-        self.panel.setStyleSheet(panel_style())
+        set_style(self.panel, panel_style)
         self.panel.setMinimumWidth(260)
         self.panel.setMaximumWidth(500)
         self.icon_label = QLabel()
@@ -299,7 +299,7 @@ class ResourceBrowser(QWidget):
         self.loader_combo = QComboBox()
         self.ver_combo = QComboBox()
         self.dl_btn = QPushButton(t("下载", "Download"))
-        self.dl_btn.setStyleSheet(launch_btn_style())
+        set_style(self.dl_btn, launch_btn_style)
         self.dl_btn.clicked.connect(self._download)
         self.gv_combo.currentIndexChanged.connect(self._refresh_versions)
         self.loader_combo.currentIndexChanged.connect(self._refresh_versions)
@@ -441,14 +441,14 @@ class ResourceBrowser(QWidget):
             card = QPushButton(inst["label"])
             card.setCheckable(True)
             card.setMinimumHeight(40)
-            card.setStyleSheet(card_btn_style())
+            set_style(card, card_btn_style)
             card.clicked.connect(lambda _c, i=inst: self._select_inst(i))
             self.instance_cards_layout.addWidget(card)
             self._inst_cards.append((inst, card))
         none_card = QPushButton(t("无(手动选目录)", "None (pick folder)"))
         none_card.setCheckable(True)
         none_card.setMinimumHeight(40)
-        none_card.setStyleSheet(card_btn_style())
+        set_style(none_card, card_btn_style)
         none_card.clicked.connect(self._select_none)
         self.instance_cards_layout.addWidget(none_card)
         self._none_card = none_card
@@ -979,7 +979,7 @@ class ResourceCenter(QWidget):
         for text, idx in entries:
             b = QPushButton(text)
             b.setMinimumSize(150, 96)   # 高一点的分类卡片;放不下时自动换行
-            b.setStyleSheet(card_btn_style())
+            set_style(b, card_btn_style)
             b.clicked.connect(lambda _c, i=idx: self.switch_to(i))
             cards.addWidget(b)
         layout.addLayout(cards)
