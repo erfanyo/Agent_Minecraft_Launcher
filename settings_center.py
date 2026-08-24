@@ -23,6 +23,47 @@ from settings import save_settings
 from ui_style import card_btn_style, muted_color
 
 
+def _fmt_mcp_entry(c: dict) -> str:
+    """把配置里的 MCP 客户端项转成设置文本框里的一行。
+    HTTP → url;stdio → 名字>=命令。"""
+    if (c.get("transport") or "http").strip().lower() in ("stdio", "local", "command", "process"):
+        command = c.get("command")
+        if isinstance(command, list):
+            import shlex
+            command = shlex.join([str(x) for x in command])
+        return f"{c.get('name', 'mcp')}>={command or ''}"
+    return c.get("url", "")
+
+
+def _parse_mcp_entries(text: str) -> list:
+    """解析设置文本框里的 MCP 客户端(用 ; 分隔,兼容旧用逗号)。
+    "http://…/mcp"            → {"name":"mcpN","transport":"http","url":…}
+    "名字>=uvx mc-wiki-mcp"    → {"name":"名字","transport":"stdio","command":["uvx","mc-wiki-mcp"]}"""
+    entries = []
+    raw = (text or "").replace(",", ";")   # 兼容旧格式(逗号分隔)
+    for i, line in enumerate(raw.split(";")):
+        line = line.strip()
+        if not line:
+            continue
+        if ">=" in line:
+            nm, cmd = line.split(">=", 1)
+            nm = nm.strip() or f"mcp{i + 1}"
+            # 拆命令:支持带引号(如含空格的 python 路径)
+            import shlex
+            try:
+                cmd_list = shlex.split(cmd.strip())
+            except Exception:
+                cmd_list = [cmd.strip()] if cmd.strip() else []
+            if cmd_list:
+                entries.append({"name": nm, "transport": "stdio", "command": cmd_list})
+        else:
+            nm = f"mcp{i + 1}"
+            # 判断是否 http
+            url = line.strip()
+            entries.append({"name": nm, "transport": "http", "url": url})
+    return entries
+
+
 class SettingsCenter(QWidget):
     applied = Signal()   # 保存后发出,主窗口据此刷新(set_ui_mode / ai_dock 等)
     _dl_progress = Signal(int, int)
@@ -183,12 +224,17 @@ class SettingsCenter(QWidget):
         self._mcp_status = QLabel("")
         self._mcp_status.setWordWrap(True); self._mcp_status.setStyleSheet("color:#8a93a0;")
         l.addWidget(self._mcp_status)
-        # MCP 客户端(启动器 AI 去调用的【外部】MCP 服务器):逗号分隔 url
+        # MCP 客户端(启动器 AI 去调用的【外部】MCP 服务器)。
+        # 每条用 ; 分隔,两种写法:
+        #   HTTP:  http://127.0.0.1:9000/mcp
+        #   stdio: amcl>=uvx mc-wiki-mcp   (名字>=可执行命令,整条=本地子进程)
         self.mcp_clients_edit = QLineEdit()
         self.mcp_clients_edit.setPlaceholderText(
-            "MCP 客户端(外部服务器→启动器 AI 调用),逗号分隔,如 http://127.0.0.1:9000/mcp")
+            "MCP 客户端(外部服务器→启动器AI调用),用 ; 分隔。\n"
+            "HTTP 写 url,如 http://127.0.0.1:9000/mcp;"
+            "本地 stdio 写 名字>=命令,如 mcwiki>=uvx mc-wiki-mcp")
         self.mcp_clients_edit.setText(
-            ",".join(c.get("url", "") for c in self.settings.get("mcp_clients", [])))
+            ";".join(_fmt_mcp_entry(c) for c in self.settings.get("mcp_clients", [])))
         mcpc_row = QHBoxLayout(); mcpc_row.setSpacing(8)
         mcpc_row.addWidget(QLabel("MCP 客户端:"))
         mcpc_row.addWidget(self.mcp_clients_edit, 1)
@@ -476,9 +522,7 @@ class SettingsCenter(QWidget):
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors
-        # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):逗号分隔 url → [{name,url}]
-        self.settings["mcp_clients"] = [
-            {"name": f"mcp{i + 1}", "url": u.strip()}
-            for i, u in enumerate(self.mcp_clients_edit.text().split(",")) if u.strip()]
+        # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):每条用 ; 分隔,支持两种写法
+        self.settings["mcp_clients"] = _parse_mcp_entries(self.mcp_clients_edit.text())
         save_settings(self.settings)
         self.applied.emit()
