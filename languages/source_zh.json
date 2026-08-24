@@ -1,0 +1,458 @@
+[
+ {
+  "zh": "检查更新",
+  "en": "Check for Updates"
+ },
+ {
+  "zh": "下载并更新",
+  "en": "Download & Update"
+ },
+ {
+  "zh": "查看发布页",
+  "en": "Open Release Page"
+ },
+ {
+  "zh": "关闭",
+  "en": "Close"
+ },
+ {
+  "zh": "AMCL 启动器",
+  "en": "AMCL Launcher"
+ },
+ {
+  "zh": "bridge-mod(游戏内指令口 / 数据导出)",
+  "en": "bridge-mod"
+ },
+ {
+  "zh": "更新",
+  "en": "Update"
+ },
+ {
+  "zh": "新版本已下载,程序将退出并自动替换重启。",
+  "en": "Update downloaded; the app will restart."
+ },
+ {
+  "zh": "更新失败",
+  "en": "Update Failed"
+ },
+ {
+  "zh": "我的实例",
+  "en": "My Instances"
+ },
+ {
+  "zh": "实例详情",
+  "en": "Instance Details"
+ },
+ {
+  "zh": "下载新资源",
+  "en": "Resources"
+ },
+ {
+  "zh": "联机",
+  "en": "Multiplayer"
+ },
+ {
+  "zh": "设置",
+  "en": "Settings"
+ },
+ {
+  "zh": "镜像源",
+  "en": "Mirror"
+ },
+ {
+  "zh": "AI 助手",
+  "en": "AI Assistant"
+ },
+ {
+  "zh": "🖐 松手 → 尝试作为整合包安装",
+  "en": "Release to install as modpack"
+ },
+ {
+  "zh": "实例设置",
+  "en": "Instance settings"
+ },
+ {
+  "zh": "请先在右侧「版本」里选中一个实例。",
+  "en": "Select an instance on the right first."
+ },
+ {
+  "zh": "登录信息已更新",
+  "en": "Login info updated"
+ },
+ {
+  "zh": "是",
+  "en": "Yes"
+ },
+ {
+  "zh": "否",
+  "en": "No"
+ },
+ {
+  "zh": "← 上一步",
+  "en": "← Back"
+ },
+ {
+  "zh": "打开官网",
+  "en": "Open website"
+ },
+ {
+  "zh": "查看教程",
+  "en": "View tutorial"
+ },
+ {
+  "zh": "一键生成房间并分享",
+  "en": "Generate room & share"
+ },
+ {
+  "zh": "房间钥匙(name + secret)",
+  "en": "Room key (name + secret)"
+ },
+ {
+  "zh": "虚拟 IP",
+  "en": "Virtual IP"
+ },
+ {
+  "zh": "重新开始",
+  "en": "Restart"
+ },
+ {
+  "zh": "推荐方案:",
+  "en": "Recommended:"
+ },
+ {
+  "zh": "⚠️ 该方案需要正版 Minecraft(微软)账号,盗版/离线账号无法使用。",
+  "en": "⚠️ This option needs a genuine (Microsoft) Minecraft account; offline/pirated accounts won't work."
+ },
+ {
+  "zh": "自动配置未就绪:后端接口暂不可用。请先「打开官网」下载,或手动按教程安装。",
+  "en": "Auto-setup not ready: backend unavailable. Open the website to download, or follow the tutorial."
+ },
+ {
+  "zh": "EasyTier 已就绪,可一键生成房间。",
+  "en": "EasyTier ready — generate a room."
+ },
+ {
+  "zh": "自动配置需联网:首次使用请点击下载/安装(或手动按教程装)。",
+  "en": "Auto-setup needs internet: click to download/install first (or install manually)."
+ },
+ {
+  "zh": "下载/安装并生成房间",
+  "en": "Download/install & generate room"
+ },
+ {
+  "zh": "后端未就绪,请先「打开官网」下载或手动按教程安装。",
+  "en": "Backend not ready — open the website or install manually."
+ },
+ {
+  "zh": "✅ 房间已生成;把房间钥匙与虚拟 IP 发给朋友即可。",
+  "en": "✅ Room created — send the room key & virtual IP to your friends."
+ },
+ {
+  "zh": "查看官网/教程",
+  "en": "Open official tutorial"
+ },
+ {
+  "zh": "首页",
+  "en": "Home"
+ },
+ {
+  "zh": "帮我推荐",
+  "en": "Recommend"
+ },
+ {
+  "zh": "教程与资料",
+  "en": "Tutorials"
+ },
+ {
+  "zh": "开始推荐(答是 / 否)",
+  "en": "Start recommend (yes/no)"
+ },
+ {
+  "zh": "搜索",
+  "en": "Search"
+ },
+ {
+  "zh": "全部加载器",
+  "en": "All loaders"
+ },
+ {
+  "zh": "下载",
+  "en": "Download"
+ },
+ {
+  "zh": "游戏版本:",
+  "en": "Game version:"
+ },
+ {
+  "zh": "加载器:",
+  "en": "Loader:"
+ },
+ {
+  "zh": "版本:",
+  "en": "Version:"
+ },
+ {
+  "zh": "← 在左侧选择一个项目\\n展开它的版本 / 加载器选项",
+  "en": "← Select a project on the left"
+ },
+ {
+  "zh": "无标签",
+  "en": "No tags"
+ },
+ {
+  "zh": "清除所有标签",
+  "en": "Clear all tags"
+ },
+ {
+  "zh": "无(手动选目录)",
+  "en": "None (pick folder)"
+ },
+ {
+  "zh": "安装到",
+  "en": "Install to"
+ },
+ {
+  "zh": "选择安装位置",
+  "en": "Pick folder"
+ },
+ {
+  "zh": "搜索中...",
+  "en": "Searching..."
+ },
+ {
+  "zh": "搜索失败,请检查网络",
+  "en": "Search failed, check network"
+ },
+ {
+  "zh": "(没有找到结果)",
+  "en": "(no results)"
+ },
+ {
+  "zh": "在 MC百科查看",
+  "en": "View on MC百科 (mcmod.cn)"
+ },
+ {
+  "zh": "🔄 正在翻译描述…",
+  "en": "🔄 Translating…"
+ },
+ {
+  "zh": "⚡ 已缓存翻译",
+  "en": "⚡ Cached translation"
+ },
+ {
+  "zh": "⚠ 翻译失败,已显示原文",
+  "en": "⚠ Translation failed, showing original"
+ },
+ {
+  "zh": "🤖 机翻仅供参考,请以英文原意为准",
+  "en": "🤖 Machine translation, see original for accuracy"
+ },
+ {
+  "zh": "🤖 机翻仅供参考(低可信),请以英文原意为准",
+  "en": "🤖 Machine translation (low confidence), see original"
+ },
+ {
+  "zh": "加载中...",
+  "en": "Loading..."
+ },
+ {
+  "zh": "(暂无可用版本)",
+  "en": "(no versions)"
+ },
+ {
+  "zh": "实例",
+  "en": "Instances"
+ },
+ {
+  "zh": "整合包",
+  "en": "Modpacks"
+ },
+ {
+  "zh": "光影包",
+  "en": "Shaders"
+ },
+ {
+  "zh": "数据包",
+  "en": "Datapacks"
+ },
+ {
+  "zh": "资源包",
+  "en": "Resourcepacks"
+ },
+ {
+  "zh": "启动器插件",
+  "en": "Plugins"
+ },
+ {
+  "zh": "最新正式版: -- | 最新快照版: --",
+  "en": "Latest release: -- | Latest snapshot: --"
+ },
+ {
+  "zh": "像逛商场一样挑资源:",
+  "en": "Browse resources:"
+ },
+ {
+  "zh": "📦 创建实例",
+  "en": "Instances"
+ },
+ {
+  "zh": "📚 了解 MC 资源结构(自己挑资源前先看一眼):",
+  "en": "MC resource types (read before picking):"
+ },
+ {
+  "zh": "打开插件管理(设置→插件)",
+  "en": "Open plugin manager"
+ },
+ {
+  "zh": "插件",
+  "en": "Plugins"
+ },
+ {
+  "zh": "游戏",
+  "en": "Game"
+ },
+ {
+  "zh": "界面",
+  "en": "UI"
+ },
+ {
+  "zh": "保存设置",
+  "en": "Save settings"
+ },
+ {
+  "zh": "全面(显示更多提示与科普)",
+  "en": "Full (more tips & guides)"
+ },
+ {
+  "zh": "摘要(精简提示)",
+  "en": "Summary (concise)"
+ },
+ {
+  "zh": "检查更新…",
+  "en": "Check for Updates…"
+ },
+ {
+  "zh": "重播引导教程",
+  "en": "Replay guided tutorial"
+ },
+ {
+  "zh": "下载本地模型",
+  "en": "Download local model"
+ },
+ {
+  "zh": "已就绪",
+  "en": "Ready"
+ },
+ {
+  "zh": "本地模型已下载,可直接使用",
+  "en": "Local model downloaded, ready"
+ },
+ {
+  "zh": "未下载(约 500MB,点按钮开始)",
+  "en": "Not downloaded (~500MB, click to start)"
+ },
+ {
+  "zh": "下载中 0%…",
+  "en": "Downloading 0%…"
+ },
+ {
+  "zh": "正在后台下载本地模型(镜像优先)…",
+  "en": "Downloading local model (mirror first)…"
+ },
+ {
+  "zh": "全面:首页显示资源结构科普、更详细的状态提示;摘要:隐藏科普、精简提示。",
+  "en": "Full: shows resource guide & detailed hints; Summary: hides them (concise)."
+ },
+ {
+  "zh": "📖 新手教程",
+  "en": "Beginner Tutorial"
+ },
+ {
+  "zh": "基本概念",
+  "en": "Basics"
+ },
+ {
+  "zh": "更改登录方式 ▾",
+  "en": "Change login ▾"
+ },
+ {
+  "zh": "修改离线昵称…",
+  "en": "Edit offline name…"
+ },
+ {
+  "zh": "打开启动器设置…",
+  "en": "Open launcher settings…"
+ },
+ {
+  "zh": "离线模式 · 昵称可改",
+  "en": "Offline · name editable"
+ },
+ {
+  "zh": "修改离线昵称",
+  "en": "Edit offline name"
+ },
+ {
+  "zh": "离线模式显示的游戏名:",
+  "en": "Offline in-game name:"
+ },
+ {
+  "zh": "当前选择",
+  "en": "Current selection"
+ },
+ {
+  "zh": "未选择实例",
+  "en": "No instance selected"
+ },
+ {
+  "zh": "导入整合包",
+  "en": "Import Modpack"
+ },
+ {
+  "zh": "一键配置 ▾",
+  "en": "One-click ▾"
+ },
+ {
+  "zh": "一键配置 bridge-mod(本地指令口,推荐)",
+  "en": "One-click bridge-mod (local command port, recommended)"
+ },
+ {
+  "zh": "一键配置 RCON(临时方案)",
+  "en": "One-click RCON (temporary)"
+ },
+ {
+  "zh": "启动游戏",
+  "en": "Launch Game"
+ },
+ {
+  "zh": "更新日志",
+  "en": "Changelog"
+ },
+ {
+  "zh": "MC 动态",
+  "en": "Community"
+ },
+ {
+  "zh": "启动器日志",
+  "en": "Launcher Log"
+ },
+ {
+  "zh": "刷新",
+  "en": "Refresh"
+ },
+ {
+  "zh": "来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md",
+  "en": "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md"
+ },
+ {
+  "zh": "正在从 GitHub 拉取…",
+  "en": "Fetching from GitHub…"
+ },
+ {
+  "zh": "拉取失败,请检查网络后点「刷新」",
+  "en": "Fetch failed, check network and Refresh"
+ },
+ {
+  "zh": "先选择实例",
+  "en": "Select an instance first"
+ }
+]

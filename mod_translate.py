@@ -29,6 +29,12 @@ CACHE_FILE = os.path.join(CACHE_DIR, "translations.json")
 MAX_ENTRIES = 2000            # 缓存条目上限,超出丢最旧的(防无限膨胀)
 SHORT_TEXT_LEN = 240          # ≤ 此长度视为短文本 → 高置信度
 
+# 目标语言代码 → 显示名(中文→X 机翻用)
+_LANG_NAME = {
+    "en": "英语 English", "fr": "法语 Français", "es": "西班牙语 Español",
+    "ru": "俄语 Русский", "ar": "阿拉伯语 العربية", "ja": "日语 日本語", "ko": "韩语 한국어",
+}
+
 _store_lock = threading.RLock()   # 缓存读写锁(线程安全)
 _engine = None                    # 模块级懒加载引擎单例
 _engine_lock = threading.Lock()
@@ -173,15 +179,43 @@ def _model_downloaded() -> bool:
         return False
 
 
+def _external_config() -> tuple:
+    """读外部 OpenAI 兼容引擎设置(如 LM Studio 的 9B):(base, model)。
+    设置键 ai_local_base / ai_local_model;空 = 用内置 llama-server。"""
+    try:
+        from settings import load_settings
+        s = load_settings()
+        base = (s.get("ai_local_base") or "").strip()
+        model = (s.get("ai_local_model") or "").strip()
+        return base, model
+    except Exception:
+        return "", ""
+
+
 def get_translation_engine():
     """返回可用的 GrammarToolEngine(懒加载单例)。
-    - 若 8090 端口已有健康 llama-server(如 AI 对话框已启动)→ 直接复用,不起新进程
-    - 否则检查模型已下载 → start()(启动失败/未下载 → TranslationUnavailable)"""
+    - 若设置指定了外部 OpenAI 兼容引擎(LM Studio 9B)→ 用外部,不起 llama-server;
+    - 否则若 8090 已有健康 llama-server → 复用;否则检查模型已下载 → start();否则 TranslationUnavailable"""
     global _engine
     with _engine_lock:
         if _engine is None:
             from local_ai import GrammarToolEngine
-            _engine = GrammarToolEngine()
+            base, model = _external_config()
+            if base and model:
+                _engine = GrammarToolEngine(external_base=base, external_model=model)
+            else:
+                _engine = GrammarToolEngine()
+        if _engine.is_external:
+            # 外部引擎:探一下连通性,通了就直接用;不通抛异常(优雅降级)
+            try:
+                import requests
+                url = _engine.external_base.rstrip("/")
+                if not url.endswith("/v1"):
+                    url = url + "/v1"
+                requests.get(url + "/models", timeout=5).raise_for_status()
+                return _engine
+            except Exception as e:
+                raise TranslationUnavailable(f"外部翻译引擎不可用:{type(e).__name__}: {e}")
         try:
             import requests
             if requests.get(f"{_engine.base}/health", timeout=2).status_code == 200:
@@ -200,23 +234,22 @@ def get_translation_engine():
 
 # ---------------- 对外纯函数 ----------------
 def translate_text(text: str, slug: str = "", field: str = "description",
-                   engine=None, timeout: int = 90) -> dict:
-    """英→中翻译(缓存优先),纯函数、与 UI 解耦(W5 供游戏内翻译复用)。
+                   engine=None, timeout: int = 90,
+                   target_lang: str = "", target_name: str = "") -> dict:
+    """翻译(缓存优先)。默认英→中;target_lang 指定目标语言代码(zh/en/fr/es/ru/ar/ja/ko…)
+    时做「中文→目标语言」机翻(用于语言包生成)。纯函数、与 UI 解耦。
 
     参数:
-      text    待翻译文本(英文);已是中文则原样返回,不触发推理
+      text    待翻译文本
       slug    Mod slug(缓存 key 用;纯文本调用留空)
-      field   字段名(description / summary 等,缓存 key 用)
+      field   字段名(缓存 key 用)
       engine  可选注入引擎(测试用);None = 模块级懒加载单例
       timeout 推理超时(秒)
+      target_lang 目标语言代码(留空=英→中默认);非空且 text 含中文 → 中文→target
+      target_name 目标语言显示名(如 法语/English;留空自动映射)
 
-    返回 dict:
-      {translated, text(译文或原文), confidence(high/low), machine(是否机翻,
-       True=需"机翻仅供参考"标注), cached, source(cache/model/original/
-       already_cn/disabled), glossary_hit}
-
-    失败(模型不可用/超时/异常)→ 抛 TranslationUnavailable;要"永不抛异常"
-    用 translate_text_safe()(返回原文降级)。"""
+    返回 dict: {translated, text, confidence, machine, cached, source, ...}
+    失败抛 TranslationUnavailable;要"永不抛异常"用 translate_text_safe()。"""
     text = (text or "").strip()
     base = {"translated": False, "text": text, "confidence": "low",
             "machine": False, "cached": False, "glossary_hit": False}
@@ -227,11 +260,23 @@ def translate_text(text: str, slug: str = "", field: str = "description",
     if not text:
         base["source"] = "original"
         return base
-    if _has_cjk(text):
-        base["source"] = "already_cn"     # 本身就是中文,无需翻译
-        return base
 
-    key = _cache_key(slug, field, text)
+    # 目标语言映射(中文→X 用;留空=默认英→中)
+    target_lang = (target_lang or "").strip()
+    if target_lang:
+        tname = target_name or _LANG_NAME.get(target_lang, target_lang)
+        # 中文→目标语言:源必须是中文(无中文则不是我们要翻的)
+        if not _has_cjk(text):
+            base["source"] = "not_cn"
+            return base
+    else:
+        tname = "简体中文"
+        # 默认英→中:源已是中文则无需翻译
+        if _has_cjk(text):
+            base["source"] = "already_cn"
+            return base
+
+    key = _cache_key(slug or f"mtz|{target_lang}", field, text)
     with _store_lock:
         store = _load_store()
         hit = store["entries"].get(key)
@@ -243,15 +288,19 @@ def translate_text(text: str, slug: str = "", field: str = "description",
 
     eng = engine if engine is not None else get_translation_engine()
     try:
-        from local_ai import MC_GLOSSARY
-        output = eng.translate(text, timeout=timeout)
+        g = {}
+        if not target_lang:
+            from local_ai import MC_GLOSSARY
+            g = MC_GLOSSARY
+        output = eng.translate(text, timeout=timeout, glossary=g,
+                               target_lang=target_lang or "zh", target_name=tname)
     except TranslationUnavailable:
         raise
     except Exception as e:
         raise TranslationUnavailable(f"翻译失败:{type(e).__name__}: {e}") from e
 
-    gh = _glossary_hit(text, MC_GLOSSARY)
-    conf = _confidence(text, output, gh)
+    gh = False
+    conf = _confidence(text, output, gh) if not target_lang else "high"
     with _store_lock:
         store = _load_store()
         store["entries"][key] = {"t": output, "c": conf, "g": gh,
@@ -263,11 +312,13 @@ def translate_text(text: str, slug: str = "", field: str = "description",
 
 
 def translate_text_safe(text: str, slug: str = "", field: str = "description",
-                        engine=None, timeout: int = 90) -> dict:
+                        engine=None, timeout: int = 90,
+                        target_lang: str = "", target_name: str = "") -> dict:
     """永不抛异常的翻译入口:失败直接返回原文(降级),供 UI/工具层直接调用。"""
     try:
         return translate_text(text, slug=slug, field=field,
-                              engine=engine, timeout=timeout)
+                              engine=engine, timeout=timeout,
+                              target_lang=target_lang, target_name=target_name)
     except TranslationUnavailable as e:
         return {"translated": False, "text": (text or "").strip(),
                 "confidence": "low", "machine": False, "cached": False,

@@ -96,21 +96,36 @@ MC_GLOSSARY = {
 }
 
 
-def _build_translate_system(glossary: dict) -> str:
-    """翻译用 system prompt:目标中文 + 强制 MC 标准译名(命中即用标准译名,不直译)。
-    用 <translation>...</translation> 定界 + 少样本示例,约束小模型只吐译文不罗嗦。"""
-    lines = ["你是一个 Minecraft 中文翻译助手。把用户给的英文文本翻译成简体中文。",
-             "规则:",
-             "1. 只输出 <translation> 与 </translation> 之间的译文,不要任何解释、思考、清单或额外内容。",
-             "2. 以下 Minecraft 标准译名必须使用(命中时用标准译名,不要直译):"]
-    lines += [f"   {en} → {cn}" for en, cn in glossary.items()]
-    lines += ["3. 文本本身就是中文时,原样放进标签。",
-              "4. 长文本保持段落结构,译文通顺自然。",
-              "示例:",
-              "输入:This mod adds new ores to the Nether.",
-              "输出:<translation>这个模组为下界添加了新矿石。</translation>",
-              "输入:Enchant your tools with mending and silk touch.",
-              "输出:<translation>用经验修补和精准采集附魔你的工具。</translation>"]
+def _build_translate_system(glossary: dict, target_lang: str = "zh",
+                            target_name: str = "简体中文") -> str:
+    """翻译用 system prompt:把中文文本译成目标语言,用 <translation>...</translation> 定界。
+    target_lang='zh'(默认)仍保留 MC 标准译名术语表(英→中);其他语言为"中文→X"床译。
+    少样本示例约束模型只吐译文不罗嗦。"""
+    if target_lang in ("zh", ""):
+        lines = ["你是一个 Minecraft 中文翻译助手。把用户给的英文文本翻译成简体中文。",
+                 "规则:",
+                 "1. 只输出 <translation> 与 </translation> 之间的译文,不要任何解释、思考、清单或额外内容。",
+                 "2. 以下 Minecraft 标准译名必须使用(命中时用标准译名,不要直译):"]
+        lines += [f"   {en} → {cn}" for en, cn in glossary.items()]
+        lines += ["3. 文本本身就是中文时,原样放进标签。",
+                  "4. 长文本保持段落结构,译文通顺自然。",
+                  "示例:",
+                  "输入:This mod adds new ores to the Nether.",
+                  "输出:<translation>这个模组为下界添加了新矿石。</translation>",
+                  "输入:Enchant your tools with mending and silk touch.",
+                  "输出:<translation>用经验修补和精准采集附魔你的工具。</translation>"]
+    else:
+        lines = [f"你是一个专业的翻译助手。把用户给的【简体中文】文本翻译成【{target_name}】。",
+                 "规则:",
+                 "1. 只输出 <translation> 与 </translation> 之间的译文,不要任何解释、思考、清单或额外内容。",
+                 "2. 译文要通顺自然、地道,符合该语言习惯;UI/按钮/短句要简洁。",
+                 "3. Minecraft 术语(下界/末地/村民/附魔/整合包等)用该语言的通行译法,不要生硬直译。",
+                 "4. 长文本保持段落结构;短文本(按钮/标签)直接给词,不加句号。",
+                 f"5. 目标语言:{target_name}(语言代码 {target_lang})。",
+                 "示例(仅示意格式,译文用该语言):",
+                 "输入:启动游戏",
+                 "输出:<translation>Launch Game</translation>" if target_lang == "en"
+                 else "输入:下载\n输出:<translation>(该语言的译文)</translation>"]
     return "\n".join(lines)
 
 def schemas_from_assistant_tools() -> dict:
@@ -272,14 +287,24 @@ class GrammarToolEngine:
 
     def __init__(self, model_id: str = DEFAULT_MODEL_ID, port: int = 8090,
                  gbnf: str = None, system_prompt: str = None,
-                 schemas: dict = None):
+                 schemas: dict = None,
+                 external_base: str = None, external_model: str = None):
         self.model_id = model_id
         self.port = port
         self.base = f"http://127.0.0.1:{port}"
+        # 外部 OpenAI 兼容引擎(如 LM Studio 的 9B):设置里指定 base(如 http://127.0.0.1:1234/v1)+ model 名。
+        # 有外部引擎时,chat/translate 走 /v1/chat/completions,不再自拉 8090 llama-server。
+        self.external_base = (external_base or "").strip()
+        self.external_model = (external_model or "").strip()
         self.schemas = schemas or schemas_from_assistant_tools()
         self.gbnf = gbnf or build_gbnf(self.schemas)
         self.system_prompt = system_prompt or self._default_system()
         self.proc = None
+
+    @property
+    def is_external(self) -> bool:
+        """是否用外部 OpenAI 兼容引擎(而非自拉 llama-server)。"""
+        return bool(self.external_base and self.external_model)
 
     # ---- 生命周期(规划 §5:用完即卸)----
     def start(self, model_path: str = None, wait: int = 90):
@@ -343,6 +368,10 @@ class GrammarToolEngine:
         chat_system = system or ("你是 Agent Minecraft Launcher 启动器的 AI 助手,用中文简洁友好地回答。"
                                  "你可以介绍启动器的功能(下载/启动游戏、装 Mod、查配方、发指令、诊断日志等)。"
                                  "回答要简短(3 句话以内),不知道的就直说。")
+        if self.is_external:
+            return self._openai_chat(chat_system, user_text,
+                                     n_predict=n_predict, temperature=temperature,
+                                     context=context, timeout=timeout)
         body = {"prompt": self._chat_prompt(user_text, context=context, system=chat_system),
                 "n_predict": n_predict, "temperature": temperature,
                 "stop": ["<|im_end|>", "</s>"]}
@@ -356,17 +385,45 @@ class GrammarToolEngine:
                 content = content[end + len("</think>"):].strip()
         return content
 
+    def _openai_chat(self, system: str, user: str, n_predict: int = 256,
+                     temperature: float = 0.3, context: str = "", timeout: int = 120) -> str:
+        """外部 OpenAI 兼容引擎(LM Studio 等):POST /v1/chat/completions。
+        context 拼进 user 消息(最轻量上下文注入)。max_tokens 给足避免空输出。"""
+        messages = [{"role": "system", "content": system}]
+        if context:
+            messages.append({"role": "system", "content": context})
+        messages.append({"role": "user", "content": user})
+        url = self.external_base.rstrip("/")
+        if not url.endswith("/v1"):
+            url = url + "/v1"
+        url = url + "/chat/completions"
+        # max_tokens 至少 1024:LM Studio 对 qwen3.5-9b 小 max_tokens 会输出空(finish=length)。
+        body = {"model": self.external_model, "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max(n_predict, 1024),
+                "stream": False}
+        r = requests.post(url, json=body, timeout=timeout)
+        r.raise_for_status()
+        content = (r.json()["choices"][0]["message"]["content"] or "").strip()
+        # 剥掉思考块(Qwen 推理模型的 <think>...</think> 输出对用户无意义)
+        if content.startswith("<think>"):
+            end = content.find("</think>")
+            if end >= 0:
+                content = content[end + len("</think>"):].strip()
+        return content
+
     def translate(self, text: str, timeout: int = 90, context: str = "",
-                  glossary: dict = None, n_predict: int = 768) -> str:
-        """英→中翻译(复用 chat 通道,注入 MC 标准译名术语表)。
-        模型按约定把译文放在 <translation>...</translation> 之间;解析失败则
-        原样返回模型输出(置信度由 mod_translate 判断)。失败抛异常(调用方降级显示原文)。"""
+                  glossary: dict = None, n_predict: int = 768,
+                  target_lang: str = "zh", target_name: str = "简体中文") -> str:
+        """翻译(复用 chat 通道):默认英→中;target_lang 指定目标语言代码(zh/en/fr/es/ru/ar/ja/ko…)。
+        模型按约定把译文放在 <translation>...</translation> 之间;解析失败则原样返回模型输出。
+        失败抛异常(调用方降级显示原文)。"""
         g = dict(MC_GLOSSARY)
         if glossary:
             g.update(glossary)
+        system = _build_translate_system(g, target_lang=target_lang, target_name=target_name)
         raw = self.chat(text, timeout=timeout, context=context,
-                        system=_build_translate_system(g),
-                        n_predict=n_predict, temperature=0.1)
+                        system=system, n_predict=n_predict, temperature=0.1)
         return _extract_translation(raw)
 
     def tool_call(self, user_text: str, timeout: int = 120, context: str = "") -> dict:
