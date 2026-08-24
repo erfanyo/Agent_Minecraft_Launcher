@@ -8,10 +8,11 @@ Mod 依赖网络渲染(简单版):QGraphicsView/QGraphicsScene 画节点(mid)+ �
 """
 import math
 
-from PySide6.QtCore import QRectF, Qt, QPointF
+from PySide6.QtCore import QRectF, Qt, QPointF, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont, QFontMetricsF, QPolygonF, QPainterPath
 from PySide6.QtWidgets import (
     QDialog, QGraphicsView, QGraphicsScene, QGraphicsItem, QLabel, QVBoxLayout, QHBoxLayout,
+    QLineEdit, QPushButton,
 )
 
 import mod_deps as md
@@ -84,15 +85,27 @@ class _NodeItem(QGraphicsItem):
         self._font = font
         fm = QFontMetricsF(font)
         text = node.name
-        self._w = min(max(fm.horizontalAdvance(text) + 22, 64), 190)
-        self._h = 30
+        # 大型整合包节点多:宽度收紧(最短 56 / 最长 110),名字长了靠 tooltip 看全名
+        self._w = min(max(fm.horizontalAdvance(text) + 16, 56), 110)
+        self._h = 24
         self.setPos(x - self._w / 2, y - self._h / 2)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setToolTip(f"{node.name}  ({node.mod_id})\n"
                         f"文件:{node.file or '(缺失,未安装)'}\n"
                         f"加载器:{node.loader or '-'}  版本:{node.version or '-'}\n"
                         f"{'已禁用' if not node.enabled else '已启用'}"
-                        f"{'  ·  ⚠ 缺失' if node.missing else ''}")
+                        f"{'  ·  ⚠ 缺失' if node.missing else ''}\n"
+                        f"{'点击高亮:看它依赖谁 / 谁依赖它'}")
+        self._on_click = None
+
+    def set_click_handler(self, fn):
+        self._on_click = fn
+
+    def mousePressEvent(self, ev):
+        super().mousePressEvent(ev)
+        if self._on_click:
+            self._on_click(self.node.mod_id)
 
     def boundingRect(self) -> QRectF:
         return QRectF(0, 0, self._w, self._h)
@@ -103,9 +116,10 @@ class _NodeItem(QGraphicsItem):
         p.setPen(QPen(QColor("#20262e"), 1))
         p.setBrush(QBrush(color))
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        p.drawRoundedRect(self.boundingRect(), 6, 6)
+        p.drawRoundedRect(self.boundingRect(), 5, 5)
         p.setPen(QColor("#ffffff"))
         p.setFont(self._font)
+        # 名字太长画不下 → 直接画省略号结尾
         p.drawText(self.boundingRect(), Qt.AlignmentFlag.AlignCenter, self.node.name)
 
 
@@ -146,21 +160,47 @@ class _EdgeItem(QGraphicsItem):
 
 
 class _ZoomView(QGraphicsView):
-    """支持滚轮缩放的视图(AnchorUnderMouse 缩放)。"""
+    """支持滚轮缩放 + 双击/按钮缩放到视野的视图(AnchorUnderMouse 缩放)。"""
+
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self._fit_requested = True   # 首次 show 后自动 fitInView
+        self._zoom_t = QTimer(self)
+        self._zoom_t.setSingleShot(True)
+        self._zoom_t.timeout.connect(self._do_fit)
 
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
         self.scale(factor, factor)
 
+    def fit_now(self):
+        self.resetTransform()
+        self.fitInView(self.scene().itemsBoundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if self._fit_requested:
+            self._fit_requested = False
+            self._zoom_t.start(0)
+
+    def _do_fit(self):
+        try:
+            self.fit_now()
+        except Exception:
+            pass
+
 
 class ModDependencyGraphDialog(QDialog):
     """Mod 依赖网络对话框:蓝色=已装,灰=已禁用,红=缺失(被依赖但没装);
-    实线=必须依赖,虚线=可选依赖 / 不兼容(红色虚线)。拖拽平移,滚轮缩放。"""
+    实线=必须依赖,虚线=可选依赖 / 不兼容(红色虚线)。拖拽平移,滚轮缩放。
+
+    大型整合包(几百个 mod)自动把画布按节点数放大 → 打开时整体 fit 缩小到一屏
+    (不拥挤、能看到全貌),想看哪块就点节点高亮 / 放大到那一带。"""
 
     def __init__(self, inst_id: str, graph: md.ModGraph, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Mod 依赖网络 — {inst_id}")
-        self.resize(900, 640)
+        self.resize(900, 660)
         self._graph = graph
 
         font = QFont()
@@ -169,22 +209,35 @@ class ModDependencyGraphDialog(QDialog):
         edge_pairs = [(e.source, e.target) for e in graph.edges
                       if e.source in graph.nodes and e.target in graph.nodes \
                       and e.source != e.target]
-        self._pos = _force_layout(node_ids, edge_pairs, 860, 540)
+        n = len(node_ids)
+        # 画布按节点数扩大(避免几百个节点挤在一张小画布上):
+        # 每 ~1 个节点大约需要边长 k ≈ sqrt(W*H/n)*0.9,这里直接按 sqrt(n) 线性放大。
+        import math as _m
+        canvas_w = max(900, int(_m.sqrt(max(n, 1)) * 110))
+        canvas_h = max(620, int(_m.sqrt(max(n, 1)) * 82))
+        self._pos = _force_layout(node_ids, edge_pairs, canvas_w, canvas_h)
 
         self.scene = QGraphicsScene(self)
-        self.scene.setSceneRect(0, 0, 880, 560)
+        self.scene.setSceneRect(0, 0, canvas_w, canvas_h)
         # 先画边,再画节点(节点盖住线端)
+        self._edge_items = []   # (source, target, item)
+        self._items = {}        # mod_id -> _NodeItem
         for e in graph.edges:
             if e.source not in self._pos or e.target not in self._pos or e.source == e.target:
                 continue
             x1, y1 = self._pos[e.source]
             x2, y2 = self._pos[e.target]
-            self.scene.addItem(_EdgeItem(x1, y1, x2, y2, e.type))
+            item = _EdgeItem(x1, y1, x2, y2, e.type)
+            self.scene.addItem(item)
+            self._edge_items.append((e.source, e.target, item))
         for nid, node in graph.nodes.items():
             if nid not in self._pos:
                 continue
             x, y = self._pos[nid]
-            self.scene.addItem(_NodeItem(node, x, y, font))
+            item = _NodeItem(node, x, y, font)
+            item.set_click_handler(self._focus_node)
+            self.scene.addItem(item)
+            self._items[nid] = item
 
         self.view = _ZoomView(self.scene, self)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -192,14 +245,34 @@ class ModDependencyGraphDialog(QDialog):
         self.view.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.view.setBackgroundBrush(QBrush(QColor("#1e2430")))
 
-        legend = QLabel(
-            "● 蓝=已装  ·  ● 灰=已禁用  ·  ● 红=缺失(被依赖但没装)\n"
-            "实线=必须依赖  ·  虚线=可选依赖  ·  红色虚线=不兼容冲突\n"
-            "拖拽平移、滚轮缩放(点击节点看详情)")
-        legend.setStyleSheet("color: #aab3c0; background: transparent;")
-        legend.setWordWrap(True)
+        # ---- 顶部:定位搜索 + 缩放控制 ----
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("输入 mod 名 / id 回车定位(如 tacz、create、flywheel)")
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.returnPressed.connect(self._locate_from_search)
+        self._search_status = QLabel("")
+        self._search_status.setStyleSheet("color: #aab3c0;")
+        self._search_status.setMaximumWidth(260)
+        fit_btn = QPushButton("⌖ 适应")
+        fit_btn.clicked.connect(self.view.fit_now)
+        zin = QPushButton("＋")
+        zin.setFixedWidth(32)
+        zin.clicked.connect(lambda: self.view.scale(1.2, 1.2))
+        zout = QPushButton("－")
+        zout.setFixedWidth(32)
+        zout.clicked.connect(lambda: self.view.scale(1 / 1.2, 1 / 1.2))
+        clear_btn = QPushButton("取消高亮")
+        clear_btn.clicked.connect(lambda: self._apply_highlight(None))
 
-        # 概览
+        top = QHBoxLayout()
+        top.addWidget(self.search_edit, 1)
+        top.addWidget(self._search_status)
+        top.addWidget(fit_btn)
+        top.addWidget(zin)
+        top.addWidget(zout)
+        top.addWidget(clear_btn)
+
+        # ---- 概览 ----
         st = graph.stats()
         overview = QLabel(
             f"共 {st['mods']} 个 Mod," 
@@ -208,7 +281,52 @@ class ModDependencyGraphDialog(QDialog):
             f"   ·   实例: {inst_id}")
         overview.setStyleSheet("color: #e8ecf2; font-weight: bold; background: transparent;")
 
+        legend = QLabel(
+            "● 蓝=已装  ·  ● 灰=已禁用  ·  ● 红=缺失(被依赖但没装)\n"
+            "实线=必须依赖  ·  虚线=可选依赖  ·  红色虚线=不兼容冲突\n"
+            "拖拽平移、滚轮缩放;点节点高亮它和它依赖/被依赖的对象,再滚近点看细节")
+
         layout = QVBoxLayout(self)
         layout.addWidget(overview)
+        layout.addLayout(top)
         layout.addWidget(self.view, 1)
         layout.addWidget(legend)
+
+    # ---- 高亮:点节点 → 它 + 直接相连的节点全亮,其余变淡 ----
+    def _apply_highlight(self, focus: str | None):
+        nb = set()
+        if focus:
+            for s, t, _i in self._edge_items:
+                if s == focus:
+                    nb.add(t)
+                if t == focus:
+                    nb.add(s)
+        for mid, item in self._items.items():
+            on = focus is None or mid == focus or mid in nb
+            item.setOpacity(1.0 if on else 0.18)
+        for s, t, item in self._edge_items:
+            on = focus is None or focus in (s, t)
+            item.setOpacity(1.0 if on else 0.10)
+
+    def _focus_node(self, mod_id: str):
+        item = self._items.get(mod_id)
+        if item is None:
+            return
+        self._apply_highlight(mod_id)
+        self._search_status.setText(
+            f"高亮:{self._graph.nodes[mod_id].name}  (点击别处或按「取消高亮」恢复)")
+        self.view.centerOn(item)
+        # 放大一点,看清这块
+        self.view.scale(1.28, 1.28)
+
+    def _locate_from_search(self):
+        q = self.search_edit.text().strip().lower()
+        if not q:
+            return
+        for mid, item in self._items.items():
+            node = self._graph.nodes[mid]
+            if q in mid.lower() or q in (node.name or "").lower():
+                self.search_edit.setText(mid)
+                self._focus_node(mid)
+                return
+        self._search_status.setText(f"没找到:{q}(试着输入 mod 的 id,如 tacz)")
