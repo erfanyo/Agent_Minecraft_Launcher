@@ -615,28 +615,37 @@ class MainWindow(QMainWindow):
         self.dl_indicator.setToolTip("下载中,点击查看详情")
         self.dl_indicator.show()
 
-    def model_download_progress(self, status: str, done: int, total: int):
-        """本地模型下载进度回调:写进下载日志 + 更新左下角圆环指示器,
-        这样点圆环 → 下载详情也能看到模型下载进度(不只是主界面圆环动)。"""
+    def report_download_progress(self, title: str, status: str, done: int, total: int):
+        """通用下载进度入口(本地模型 / AI 发起的 Mod 下载共用):写进下载日志 + 更新左下角圆环指示器。
+        title 用作圆环 tooltip/详情里的标识;status 为状态消息(可为空)。这样点圆环 → 下载详情也能看到。"""
         if status:
             self._dl_log.append(status)
         self._dl_progress = (done, total)
         self.dl_indicator.set_progress(done, total)
         if status and "失败" in status:
-            self.dl_indicator.setToolTip("本地模型下载失败,点击查看详情")
+            self.dl_indicator.setToolTip(f"{title}失败,点击查看详情")
         elif status and ("完成" in status or "已就绪" in status.lower()):
-            self.dl_indicator.setToolTip("本地模型下载完成,点击查看详情")
+            self.dl_indicator.setToolTip(f"{title}完成,点击查看详情")
         else:
-            self.dl_indicator.setToolTip("正在下载本地模型,点击查看详情")
+            self.dl_indicator.setToolTip(f"正在下载{title},点击查看详情")
         self.dl_indicator.show()
 
-    def model_download_done(self, ok: bool, msg: str):
-        """本地模型下载结束:写日志 + 满环 + 收起(2s)。"""
+    def report_download_done(self, title: str, ok: bool, msg: str):
+        """通用下载结束入口:写日志 + 满环 + 收起(2s)。"""
         self._dl_log.append(msg)
         self._dl_progress = (1, 1)
         self.dl_indicator.set_progress(1, 1)
-        self.dl_indicator.setToolTip("本地模型下载" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
+        self.dl_indicator.setToolTip(f"{title}" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
         QTimer.singleShot(2000, self.dl_indicator.hide)
+
+    def model_download_progress(self, status: str, done: int, total: int):
+        """本地模型下载进度回调:写进下载日志 + 更新左下角圆环指示器,
+        这样点圆环 → 下载详情也能看到模型下载进度(不只是主界面圆环动)。"""
+        self.report_download_progress("本地模型", status, done, total)
+
+    def model_download_done(self, ok: bool, msg: str):
+        """本地模型下载结束:写日志 + 满环 + 收起(2s)。"""
+        self.report_download_done("本地模型", ok, msg)
 
     def game_dir_for(self, version_id: str) -> str:
         """PCL2 风格:versions/<版本ID>/ 就是该版本的实例(游戏目录)。

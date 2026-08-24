@@ -41,12 +41,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
     QRadioButton,
     QSpinBox,
     QTextBrowser,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -58,6 +60,14 @@ from settings import save_settings
 # 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
 LOCAL_PROVIDER = "local_builtin"
 LOCAL_MODEL_ID = "qwen3.5-0.8b-xlam-q4km"
+
+# AI 策略三档(与 AISettingsForm 保持一致):值 → (文案, 生效来源 cloud/local)
+STRATEGY_LABELS = {
+    "local_first": "本地优先(省钱)",
+    "cloud_first": "云端优先(更强)",
+    "hybrid": "混合(平衡)",
+}
+STRATEGY_CYCLE = ["local_first", "cloud_first", "hybrid"]
 
 def chat_completion(messages: list, base_url: str, api_key: str, model: str) -> str:
     """调用 OpenAI 兼容的 /chat/completions,返回回复文本"""
@@ -231,9 +241,10 @@ def mount_tools_for(text: str) -> list:
     return mounted
 
 
-def build_executor(settings: dict):
+def build_executor(settings: dict, progress_cb=None):
     """构造工具执行器:LLM 只能"提议",真正执行在这里,权限检查也在这里。
-    多余参数会被过滤(模型幻觉传错参数不报错,只调它真需要的)。"""
+    多余参数会被过滤(模型幻觉传错参数不报错,只调它真需要的)。
+    progress_cb(done, total) 若提供,把底层下载(装 Mod 等)进度传给界面(左下角圆环)。"""
     import inspect
     import agent_tools
 
@@ -250,14 +261,27 @@ def build_executor(settings: dict):
                 backup_note = agent_tools.backup_instance(args.get("instance", ""))
             except Exception as e:
                 backup_note = f"(备份失败:{e})"
-            result = fn(**args)
+        # 把 progress_cb 塞给支持它的下载工具(install_mod / install_mods / install_instance 等)
+        out_args = dict(args)
+        if progress_cb is not None and name in ("install_mod", "install_mods", "install_instance"):
+            try:
+                sig = inspect.signature(fn)
+                if "progress_callback" in sig.parameters:
+                    out_args["progress_callback"] = progress_cb
+            except (TypeError, ValueError):
+                pass
+        if name in ("install_mod", "install_mods"):
+            try:
+                result = fn(**out_args)
+            except Exception as e:
+                result = f"工具执行失败:{type(e).__name__}: {e}"
             return f"[已自动备份:{backup_note}]\n{result}"
         # 过滤多余参数:只传函数签名里有的(模型经常幻觉多传参数)
         try:
             sig = inspect.signature(fn)
-            kwargs = {k: v for k, v in args.items() if k in sig.parameters}
+            kwargs = {k: v for k, v in out_args.items() if k in sig.parameters}
         except (TypeError, ValueError):
-            kwargs = args
+            kwargs = out_args
         return str(fn(**kwargs))
 
     return executor
@@ -366,6 +390,8 @@ class _Signals(QObject):
     # ---- t13 修复:worker 线程禁止直接碰 Qt 部件,一律走队列信号回主线程 ----
     system_msg = Signal(str)               # worker → 主线程:追加一条系统消息(_append_system)
     ring_update = Signal()                 # worker → 主线程:刷新上下文占用环(_update_ctx_ring)
+    dl_progress = Signal(str, str, int, int)   # worker → 主线程:(title, status, done, total) 下载进度
+    dl_done = Signal(str, bool, str)           # worker → 主线程:(title, ok, msg) 下载结束
 
 
 def _esc(text: str) -> str:
@@ -1186,6 +1212,9 @@ class AIChatDock(QDockWidget):
         # t13 修复:worker 线程的系统消息/上下文环更新也走队列信号(跨线程直接碰 UI 会原生崩溃)
         self.signals.system_msg.connect(self._append_system)
         self.signals.ring_update.connect(self._update_ctx_ring)
+        # 下载进度/结束:worker 线程报告 → 主线程写到主窗口下载日志 + 左下角圆环(详情可点开看)
+        self.signals.dl_progress.connect(self._on_dl_progress)
+        self.signals.dl_done.connect(self._on_dl_done)
 
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
@@ -1204,8 +1233,16 @@ class AIChatDock(QDockWidget):
         # 顶部:标题 + 当前模型/多模态徽标 + 技能管理入口
         self.title_label = QLabel("AI 助手")
         self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        self.model_label = QLabel("")
-        self.model_label.setToolTip("当前使用的模型,以及是否支持看图(多模态)")
+        # 模型策略按钮:可点击切换 AI 策略三档(本地优先/云端优先/混合),并显示当前档
+        self.strategy_btn = QToolButton()
+        self.strategy_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.strategy_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.strategy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._rebuild_strategy_menu()
+        self.strategy_btn.setStyleSheet(
+            "QToolButton { color: #8b96a8; border: 1px solid #3a4150;"
+            " border-radius: 6px; padding: 3px 8px; background: transparent; }"
+            "QToolButton:hover { color: #ffffff; border-color: #5B8DEF; }")
         skills_btn = QPushButton("技能管理…")
         skills_btn.setToolTip("管理游戏运行时辅助技能(指令指南/崩溃守护等)")
         skills_btn.clicked.connect(self.open_skill_manager)
@@ -1218,7 +1255,7 @@ class AIChatDock(QDockWidget):
         top_row.setContentsMargins(2, 0, 2, 0)
         top_row.addWidget(title)
         top_row.addSpacing(6)
-        top_row.addWidget(self.model_label)
+        top_row.addWidget(self.strategy_btn)
         # 本地模型状态(未下载/下载中/已就绪/推理中),仅本地 provider 时显示
         self.local_status_label = QLabel("")
         self.local_status_label.setVisible(False)
@@ -1312,24 +1349,72 @@ class AIChatDock(QDockWidget):
             self._append_system("当前模型不支持图片输入,已清除待发送的图片。")
         self._update_model_badge(vis)
 
-    def _update_model_badge(self, vis):
-        """顶部模型徽标:只显示当前模型来源(本地/云端) + 省略号提示。
+    # ---- AI 策略(顶部按钮直接切换三档) ----
+    def _current_strategy(self) -> str:
+        s = self.settings.get("ai_strategy", "local_first") or "local_first"
+        return s if s in STRATEGY_CYCLE else "local_first"
 
-        更多信息(模型名/多模态/上下文)收进 tooltip,光标悬停才显示——
-        右侧信息太多时更清爽。省略号 ⋯ 提示"还有更多,悬停查看"。
-        """
-        if not hasattr(self, "model_label"):
+    def _rebuild_strategy_menu(self, _=None):
+        """重建策略下拉菜单(当前档打勾),并刷新按钮文案。"""
+        menu = QMenu(self.strategy_btn)
+        cur = self._current_strategy()
+        for key in STRATEGY_CYCLE:
+            label = STRATEGY_LABELS.get(key, key)
+            act = menu.addAction(("✓ " if key == cur else "") + label)
+            act.setData(key)
+            act.triggered.connect(lambda _c, k=key: self._set_strategy(k))
+        menu.addSeparator()
+        menu.addAction("打开 AI 设置…", self._open_ai_settings)
+        self.strategy_btn.setMenu(menu)
+        self._refresh_strategy_btn()
+
+    def _refresh_strategy_btn(self):
+        """按当前策略刷新按钮文案与 tooltip。"""
+        if not hasattr(self, "strategy_btn"):
+            return
+        cur = self._current_strategy()
+        label = STRATEGY_LABELS.get(cur, cur)
+        self.strategy_btn.setText(f"策略: {label} ▾")
+        self.strategy_btn.setToolTip(
+            "点击切换 AI 策略:\n"
+            "· 本地优先(省钱) — 简单操作用本地,复杂任务转云端\n"
+            "· 云端优先(更强) — 一切走云端大模型\n"
+            "· 混合(平衡) — 规则分流 + 模型复核\n"
+            "(切换立即生效)")
+
+    def _set_strategy(self, key: str):
+        """切换到某档策略:写 settings 并立即生效,刷新按钮。"""
+        if key not in STRATEGY_CYCLE:
+            return
+        self.settings["ai_strategy"] = key
+        if getattr(self, "main", None) is not None:
+            self.main.settings["ai_strategy"] = key
+        try:
+            save_settings(self.settings)
+        except Exception:
+            pass
+        self._rebuild_strategy_menu()
+        self._append_system(f"AI 策略已切换为:{STRATEGY_LABELS.get(key, key)}(立即生效)")
+
+    def _open_ai_settings(self):
+        """打开主窗口的设置对话框(AI 助手页)。"""
+        try:
+            if getattr(self, "main", None) is not None and hasattr(self.main, "open_settings"):
+                self.main.open_settings()
+        except Exception:
+            pass
+
+    def _update_model_badge(self, vis):
+        """顶部策略按钮已由 _refresh_strategy_btn 维护;此方法保留给多模态 tooltip 追加。"""
+        if not hasattr(self, "strategy_btn"):
             return
         model = self.settings.get("ai_model") or "未设置模型"
-        full_model = model
-        if len(model) > 22:
-            model = model[:20] + "…"
-        # 来源:本地(builtin)or 云端
+        if len(model) > 26:
+            model = model[:24] + "…"
         if self._local_enabled():
-            source, color = "🖥 本地", "#2E7D32"
+            source = "本地模型(builtin)"
         else:
-            source, color = "☁ 云端", "#5B8DEF"
-        # 多模态详情(收进 tooltip)
+            source = "云端模型(" + (self.settings.get("ai_provider") or "cloud") + ")"
         if vis is True:
             badge = "支持看图(多模态)"
         elif vis is False:
@@ -1337,17 +1422,11 @@ class AIChatDock(QDockWidget):
         else:
             cur = bool(self.settings.get("ai_multimodal", False))
             badge = f"图片输入:手动·{'开' if cur else '关'}"
-        self.model_label.setText(
-            f'<span style="color:{color}">{source}</span>'
-            f'<span style="color:#8a8f98"> ⋯</span>')
-        tooltip = (f"当前模型:{full_model}"
-                   f"\n来源:{source.split(' ', 1)[-1]}"
-                   f"\n多模态:{badge}")
-        self.model_label.setToolTip(tooltip)
-        self.model_label.setStyleSheet(f"color: {color}; background: transparent;")
-        # 标题"AI 助手"上悬停也显示模型信息(模型能力 + 型号),避免只在小徽标上有
-        if hasattr(self, "title_label"):
-            self.title_label.setToolTip(tooltip)
+        cur = self._current_strategy()
+        base = (f"当前策略:{STRATEGY_LABELS.get(cur, cur)}\n"
+                f"当前模型:{model}\n来源:{source}\n多模态:{badge}\n"
+                f"(点按钮可切换策略)")
+        self.strategy_btn.setToolTip(base)
 
     def _vision_on(self) -> bool:
         return bool(self.settings.get("ai_multimodal", False))
@@ -1663,6 +1742,28 @@ class AIChatDock(QDockWidget):
             self.signals.local_status.emit(self._local_status_text())
 
     # ---- 本地模型下载(懒加载 §2):首次用到且未下载 → 后台下载带进度,期间走云端 ----
+    def _on_dl_progress(self, title: str, status: str, done: int, total: int):
+        """主线程:AI 发起的下载进度 → 写主窗口下载日志 + 更新左下角圆环(详情可点开看)。"""
+        try:
+            if getattr(self, "main", None) is not None and hasattr(self.main, "report_download_progress"):
+                self.main.report_download_progress(title, status, done, total)
+        except Exception:
+            pass
+
+    def _on_dl_done(self, title: str, ok: bool, msg: str):
+        """主线程:AI 发起的下载结束 → 写主窗口下载日志 + 满环收起。"""
+        try:
+            if getattr(self, "main", None) is not None and hasattr(self.main, "report_download_done"):
+                self.main.report_download_done(title, ok, msg)
+        except Exception:
+            pass
+
+    def _download_progress_cb(self, title: str):
+        """给 build_executor 的进度回调(在 worker 线程调用):包装成跨线程信号,回主线程更新。"""
+        def cb(done, total):
+            self.signals.dl_progress.emit(title, "", done, total)
+        return cb
+
     def _start_local_download(self):
         """主线程:创建下载进度弹窗,后台线程下载模型(镜像优先),完成后关闭弹窗。"""
         if self._local_downloading:
@@ -1701,6 +1802,8 @@ class AIChatDock(QDockWidget):
             if total:
                 self._local_dlg.setLabelText(
                     f"下载本地模型…  {done/1024/1024:.0f} / {total/1024/1024:.0f} MB")
+        # 同步到主窗口下载日志 + 左下角圆环(点圆环 → 下载详情可见)
+        self._on_dl_progress("本地模型", "", done, total)
         if self._local_enabled():
             self._on_local_status(
                 f"本地模型:下载中 {done/1024/1024:.0f}MB…" if total
@@ -1712,6 +1815,7 @@ class AIChatDock(QDockWidget):
         if self._local_dlg is not None:
             self._local_dlg.close()
             self._local_dlg = None
+        self._on_dl_done("本地模型", ("完成" in msg), msg)
         self._append_system(msg)
         self.update_local_status()
 
@@ -1868,7 +1972,8 @@ class AIChatDock(QDockWidget):
             {"role": "system", "content": self.main.ai_context()},
         ] + list(self._chat_messages)
         s = self.settings
-        executor = build_executor(s)
+        # AI 发起的下载(装 Mod/创建实例等)进度 → 左下角圆环 + 下载详情
+        executor = build_executor(s, progress_cb=self._download_progress_cb("Mod / 实例"))
         tools_called = []
         is_local = self._local_enabled()
 

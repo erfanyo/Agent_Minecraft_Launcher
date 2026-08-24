@@ -88,7 +88,7 @@ def get_settings() -> str:
 
 # ---------------- 写操作类(需要工作区写权限) ----------------
 def install_mod(slug: str, instance: str, version: str = "",
-                game_dir: str = None) -> str:
+                game_dir: str = None, progress_callback=None) -> str:
     """给某实例安装 Mod(按实例的加载器 + 基础版本过滤)"""
     game_dir = _gd(game_dir)
     inst = next((i for i in scan_instances(game_dir) if i["id"] == instance), None)
@@ -99,7 +99,8 @@ def install_mod(slug: str, instance: str, version: str = "",
         return f"错误:{instance} 不是 Mod 实例(加载器:{loader or '原版'})"
     gv = inst["base"]
     mods_dir = os.path.join(game_dir, "versions", instance, "mods")
-    filename = download_mod(slug, gv, loader, mods_dir, version_number=version or None)
+    filename = download_mod(slug, gv, loader, mods_dir, version_number=version or None,
+                            progress_callback=progress_callback)
     if filename:
         return f"已安装 {filename} 到 {instance}"
     return (f"错误:{slug} 没有 {gv}+{loader} 的"
@@ -119,7 +120,8 @@ def _resolve_slug(name: str) -> str:
     return name
 
 
-def install_mods(slugs, instance: str, game_dir: str = None) -> str:
+def install_mods(slugs, instance: str, game_dir: str = None,
+                 progress_callback=None) -> str:
     """批量给实例安装多个 Mod(一次调用装完,省 AI 工具轮数)。
     slugs 支持中文名(如 钠/锂/玉/JEI)或英文 slug;可传 list,也可传逗号分隔字符串。
     逐项报告成功/失败,返回汇总。"""
@@ -140,7 +142,7 @@ def install_mods(slugs, instance: str, game_dir: str = None) -> str:
 
     def dl_one(s):
         slug = _resolve_slug(str(s))
-        filename = download_mod(slug, gv, loader, mods_dir)
+        filename = download_mod(slug, gv, loader, mods_dir, progress_callback=progress_callback)
         if filename:
             return f"• {slug}: 已安装 {filename} ✅"
         return f"• {slug}: 错误:没有 {gv}+{loader} 的可用版本 ❌"
@@ -168,7 +170,8 @@ def install_mods(slugs, instance: str, game_dir: str = None) -> str:
 def install_instance(version: str, loader: str = "", loader_version: str = "",
                      shader: bool = False, optimize: bool = False,
                      fabric_api_version: str | None = None,
-                     game_dir: str = None, status=print) -> str:
+                     game_dir: str = None, status=print,
+                     progress_callback=None) -> str:
     """创建实例:原版本体 + (可选)加载器 + (可选)Fabric API/光影/优化 Mod。
     加载器版本留空 = 自动用最新。成功返回实例 id。"""
     version = (version or "").strip()
@@ -179,7 +182,7 @@ def install_instance(version: str, loader: str = "", loader_version: str = "",
         return f"错误:不支持的加载器 {loader}(可选 fabric/forge/neoforge,留空=原版)"
     game_dir = _gd(game_dir)
     try:
-        ensure_base(version, game_dir, status_callback=status, progress_callback=None)
+        ensure_base(version, game_dir, status_callback=status, progress_callback=progress_callback)
     except Exception as e:
         return f"错误:原版 {version} 下载失败:{e}"
     instance_id = version
