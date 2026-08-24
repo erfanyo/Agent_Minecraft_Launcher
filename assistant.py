@@ -192,6 +192,12 @@ TOOLS = [
           {"attribute": {"type": "string", "description": "中文属性名:武器伤害 / 护甲 / 护甲韧性 / 攻速 / 挖掘等级"},
            "top_n": {"type": "integer", "description": "返回前几名,默认 10"}},
           ["attribute"]),
+    _tool("resolve_mc_name", "把中文/口语/英文叫法解析成规范的 MC 英文名 + id(如 苦力怕 → Creeper/minecraft:creeper)。"
+          "当要用外部 wiki/资料库(MCP)查某物品/生物/效果/附魔、或用户给了中文/口语叫法时,先用它归一化,"
+          "检索命中更准。支持物品/方块/生物/效果/附魔;读实例 lang 文件+内置常见词表。",
+          {"query": {"type": "string", "description": "叫法,如 苦力怕 / creeper / 会爆炸的怪 / 锋利"},
+           "instance": {"type": "string", "description": "可选,实例 id(有实例时能读更多 Mod 专属名)"}},
+          ["query"]),
 ]
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
@@ -220,7 +226,7 @@ TOOL_GROUPS = {
     "modpack": ["search_modpacks", "install_modpack"],
     "recipe": ["get_recipe_path", "compare_items"],
     "command": ["send_game_command", "get_command_guide"],
-    "log": ["read_instance_log", "read_crash_report"],
+    "log": ["read_instance_log", "read_crash_report", "resolve_mc_name"],
     "keybind": ["get_key_bindings"],
 }
 
@@ -233,7 +239,7 @@ TOOL_GROUP_KEYWORDS = {
     "modpack": ["整合包", "整合法", "整合", "集成", "modpack", "整合包推荐", "装整合"],
     "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
     "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
-    "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因"],
+    "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因", "wiki", "维基", "百科", "查一下", "叫什么", "物品", "生物", "实体", "名词", "名称", "名字", "配料"],
     "keybind": ["按键", "绑定", "键位", "keybind", "空格"],
 }
 

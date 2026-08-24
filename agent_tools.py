@@ -431,6 +431,14 @@ def set_setting(key: str, value: str, game_dir: str = None) -> str:
     return f"{key} = {s[key]}"
 
 
+def resolve_mc_name(query: str, instance: str = None, game_dir: str = None) -> str:
+    """本地把物品/生物/效果/附魔的中文/口语/英文叫法解析成【规范英文名 + id】。
+    用于查 wiki/资料库前先归一化(如 苦力怕 → Creeper/minecraft:creeper),检索命中更准。
+    读实例 mods jar + 版本 jar 的 lang 文件(zh_cn/en_us),外置原版常见词表兜底。"""
+    from mc_names import resolve_mc_name as _r
+    return _r(query, game_dir=_gd(game_dir), instance=instance)
+
+
 def translate_mod_desc(slug: str, game_version: str = "", loader: str = "") -> str:
     """翻译 Mod 描述(英→中,本地 AI;缓存优先,失败显示原文)。
     用于:用户问"这个 mod 是干什么的/什么意思"时,取详情并翻成中文。
@@ -472,4 +480,5 @@ TOOL_FUNCS = {
     "get_recipe_path": get_recipe_path,
     "compare_items": compare_items,
     "translate_mod_desc": translate_mod_desc,
+    "resolve_mc_name": resolve_mc_name,
 }

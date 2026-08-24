@@ -246,6 +246,24 @@ class CrashDiagnosisGuide(Skill):
                 "④ 用中文;专业术语(完整异常类名、Mod 名、文件路径、版本号)保留原样,方便定位。")
 
 
+class McNameNormalize(Skill):
+    """本地名称归一化:查 wiki/资料库前,先把中文/口语叫法解析成规范英文名+id"""
+    id = "mc_name_normalize"
+    name = "本地名称归一化 · 查 wiki 更准"
+    description = ("当你要用外部 wiki / 资料库(MCP)查某个物品/生物/效果/附魔,"
+                   "或用户给了中文/口语叫法(如 苦力怕、会爆炸的怪)时,先本地解析成规范英文名+id 再查,命中更准。")
+    category = "运行辅助"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【本地名称归一化·查 wiki 更准】要用外部 wiki / 资料库(MCP)查某物品/生物/效果/附魔,"
+                "或用户给了中文/口语叫法(如「苦力怕」「会爆炸的怪」「锋利」)时:\n"
+                "① **先用 resolve_mc_name 把叫法解析成规范英文名 + id**(如 苦力怕 → Creeper / minecraft:creeper);\n"
+                "② 再用这个规范英文名/id 去查 wiki/资料库,别用用户口语生查;\n"
+                "③ resolve_mc_name 查不到(可能 Mod 专属/生僻)就直接用它检索,别硬造 id;\n"
+                "④ 支持物品/方块/生物/效果/附魔,读实例 lang 文件 + 内置常见词表(离线也准)。")
+
+
 class CloudAIConfigGuide(Skill):
     """云端 AI 配置指南:让 AI 教用户一步步配好云端模型(DeepSeek/OpenRouter/国内/自定义)"""
     id = "cloud_ai_config_guide"
@@ -296,7 +314,8 @@ class CloudAIConfigGuide(Skill):
 
 
 BUILTIN_SKILLS = [AutoRestart, BackupReminder, CommandGuide, TaskSplit,
-                  BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide]
+                  BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide,
+                  McNameNormalize]
 
 
 # ================= 管理器 =================
