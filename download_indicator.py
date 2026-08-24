@@ -19,18 +19,26 @@ from PySide6.QtWidgets import (
 
 
 class DownloadIndicator(QWidget):
-    """圆形下载按钮:中间向下箭头(矢量绘制),外圈环形进度条"""
+    """圆形下载球:中间传统下箭头 + 外圈环形进度条。可作为悬浮球(可拖动、置顶)。"""
 
     clicked = Signal()
+    shown = Signal()   # 显示时发出,主窗口据此把悬浮球摆到默认位置
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._value = 0
         self._maximum = 1
-        self.setFixedSize(42, 42)
+        self._dragging = None      # 悬浮球拖动偏移
+        self.setFixedSize(46, 46)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("下载中,点击查看详情")
-        self.setStyleSheet("background: transparent;")
+
+    def make_floating(self):
+        """变成悬浮球:无边框、置顶、可拖动的顶层窗(带半透明背景,圆球外观)。"""
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.Tool
+                            | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
     def set_progress(self, done: int, total: int):
         self._value = max(done, 0)
@@ -38,7 +46,6 @@ class DownloadIndicator(QWidget):
         self.update()
 
     def set_active(self, active: bool):
-        """active=False 时画成普通状态(无环/灰色),用于下载完成/空闲"""
         self._active = active
         self.update()
 
@@ -46,27 +53,31 @@ class DownloadIndicator(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = self.rect().adjusted(3, 3, -3, -3)
+        # 球底(半透明深色圆,悬浮时更像"球")
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(30, 37, 48, 235))
+        p.drawEllipse(rect)
         # 背景环
         p.setPen(QPen(QColor(190, 190, 190, 120), 4))
         p.drawEllipse(rect)
         # 进度弧(从 12 点方向顺时针)
         if self._maximum > 0:
             ratio = max(0.0, min(1.0, self._value / self._maximum))
-            span = max(int(360 * ratio), 2)   # 至少画 2°,小进度也能看见
+            span = max(int(360 * ratio), 2)
             if ratio > 0:
                 pen = QPen(QColor("#3E7CB1"), 4)
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 p.setPen(pen)
                 p.drawArc(rect, 90 * 16, -span * 16)
-        # 中间传统向下箭头(竖杆 + 实心箭头,和 AI 面板的"发送↑"同款但方向相反)
+        # 中间传统向下箭头(和 AI 面板"发送↑"同款但方向相反)
         cx = self.width() / 2
         cy = self.height() / 2
-        pen = QPen(QColor("#3E7CB1"), 2.6)
+        pen = QPen(QColor("#9fd0f0"), 2.6)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen)
         p.drawLine(QPointF(cx, cy - 7), QPointF(cx, cy + 3))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#3E7CB1"))
+        p.setBrush(QColor("#9fd0f0"))
         head = QPolygonF([
             QPointF(cx - 6, cy + 2),
             QPointF(cx + 6, cy + 2),
@@ -75,9 +86,28 @@ class DownloadIndicator(QWidget):
         p.drawPolygon(head)
         p.end()
 
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.shown.emit()
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            self.clicked.emit()
+            # 悬浮球:按下即进入拖动;单击(无位移)视为点击查看详情
+            self._dragging = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._press_pos = e.globalPosition().toPoint()
+            e.accept()
+
+    def mouseMoveEvent(self, e):
+        if self._dragging is not None:
+            self.move(e.globalPosition().toPoint() - self._dragging)
+            e.accept()
+
+    def mouseReleaseEvent(self, e):
+        if self._dragging is not None:
+            dist = (e.globalPosition().toPoint() - self._press_pos).manhattanLength()
+            self._dragging = None
+            if dist < 6:      # 基本没动 → 视为点击
+                self.clicked.emit()
             e.accept()
 
 

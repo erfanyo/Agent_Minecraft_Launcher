@@ -355,9 +355,11 @@ class MainWindow(QMainWindow):
         # 左下角下载指示器:下载时显示 ⬇ 圆环进度,点击查看详情
         self._dl_log = []                      # 本次下载的状态消息流
         self._dl_progress = (0, 1)
+        # 下载球 = 悬浮球:置顶、可拖动,默认在内容区右下角(AI 子窗口左侧、主窗口侧外部)
         self.dl_indicator = DownloadIndicator(self)
+        self.dl_indicator.make_floating()
         self.dl_indicator.clicked.connect(self.open_download_detail)
-        self.statusBar().addPermanentWidget(self.dl_indicator)   # 状态栏最右 = 窗口右下角(下载球)
+        self.dl_indicator.shown.connect(self._place_download_ball)
         self.dl_indicator.hide()
 
         # 运行中的实例指示:已在标题栏显示"已有 x 个运行中的实例"(悬停看具体是哪个)
@@ -467,9 +469,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(result)
 
     def _on_ai_visibility(self, visible: bool):
-        """AI 对话栏可见性变化:X 掉/隐藏 → 收窄成贴右边缘小条(留「展开」);显示 → 收起小条。"""
+        """AI 对话栏可见性变化:X 掉/隐藏 → 收窄成贴右边缘小条(留「展开」);显示 → 收起小条。
+        变化会影响右侧内容区宽度 → 重摆下载悬浮球。"""
         if hasattr(self, "ai_strip_dock"):
             self.ai_strip_dock.setVisible(not visible)
+        if hasattr(self, "dl_indicator"):
+            self._place_download_ball()
 
     def _build_ai_strip(self):
         """AI 被收起时贴在主窗口右边缘的窄条:竖排「AI ▸」按钮,点它展开。"""
@@ -772,6 +777,25 @@ class MainWindow(QMainWindow):
         self._busy_download(False)
         self.load_versions()
         self.refresh_instances()
+
+    def _place_download_ball(self):
+        """把下载悬浮球摆到内容区右下角:AI 停靠时在 AI dock 左侧(主窗口侧外部),不占底部。
+        随窗口/右侧 dock 变化自动重新定位(窗口缩放、AI 显示/收起)。"""
+        if not hasattr(self, "dl_indicator"):
+            return
+        central = self.centralWidget()
+        if central is None:
+            return
+        br = central.mapToGlobal(central.rect().bottomRight())
+        margin = 12
+        x = br.x() - self.dl_indicator.width() - margin
+        y = br.y() - self.dl_indicator.height() - margin
+        self.dl_indicator.move(x, y)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        if hasattr(self, "dl_indicator"):
+            self._place_download_ball()
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
