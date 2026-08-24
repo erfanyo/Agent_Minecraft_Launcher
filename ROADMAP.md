@@ -50,6 +50,11 @@
   - RCON(+ Lan Server Properties + 模拟按键)定位为**长期备用通道**,服务 bridge-mod 未覆盖的
     老版本/非黄金版本(详见项目规划.md 灵感 #10 勘误;game_command.py 通道:bridge → RCON → 模拟按键)
 
+- [ ] **下一版目标(2026-08-24,用户指定)**
+  - **资源中心 Mod 列表默认自动加载**:现在要动搜索框才加载列表,应打开即默认展示(体验断档)
+  - **Mod 中文名翻译对照表**:评估直接从 PCL2 开源仓库复制其 `WikiEntries.txt`(约 2.9 万条
+    slug↔中文名映射,含浏览量排行;MIT 类开源许可,需核对 LICENSE);与现有 `mod_cn.py` 本地库合并
+
 - [ ] **bridge-mod 游戏内 AI 交互入口(日程,未来)**
   - 在 bridge-mod 里提供游戏内 AI 入口(聊天栏/快捷键 → 向启动器提问 → 回显游戏内)
   - 通道由启动器设置 `ai_in_game` 决定:off(不用)/ cloud(走云端,游戏内辅助复杂场景)/ local(本地模型)
