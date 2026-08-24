@@ -1439,7 +1439,7 @@ class AIChatDock(QDockWidget):
             " border-radius: 6px; padding: 3px 8px; background: transparent; }"
             "QToolButton:hover { color: #ffffff; border-color: #5B8DEF; }")
         skills_btn = QPushButton("技能管理…")
-        skills_btn.setToolTip("管理游戏运行时辅助技能(指令指南/崩溃守护等)")
+        skills_btn.setToolTip("管理游戏运行时辅助技能(指令指南/任务拆分等)")
         skills_btn.clicked.connect(self.open_skill_manager)
         skills_btn.setStyleSheet(
             "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"

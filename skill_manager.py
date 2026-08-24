@@ -9,9 +9,8 @@
   菜单"技能 → 技能管理"会自动出现它的开关。
 
 内置技能(示例,验证框架):
-  1. 崩溃守护   —— 实时扫日志,发现崩溃特征弹提示
-  2. 崩溃自动重启 —— 游戏异常退出后询问是否一键重启(带防循环)
-  3. 备份提醒   —— 正常退出后,如果存档比上次备份新,提醒备份(灵感 #6 联动)
+  1. 崩溃自动重启 —— 游戏异常退出后询问是否一键重启(带防循环)
+  2. 备份提醒   —— 正常退出后,如果存档比上次备份新,提醒备份(灵感 #6 联动)
 """
 import os
 
@@ -60,45 +59,6 @@ class Skill:
 
 
 # ================= 内置技能 =================
-
-class CrashWatchdog(Skill):
-    """崩溃守护:实时扫日志,发现崩溃特征立即弹提示"""
-    id = "crash_watchdog"
-    name = "崩溃守护"
-    description = ("游戏运行时实时扫描日志,检测到崩溃特征(如 Exception in thread / "
-                   "OutOfMemoryError / crash report)立即弹窗提示,不用等退出才发现。")
-    category = "运行辅助"
-    default_enabled = True
-
-    CRASH_MARKS = (
-        "exception in thread",
-        "outofmemoryerror",
-        "crash report",
-        "fatal error",
-        "failed to start the minecraft server",
-        "there was a severe problem",
-        "a fatal error has been detected",
-    )
-
-    def __init__(self, manager):
-        super().__init__(manager)
-        self._notified = False   # 每次游戏只提示一次,避免刷屏
-
-    def on_game_start(self, process, instance_id):
-        self._notified = False
-
-    def on_game_log(self, line):
-        if self._notified or not self.manager.is_enabled(self.id):
-            return
-        low = line.lower()
-        if any(m in low for m in self.CRASH_MARKS):
-            self._notified = True
-            QMessageBox.warning(
-                self.manager.main, "崩溃守护",
-                f"⚠️ 检测到疑似崩溃:\n{line.strip()[:120]}\n\n"
-                "游戏可能已崩溃,日志见下方「游戏日志」面板;\n"
-                "可以让 AI 助手分析原因(启动器会在退出后自动询问)。")
-
 
 class AutoRestart(Skill):
     """崩溃自动重启:游戏异常退出后询问是否一键重启(带防循环)"""
@@ -335,7 +295,7 @@ class CloudAIConfigGuide(Skill):
                 "【可读文本】用户想直接看教程时,把以上要点整理成一段人类可读说明发给他。")
 
 
-BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit,
+BUILTIN_SKILLS = [AutoRestart, BackupReminder, CommandGuide, TaskSplit,
                   BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide]
 
 
@@ -418,7 +378,7 @@ class SkillManagerDialog(QDialog):
         self.desc_label = QLabel("")
         self.desc_label.setWordWrap(True)
 
-        hint = QLabel("技能 = 游戏运行时的辅助功能(如崩溃守护、自动重启、备份提醒)。\n"
+        hint = QLabel("技能 = 游戏运行时的辅助功能(如自动重启、备份提醒、指令指南)。\n"
                       "以后会逐渐添加更多,勾选即启用、取消勾选即停用,立即生效。")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888888;")

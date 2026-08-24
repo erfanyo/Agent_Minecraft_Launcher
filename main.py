@@ -1239,7 +1239,7 @@ class MainWindow(QMainWindow):
         self._running_instances.add(d["id"])
         self._update_running_label()
 
-        # 通知技能系统:游戏已启动(崩溃守护等技能开始工作)
+        # 通知技能系统:游戏已启动(自动重启等技能开始工作)
         self.skill_mgr.on_game_start(self.game_process, self._running_instance_id)
 
         # 主动避让(§5):告诉 AI 面板游戏在跑,本地推理降为低于游戏优先级/暂停(ai_in_game=local 时保持)
@@ -1289,7 +1289,7 @@ class MainWindow(QMainWindow):
                     self._auto_debug(code)   # 异常退出 → 自动收集日志给 AI 分析
                 return
             self.log_view.appendPlainText(line)
-            self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(崩溃守护等)
+            self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(自动重启等)
 
     def _toggle_log(self, checked: bool):
         """显示游戏日志:切到「实例详情」标签页并选中「游戏日志」项(若有实例)。"""
