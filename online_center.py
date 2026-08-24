@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import t
-from ui_style import card_btn_style, muted_color, panel_style
+from ui_style import card_btn_style, launch_btn_style, muted_color, panel_style
 
 
 def _open_url(url: str):
@@ -531,17 +531,11 @@ class OnlineCenter(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        intro = QLabel(
-            "怎么选:\n"
-            "· 朋友都在同一个 WiFi / 网络 → 「虚拟局域网」,最稳最省事\n"
-            "· 想开服给不在同一网络的朋友 → 「内网穿透」把服务器穿到公网\n"
-            "· 不想折腾网络 → 「联机 Mod」或「官方方案」\n"
-            "· 拿不准?点「帮我推荐」一路选下去。")
-        intro.setWordWrap(True)
-
         from center_shell import CenterShell
         self.shell = CenterShell(self, menu_width=150)
-        # 帮我推荐(放最前,方便拿不准的玩家)
+        # 首页:总览描述 + 「开始推荐」(T/F 选择入口)
+        self.shell.add_section(t("首页", "Home"), self._build_home)
+        # 帮我推荐(第二步最常用,方便拿不准的玩家)
         self.shell.add_section(t("帮我推荐", "Recommend"),
                                lambda: RecommendWizard(self._view_tutorial))
         # 各方案分类(左菜单一列)
@@ -553,8 +547,36 @@ class OnlineCenter(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(intro)
         layout.addWidget(self.shell, 1)
+
+    def _build_home(self) -> QWidget:
+        """联机首页:场景总览(纠正"虚拟局域网 ≠ 同一 WiFi"的说法)+ 开始推荐入口。"""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(16, 14, 16, 14)
+        v.setSpacing(10)
+        title = QLabel("联机方案中心")
+        title.setStyleSheet("font-weight: bold; font-size: 17px;")
+        desc = QLabel(
+            "怎么选:\n"
+            "· 和朋友联机,但大家**不在同一个 WiFi**(分布全国)→ «虚拟局域网»(EasyTier 等),"
+            "**不用在同一个物理 WiFi/路由器下**;\n"
+            "· 大家**在同一个 WiFi/路由器下**(比如同屋、同寝室)→ «传统局域网» 直连即可,"
+            "**不用虚拟组网**;\n"
+            "· 想开服给全网朋友 → «内网穿透» 把服务器穿到公网;\n"
+            "· 不想折腾网络 → «联机 Mod» 或 «官方方案»;\n"
+            "· 拿不准?点下面「开始推荐」,答是/否一步步选。")
+        desc.setWordWrap(True)
+        v.addWidget(title)
+        v.addWidget(desc)
+        start_btn = QPushButton(t("开始推荐(答是 / 否)", "Start recommend (yes/no)"))
+        start_btn.setMinimumHeight(40)
+        start_btn.setStyleSheet(launch_btn_style())
+        start_btn.clicked.connect(
+            lambda: self.shell.switch_by_label(t("帮我推荐", "Recommend")))
+        v.addWidget(start_btn)
+        v.addStretch()
+        return w
 
     def _view_tutorial(self, scheme_name: str = ""):
         """切到「教程与资料」(左菜单右侧面板)。"""

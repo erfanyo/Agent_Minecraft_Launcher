@@ -320,6 +320,10 @@ class MainWindow(QMainWindow):
         layout.addLayout(top_bar)
         layout.addWidget(self.main_tabs)
         self.setCentralWidget(central)
+        # 修复 dock"放不回去":允许嵌套/标签 + 动画(拖出后能顺利拖回边缘复原)
+        self.setDockOptions(QMainWindow.DockOption.AllowNestedDocks
+                            | QMainWindow.DockOption.AllowTabbedDocks
+                            | QMainWindow.DockOption.AnimatedDocks)
 
         # ---- AI 助手/游戏日志:停靠在右侧,做成"标签页"(tab)形式 ----
         # 允许拖动(可浮出成子窗口)、可关闭;标签页之间点击切换显示/隐藏。
