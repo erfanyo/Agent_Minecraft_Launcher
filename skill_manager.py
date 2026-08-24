@@ -205,7 +205,35 @@ class TaskSplit(Skill):
                 "拿不准用户想要什么时,调用 ask_user 工具让用户勾选/补充。")
 
 
-BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit]
+class BridgeModGuide(Skill):
+    """bridge-mod 指南:让 AI 知道启动器内置的自制私有 Mod(测试阶段,不成熟)"""
+    id = "bridge_mod_guide"
+    name = "bridge-mod 指南"
+    description = ("告知 AI 启动器内置一个自制私有 Mod「agentmc-bridge」(测试阶段,不成熟):\n"
+                   "进世界后开本地指令口(127.0.0.1:26100)发游戏指令 100% 精确反馈,\n"
+                   "并导出配方/物品/按键数据供查询。仅支持 Fabric/NeoForge · MC 1.21.1。")
+    category = "运行辅助"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【bridge-mod 指南已启用】启动器内置一个自制**私有 Mod**「agentmc-bridge」"
+                "(测试阶段,不成熟,有 bug 属正常):\n"
+                "- 用途:进世界后开本地指令口(127.0.0.1:26100),发游戏指令 100% 精确反馈;"
+                "并导出配方/物品/按键数据供 AI 查询。\n"
+                "- 支持范围:**仅 Fabric / NeoForge · MC 1.21.1**(v0.1.0);其他版本/加载器没有,"
+                "不要建议用户在那里装。\n"
+                "- 装法:引导用户用首页「一键配置 ▾ → 一键配置 bridge-mod」,"
+                "或手动把 agentmc-bridge-*.jar 放进实例 mods 目录。\n"
+                "- 生效条件:必须**进游戏并进入世界**后才有指令口(实例 .bridge/ 下生成 token.txt);"
+                "没进世界时提示用户先进世界。\n"
+                "- 指令通道:发游戏指令优先走 bridge(send_game_command 自动探测),"
+                "bridge 不可用时 RCON/模拟按键兜底。\n"
+                "- 用户问「桥 mod / 指令 mod / bridge」相关时按此说明回答,"
+                "并说明它是测试阶段私有 Mod。")
+
+
+BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit,
+                  BridgeModGuide]
 
 
 # ================= 管理器 =================
