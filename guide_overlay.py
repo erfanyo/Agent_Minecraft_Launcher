@@ -73,6 +73,15 @@ class GuideOverlay(QWidget):
         self.prev_btn.move(w - 210, h - 40)
         self.skip_btn.setText("完成" if self._last else "跳过")
 
+    def mousePressEvent(self, event):
+        """在遮罩区域(除按钮外的任意处)左键 → 进入下一步。"""
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self._target_rect is not None and self.on_next):
+            # 点到遮罩本体(按钮是子控件,会自己处理,不会走到这里)
+            self.on_next()
+            return
+        super().mousePressEvent(event)
+
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
