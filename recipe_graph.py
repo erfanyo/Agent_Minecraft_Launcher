@@ -175,6 +175,13 @@ def build_zh_index(mods_dir: str, extra_jars: list | None = None) -> tuple:
     zh_to_id = {v: k for k, v in MC_CN_ITEMS.items()}
     id_to_zh = dict(MC_CN_ITEMS)
     en_to_id = {}
+    # 并入 mc_names 的口语/别名/内置名(中文叫法 → 规范 id),让 resolve_item 也吃口语
+    try:
+        from mc_names import alias_id_map
+        for _alias, _id in alias_id_map().items():
+            zh_to_id.setdefault(_alias, _id)
+    except Exception:
+        pass
     jars = []
     if os.path.isdir(mods_dir):
         try:
@@ -254,7 +261,9 @@ class RecipeData:
         compact = low.replace(" ", "_")
         if compact in self.en_to_id:
             return self.en_to_id[compact]
-        return "minecraft:" + low
+        if compact in self.zh_to_id:
+            return self.zh_to_id[compact]
+        return "minecraft:" + compact
 
     def display(self, item_id: str) -> str:
         """物品 id → 显示名:有中文用中文,附 id 方便 AI 继续查"""

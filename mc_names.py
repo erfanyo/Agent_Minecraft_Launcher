@@ -112,18 +112,77 @@ def _norm(s: str) -> str:
     return s
 
 
+# ---- 口语/别名/近义表(描述性叫法 → 规范 MC id)----
+# 覆盖"纯名称对不上"的常见口语(如 会爆炸的怪、大绿、苦力怕同义词),让本地解析不再只会精确匹配。
+COLLOQUIAL = {
+    # 生物
+    "minecraft:creeper": ["会爆炸的怪", "爆爆怪", "绿皮怪", "爆炸怪", "绿色苦力怕", "creeper怪"],
+    "minecraft:zombie": ["丧尸", "活死人", "绿僵尸"], "minecraft:enderman": ["小黑", "黑基佬", "瞬移怪"],
+    "minecraft:skeleton": ["白骨", "骷髅兵"], "minecraft:spider": ["蜘蛛怪"],
+    "minecraft:cave_spider": ["毒蜘蛛", "蓝色蜘蛛"], "minecraft:witch": ["巫婆"],
+    "minecraft:villager": ["村民大佬", "npc", "商人村民"], "minecraft:iron_golem": ["铁人", "铁巨人"],
+    "minecraft:blaze": ["火人", "烈焰"], "minecraft:ghast": ["恶魂怪", "水母"],
+    "minecraft:slime": ["史莱姆怪", "果冻怪"], "minecraft:magma_cube": ["岩浆史莱姆"],
+    "minecraft:warden": ["循声者", "金刚", "声呐怪"], "minecraft:phantom": ["幻影", "夜行怪"],
+    "minecraft:vex": ["小鬼", "恼鬼怪"], "minecraft:ravager": ["劫掠兽怪", "大斧怪"],
+    "minecraft:guardian": ["鱼怪", "守卫者怪"], "minecraft:shulker": ["潜影", "炮弹怪"],
+    "minecraft:evoker": ["唤魔", "召鬼的"], "minecraft:pillager": ["掠夺者怪", "十字弩怪"],
+    "minecraft:vindicator": ["斧头怪", "卫道士怪"], "minecraft:piglin": ["猪人", "金甲猪灵"],
+    "minecraft:piglin_brute": ["猪灵蛮王", "金斧猪灵"], "minecraft:hoglin": ["猪兽", "红猪"],
+    "minecraft:strider": ["岩浆行走者", "红红鞍"], "minecraft:allay": ["小精灵", "拾物精灵"],
+    "minecraft:ender_dragon": ["末影龙", "大黑龙", "终界龙"], "minecraft:wither": ["凋零", "凋零头", "老凋灵"],
+    "minecraft:axolotl": ["娃娃鱼", "火蝾螈"], "minecraft:bee": ["蜜蜂精", "采蜜的"],
+    "minecraft:hoglin": ["疣猪", "红皮猪"],
+    # 物品/材料
+    "minecraft:diamond": ["钻石矿", "真钻"], "minecraft:emerald": ["绿宝石矿", "绿钻"],
+    "minecraft:redstone": ["红石", "redstone粉"], "minecraft:lapis_lazuli": ["青金石矿", "蓝石头"],
+    "minecraft:netherite_ingot": ["下界合金", "顶级锭", "奈瑟"], "minecraft:netherite_scrap": ["下界合金碎片", "下界合金残片"],
+    "minecraft:gold_ingot": ["金锭G", "金"], "minecraft:iron_ingot": ["铁锭I", "铁"],
+    "minecraft:stick": ["木棒"], "minecraft:string": ["线材料"],
+    "minecraft:gunpowder": ["火药粉", "tnt粉"], "minecraft:blaze_rod": ["烈焰棒材", "火棒"],
+    "minecraft:ender_pearl": ["末影珍珠E", "传送珍珠"], "minecraft:ender_eye": ["末影之眼E", "传送眼"],
+    "minecraft:slime_ball": ["粘液球", "史莱姆球"], "minecraft:magma_cream": ["岩浆膏M", "火药膏"],
+    "minecraft:golden_apple": ["金苹果G", "神苹果"], "minecraft:elytra": ["鞘翅E", "滑翔翼"],
+    "minecraft:shield": ["盾牌S", "防盾"],
+    "minecraft:crafting_table": ["合成台", "工作台C"], "minecraft:furnace": ["炉子", "熔炉F"],
+    "minecraft:chest": ["箱子C", "储物箱"], "minecraft:obsidian": ["黑曜", "obs"],
+    "minecraft:glass": ["玻璃板", "玻璃G"],
+    # 效果
+    "minecraft:speed": ["加速", "velocity", "迅捷"], "minecraft:slowness": ["减速", "迟缓"],
+    "minecraft:haste": ["急速", "挖矿加速"], "minecraft:strength": ["力量强化", "power"],
+    "minecraft:regeneration": ["回血", "再生"], "minecraft:resistance": ["减伤", "抗性"],
+    "minecraft:fire_resistance": ["防火", "火焰抵抗"], "minecraft:night_vision": ["夜视眼", "看清黑暗"],
+    "minecraft:poison": ["剧毒", "毒上"], "minecraft:darkness": ["致盲", "黑暗效果"],
+    # 附魔
+    "minecraft:sharpness": ["锋利五", "sharp", "锋利附魔"], "minecraft:silk_touch": ["精准采集E", "丝触"],
+    "minecraft:unbreaking": ["耐久三", "不坏"], "minecraft:fortune": ["时运三", "发财"],
+    "minecraft:efficiency": ["效率五", "挖得快"], "minecraft:protection": ["防护四", "护甲附魔"],
+    "minecraft:mending": ["修复", "经验修补E"], "minecraft:looting": ["抢夺三", "摸尸"],
+    "minecraft:feather_falling": ["摔缓四", "缓降"], "minecraft:thorns": ["反伤", "荆棘三"],
+    "minecraft:depth_strider": ["水中行走", "深海行者"],
+}
+
+
 def _build_index(game_dir: str, instance: str | None) -> tuple:
-    """构建 (zh_to_en, en_to_zh, id_to_en)。
+    """构建 (zh_to_en, en_to_zh, id_to_en, aliases)。
     先内置信,再用实例 jar lang 覆盖补充(更全/更贴近真实游戏)。"""
     zh_to_en = {}   # 中文名(归一化) → 英文名
     en_to_zh = {}   # 英文名(归一化) → 中文名
     id_to_en = {}   # id → 英文名
+    aliases = []    # [(归一化叫法, 英文名, id), ...] 供模糊/口语匹配
     for mcid, (zh, en) in VANILLA_NAMES.items():
         if zh:
             zh_to_en.setdefault(_norm(zh), en)
             en_to_zh.setdefault(_norm(en), zh)
         id_to_en.setdefault(mcid, en)
         id_to_en.setdefault("minecraft:" + _norm(en), en)
+    # 口语/别名
+    for mcid, lacks in COLLOQUIAL.items():
+        for la in lacks:
+            aliases.append((_norm(la), mcid.split(":")[-1], mcid))
+            en = id_to_en.get(mcid, mcid.split(":")[-1])
+            zh_to_en.setdefault(_norm(la), en)   # 让别名也能精确命中
+            en_to_zh.setdefault(_norm(en), la)
 
     # 从实例 jar lang 补充(真实游戏数据,最全)
     try:
@@ -170,7 +229,7 @@ def _build_index(game_dir: str, instance: str | None) -> tuple:
                 continue
     except Exception:
         pass
-    return zh_to_en, en_to_zh, id_to_en
+    return zh_to_en, en_to_zh, id_to_en, aliases
 
 
 def json_load(data: bytes):
@@ -181,12 +240,27 @@ def json_load(data: bytes):
         return None
 
 
+def alias_id_map() -> dict:
+    """口语/别名 → 规范 id(含内置名,归一化 key)。供 recipe_graph 等把别名并进物品索引,
+    这样 get_recipe_path / compare_items 也吃口语叫法(如 会爆炸的怪 → minecraft:creeper)。"""
+    m = {}
+    for mcid, (zh, en) in VANILLA_NAMES.items():
+        if zh:
+            m[_norm(zh)] = mcid
+            m[_norm(en)] = mcid
+    for mcid, lacks in COLLOQUIAL.items():
+        for la in lacks:
+            m[_norm(la)] = mcid
+    return m
+
+
 def resolve_name_map(query: str, game_dir: str = None, instance: str = None) -> dict:
-    """把叫法解析成 {query, name, id, zh, source}。找不到时 name/id 为空。"""
+    """把叫法解析成 {query, name, id, zh, source}。找不到时 name/id 为空。
+    source: id / name / fuzzy / none。"""
     if game_dir is None:
         import paths
         game_dir = paths.GAME_DIR
-    zh_to_en, en_to_zh, id_to_en = _build_index(game_dir, instance)
+    zh_to_en, en_to_zh, id_to_en, aliases = _build_index(game_dir, instance)
     q = (query or "").strip()
     qn = _norm(q)
     # 1) 直接是 id(minecraft:xx 或 ns:xx)
@@ -210,7 +284,56 @@ def resolve_name_map(query: str, game_dir: str = None, instance: str = None) -> 
             en = id_to_en.get(id2, "") or id2
             return {"query": q, "name": en or q, "id": id2,
                     "zh": en_to_zh.get(_norm(en), ""), "source": "id"}
+    # 4) 口语/别名精确命中
+    for an, aen, aid in aliases:
+        if an == qn:
+            return {"query": q, "name": aen, "id": aid,
+                    "zh": en_to_zh.get(_norm(aen), q), "source": "name"}
+    # 5) 模糊:拼音/部分命中——query 是某名的前缀,或某名包含 query
+    best = _fuzzy_match(qn, zh_to_en, en_to_zh, aliases, id_to_en)
+    if best:
+        return {"query": q, "name": best[0], "id": best[1],
+                "zh": best[2] or q, "source": "fuzzy"}
     return {"query": q, "name": q, "id": "", "zh": "", "source": "none"}
+
+
+def _fuzzy_match(qn: str, zh_to_en: dict, en_to_zh: dict, aliases: list, id_to_en: dict):
+    """query 是中文名的子串 / 英文名的前缀 → 返回 (英文名, id, 中文名)。
+    优先级:英文前缀 > 中文子串 > 别名子串(英文前缀最可能是用户在打英文名)。长度过短(<2)不模糊。"""
+    if len(qn) < 2:
+        return None
+    best = None
+    best_len = 0
+    # 英文前缀命中(如 "cree" → creeper)
+    for en_raw, zh in en_to_zh.items():
+        if en_raw.startswith(qn) and len(en_raw) > best_len and len(en_raw) <= 16:
+            # 优先取"非别名"的规范中文名:zh 若本身是个口语再向 zh_to_en 反查规范
+            canon_zh = _canonical_zh(en_raw, zh_to_en)
+            best = (en_raw, _id_for_en(en_raw, id_to_en), canon_zh)
+            best_len = len(en_raw)
+    # 中文子串命中(如 "苦力"、"力怕" → 苦力怕)
+    for zh_raw, en in zh_to_en.items():
+        if qn in zh_raw and len(zh_raw) > best_len and len(zh_raw) <= 12:
+            canon_zh = _canonical_zh(en, zh_to_en)
+            best = (en, _id_for_en(en, id_to_en), canon_zh)
+            best_len = len(zh_raw)
+    # 别名子串命中(仅当前面都没命中更长的)
+    if best is None:
+        for an, aen, aid in aliases:
+            if qn in an and len(an) > best_len and len(an) <= 12:
+                best = (aen, aid, en_to_zh.get(_norm(aen), ""))
+                best_len = len(an)
+    return best
+
+
+def _canonical_zh(en: str, zh_to_en: dict) -> str:
+    """给英文名找规范中文名(反查,排除把口语当地名)。找不到就返回空。"""
+    if not en:
+        return ""
+    for zh_raw, _e in zh_to_en.items():
+        if _e == en and len(zh_raw) <= 12:
+            return zh_raw
+    return ""
 
 
 def _id_for_en(en: str, id_to_en: dict) -> str:
@@ -240,7 +363,23 @@ def resolve_mc_name(query: str, game_dir: str = None, instance: str = None) -> s
     parts = [f"「{q}」→ {r['name']}"]
     if r.get("id"):
         parts.append(f"id: {r['id']}")
-    if r.get("zh"):
-        parts.append(f"中文: {r['zh']}")
+    zh = r.get("zh") or ""
+    if zh and _norm(zh) != _norm(q):
+        parts.append(f"中文: {zh}")
     parts.append("(用上面这个标准英文名/id 去 wiki/资料库检索,命中更准)")
     return " | ".join(parts)
+
+
+def resolve_for_wiki(query: str, wiki_lang: str = "en", game_dir: str = None,
+                     instance: str = None) -> dict:
+    """按目标 wiki 语言返回适合检索的名字。
+    wiki_lang: 'en'(默认,如 minecraft.wiki / L3-N0X 宿主) 或 'zh'(中文 wiki,如 mc-wiki-fetch-mcp)。
+    返回 {query, search_name, id, zh, en}。search_name = 该 wiki 该用的检索名。"""
+    r = resolve_name_map(query, game_dir=game_dir, instance=instance)
+    en = r.get("name") or query
+    zh = r.get("zh") or ""
+    if wiki_lang and str(wiki_lang).lower().startswith("zh"):
+        return {"query": query, "search_name": zh or en, "id": r.get("id", ""),
+                "zh": zh, "en": en, "source": r.get("source", "none")}
+    return {"query": query, "search_name": en or zh, "id": r.get("id", ""),
+            "zh": zh, "en": en, "source": r.get("source", "none")}
