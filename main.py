@@ -475,12 +475,17 @@ class MainWindow(QMainWindow):
             {"route": [("maintab", "下载新资源"), ("btn", "Mod")],
              "arrow": "below",
              "text": "④ 下载新资源:像逛商场,挑 Mod / 光影包 / 数据包 / 资源包 / 整合包。"},
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"),
+                       ("widgetname", "filter_version")],
+             "arrow": "below",
+             "text": "⑤ 顶部这里选「游戏版本 + 加载器」:让搜到的资源匹配你的实例"
+                     "(如 1.21.1 + NeoForge),否则可能找不到对应版本或装不上。"},
             {"route": [("maintab", "设置"), ("btn", "界面")],
              "arrow": "below",
-             "text": "⑤ 设置 → 界面:切「全面 / 摘要」界面模式、自定义配色、检查更新、重播本教程。"},
+             "text": "⑥ 设置 → 界面:切「全面 / 摘要」界面模式、自定义配色、检查更新、重播本教程。"},
             {"route": [("maintab", "联机"), ("btn", "首页")],
              "arrow": "below",
-             "text": "⑥ 联机:按场景推荐联机方案(虚拟局域网不用同一WiFi/内网穿透/联机Mod)。"},
+             "text": "⑦ 联机:按场景推荐联机方案(虚拟局域网不用同一WiFi/内网穿透/联机Mod)。"},
         ]
         self._guide_driver = GuideDriver(self, steps)
         self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))

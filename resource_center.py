@@ -253,8 +253,10 @@ class ResourceBrowser(QWidget):
         # ---- 筛选(游戏版本 + 加载器) ----
         self.filter_version = QComboBox()
         self.filter_version.setEditable(True)
+        self.filter_version.setObjectName("filter_version")
         self.filter_version.setToolTip("筛选的游戏版本,可自行输入")
         self.filter_loader = QComboBox()
+        self.filter_loader.setObjectName("filter_loader")
         self.filter_loader.addItem(t("全部加载器", "All loaders"), None)
         for label, value in [("Fabric", "fabric"), ("Forge", "forge"),
                              ("NeoForge", "neoforge"), ("Quilt", "quilt")]:
@@ -904,6 +906,7 @@ class ResourceCenter(QWidget):
         mp.on_modpack_download = self._on_modpack_download
         mp.set_instance_dir_fn(self._instance_dir)
         mp._set_target_hooks(self._get_shared_target, self._set_shared_target)
+        mp.setObjectName("browser_modpack")
         self.browsers["modpack"] = mp
         self.stack.addWidget(mp)                            # 2 整合包
 
@@ -914,6 +917,7 @@ class ResourceCenter(QWidget):
                                  get_instance_loader=self._get_inst_loader)
             br.set_instance_dir_fn(self._instance_dir)
             br._set_target_hooks(self._get_shared_target, self._set_shared_target)
+            br.setObjectName(f"browser_{ptype}")
             self.browsers[ptype] = br
             self.stack.addWidget(br)                        # 3..6
 

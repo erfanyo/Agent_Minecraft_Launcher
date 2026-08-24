@@ -14,7 +14,7 @@ route 段格式 (类型, key):
 """
 import os
 
-from PySide6.QtWidgets import QPushButton, QListWidget, QToolButton, QTabWidget
+from PySide6.QtWidgets import QPushButton, QListWidget, QToolButton, QTabWidget, QWidget
 
 
 def _find_button(root, label: str):
@@ -30,7 +30,7 @@ def _find_button(root, label: str):
 
 
 def _find_by_objectname(root, name: str):
-    for w in root.findChildren(object):
+    for w in root.findChildren(QWidget):
         if (w.objectName() or "") == name:
             return w
     return None
@@ -71,6 +71,11 @@ def resolve(main_window, route):
             cur = _find_by_objectname(cur, key)
             if cur is None:
                 return None, None
+        elif typ == "rcswitch":
+            # 切当前控件(如 ResourceCenter)内部堆叠页,再取其当前页作为下一步目标
+            if hasattr(cur, "switch_to"):
+                cur.switch_to(int(key))
+            cur = cur.stack.currentWidget() if hasattr(cur, "stack") else cur
         else:
             return None, None
     # 目标控件所在的最顶层窗口(引导遮罩挂它上面)
