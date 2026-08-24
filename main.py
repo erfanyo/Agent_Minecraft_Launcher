@@ -64,6 +64,7 @@ from java_manager import ensure_java  # Java 检测与自动安装
 from launcher import build_launch_command, resolve_inherited_json  # 版本 JSON → 启动命令
 from loaders import install_loader  # Fabric / Forge 加载器安装
 from modpack import import_modpack as import_modpack_file  # 整合包导入
+from modpack import heal_instance_json  # 旧版导入的整合包 json id 修正(自愈)
 from modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
 import paths  # 游戏目录(可配置,设置/引导里可改)
 from paths import GAME_DIR, RUNTIME_DIR  # 兼容旧引用(测试用);内部统一用 paths.GAME_DIR
@@ -877,6 +878,10 @@ class MainWindow(QMainWindow):
             return
 
         self.statusBar().showMessage(f"正在获取 {v['id']} 的启动信息...")
+        # 旧版导入的整合包 json id 可能仍是加载器版本名(未改写成包名),
+        # 启动前先自愈:让 id 与实例目录名一致,启动才会落到本实例自己的游戏目录
+        if v.get("local"):
+            heal_instance_json(v["id"], paths.GAME_DIR)
         try:
             d = self.load_version_data(v)
         except Exception as e:
@@ -884,7 +889,7 @@ class MainWindow(QMainWindow):
             return
 
         required_java = (d.get("javaVersion") or {}).get("majorVersion", 8)
-        self._running_instance_id = d["id"]   # 供退出后自动 debug 定位日志
+        self._running_instance_id = v["id"]   # 实例 id(= 游戏目录名),供退出后自动 debug 定位日志
 
         def on_progress(done, total):
             self.dl_indicator.set_progress(done, total)
@@ -899,7 +904,10 @@ class MainWindow(QMainWindow):
             self.dl_indicator.hide()   # Java 检测/下载完成,收起圆环
             # 2) 把版本 JSON 翻译成启动命令
             #    运行目录按隔离策略来;安装目录和资源目录是所有版本共享的
-            game_dir = self.game_dir_for(d["id"])
+            #    用 v["id"](用户选中的实例目录名)而不是 d["id"](json 的 id):
+            #    整合包 json 可能从加载器版本复制而来,id 若没改对,游戏会被启动到
+            #    加载器的空白目录里(mod 全不加载)—— 游戏目录必须是所选实例自己的目录。
+            game_dir = self.game_dir_for(v["id"])
             cmd = build_launch_command(
                 d, game_dir, java_exe,
                 username=self.settings.get("username", "Player"),

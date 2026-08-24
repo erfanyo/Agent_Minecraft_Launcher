@@ -208,6 +208,52 @@ def suggested_instance_id(path: str) -> str:
     return _safe_name(os.path.splitext(os.path.basename(path))[0])
 
 
+def _tuck_framework_version(version_id: str, game_dir: str) -> None:
+    """把导入时不再被引用的"加载器框架版本"移进 versions/_versions/ 版本仓库。
+
+    导入整合包时,install_loader 会先生成一个加载器版本目录(如 neoforge-21.1.233),
+    随后它的 json/jar 被复制成整合包实例本身(整合包 json 改写为包名 id)。
+    这样原加载器版本目录就成了"没存档、没 mod、也没人引用"的空白框架 —— 它会被
+    scan_instances 当做一个独立实例漏出来(表现为"文件目录里多了一个空白实例")。
+    移进 _versions 仓库后,实例列表与磁盘目录都干净,也不影响继承链解析
+    (整合包 json 的 inheritsFrom 指向的是基础原版,不是这个框架版本)。"""
+    src = os.path.join(game_dir, "versions", version_id)
+    repo = os.path.join(game_dir, "versions", "_versions")
+    dest = os.path.join(repo, version_id)
+    if not os.path.isdir(src):
+        return
+    try:
+        os.makedirs(repo, exist_ok=True)
+        if os.path.isdir(dest):
+            # 仓库已有同名框架版本(罕见:又导入了同加载器的包)→ 删掉这份冗余
+            shutil.rmtree(src, ignore_errors=True)
+        else:
+            shutil.move(src, dest)
+    except OSError:
+        pass
+
+
+def heal_instance_json(instance_id: str, game_dir: str) -> bool:
+    """自愈:若实例 json 的 id 与目录名不一致,把 id 改写为目录名。
+
+    旧版本导入的整合包,版本 json 是从加载器版本复制来的,其 id 仍是加载器
+    (如 neoforge-21.1.233),启动时 game_dir_for(d["id"]) 会解析到加载器的空白
+    目录 → 白板启动、mod 全不加载。发现不一致就改写为实例目录名,让启动落到
+    本实例自己的游戏目录。返回是否改过。"""
+    path = os.path.join(game_dir, "versions", instance_id, instance_id + ".json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            j = json.load(f)
+        if j.get("id") == instance_id:
+            return False
+        j["id"] = instance_id
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(j, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
 # 并行下载整合包 mod 文件的工作线程数(单个文件失败不中断其它)
 _MOD_DL_WORKERS = 6
 
@@ -349,7 +395,20 @@ def import_modpack(path: str, game_dir: str,
         src_json = os.path.join(game_dir, "versions", src_id, src_id + ".json")
         src_jar = os.path.join(game_dir, "versions", src_id, src_id + ".jar")
         if os.path.exists(src_json):
-            shutil.copyfile(src_json, os.path.join(inst_dir, instance_id + ".json"))
+            dst_json = os.path.join(inst_dir, instance_id + ".json")
+            shutil.copyfile(src_json, dst_json)
+            # 复制自加载器版本(json 的 id 仍是加载器,如 neoforge-21.1.233)。
+            # 不改会让启动把游戏目录解析到源版本(空白实例),mod 全都不加载
+            # (启动时 game_dir_for(d["id"]) 指向的是加载器目录,不是本整合包目录)。
+            # → 强制把 id 改写成本整合包实例 id。
+            try:
+                with open(dst_json, encoding="utf-8") as f:
+                    jd = json.load(f)
+                jd["id"] = instance_id
+                with open(dst_json, "w", encoding="utf-8") as f:
+                    json.dump(jd, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
         if os.path.exists(src_jar):
             shutil.copyfile(src_jar, os.path.join(inst_dir, instance_id + ".jar"))
 
@@ -376,6 +435,11 @@ def import_modpack(path: str, game_dir: str,
             # 扁平:整个 zip 解压成实例(去掉可能存在的单一顶层文件夹)
             prefix = _flat_single_prefix(names)
             _extract_zip_to(path, inst_dir, prefix or "", status_callback, progress_callback)
+
+        # 收好导入时不再被引用的加载器框架版本(非原版本体的加载器目录),
+        # 避免它在实例列表里变成"多出来的空白实例"。
+        if base_instance and base_instance != mc:
+            _tuck_framework_version(base_instance, game_dir)
 
         return instance_id
     except Exception as e:

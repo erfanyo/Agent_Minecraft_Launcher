@@ -19,6 +19,7 @@ logs/
 
 # 测试临时目录
 .tmp/
+test_modpack/
 
 # Gradle / Java(bridge-mod 构建)
 .gradle/
