@@ -58,17 +58,21 @@ class DownloadIndicator(QWidget):
                 pen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 p.setPen(pen)
                 p.drawArc(rect, 90 * 16, -span * 16)
-        # 中间向下箭头(QPainter 矢量绘制,不依赖 emoji 字体,任何系统都正常显示)
+        # 中间传统向下箭头(竖杆 + 实心箭头,和 AI 面板的"发送↑"同款但方向相反)
         cx = self.width() / 2
         cy = self.height() / 2
-        arrow = QPolygonF([
-            QPointF(cx, cy + 7),
-            QPointF(cx - 6, cy - 1),
-            QPointF(cx + 6, cy - 1),
-        ])
+        pen = QPen(QColor("#3E7CB1"), 2.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.drawLine(QPointF(cx, cy - 7), QPointF(cx, cy + 3))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor("#3E7CB1"))
-        p.drawPolygon(arrow)
+        head = QPolygonF([
+            QPointF(cx - 6, cy + 2),
+            QPointF(cx + 6, cy + 2),
+            QPointF(cx, cy + 9),
+        ])
+        p.drawPolygon(head)
         p.end()
 
     def mousePressEvent(self, e):
