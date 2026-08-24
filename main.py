@@ -234,26 +234,14 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(t("退出", "Quit"), self.close)
 
-        view_menu = menubar.addMenu(t("查看", "View"))
-        self._inst_icons_action = view_menu.addAction(t("实例:大图标", "Instances: Icons"))
-        self._inst_list_action = view_menu.addAction(t("实例:列表", "Instances: List"))
-        for act in (self._inst_icons_action, self._inst_list_action):
-            act.setCheckable(True)
-        self._inst_icons_action.toggled.connect(
-            lambda on: on and self.set_view_mode(self.instance_list, True, "instances"))
-        self._inst_list_action.toggled.connect(
-            lambda on: on and self.set_view_mode(self.instance_list, False, "instances"))
+        # 「查看」菜单已移除(2026-08-25):实例「大图标」显示功能临时弃用(见 deprecated_features.py);
+        # 实例列表默认列表视图。需要大图标时沿用右列版本列表。
 
         # 「设置」菜单已移除:设置改为顶部标签卡(同级别的「设置」标签页)。
         # 「检查更新」移入 帮助 菜单;镜像源 在 设置→界面 也有,入口并入。
 
-        # ---- AI 助手:顶级菜单(和"查看"同级,更显眼) ----
-        ai_menu = menubar.addMenu("AI")
-        self._ai_show_action = ai_menu.addAction(t("显示 AI 助手", "Show AI Assistant"))
-        self._ai_show_action.setCheckable(True)
-        self._ai_show_action.toggled.connect(self._toggle_ai)
-        # AI 设置入口已移除(进设置标签页);技能管理入口已移到 AI 子窗口顶部;
-        # 「发送游戏指令…」入口已隐藏:由指令中心 skill 与 bridge-mod 的新通道替代
+        # 「AI」菜单已移除(2026-08-25):AI 助手改为右侧标签页,右上角靠其自身标题/关闭控制,
+        # 不再需要菜单顶部的「显示 AI 助手」。
 
         # 「联机」菜单已移除:改为「下载新资源」右侧的「联机」标签卡(卡片形式)。
         # 新手教程入口已隐藏(2026-08-25):第一版效果不够好,临时弃用,
@@ -321,30 +309,38 @@ class MainWindow(QMainWindow):
         self.settings_center.applied.connect(self._on_settings_applied)
         self.main_tabs.addTab(self.settings_center, t("设置", "Settings"))
 
-        # ---- 底部:可折叠的游戏日志(默认收起) ----
-        self.log_toggle_btn = QPushButton(t("▶ 游戏日志", "▶ Game Log"))
-        self.log_toggle_btn.setCheckable(True)
-        self.log_toggle_btn.setChecked(False)
-        self.log_toggle_btn.clicked.connect(self._toggle_log)
+        # ---- 游戏日志:改为右侧标签页(QDockWidget),和 AI 助手 tab 并列,可拖出成子窗口 ----
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setVisible(False)   # 默认折叠
 
         # ---- 组装整个窗口 ----
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.addLayout(top_bar)
         layout.addWidget(self.main_tabs)
-        layout.addWidget(self.log_toggle_btn)
-        layout.addWidget(self.log_view, 1)
         self.setCentralWidget(central)
 
-        # ---- AI 助手:停靠在右侧(类似 VS Code 侧栏),默认显示 ----
+        # ---- AI 助手/游戏日志:停靠在右侧,做成"标签页"(tab)形式 ----
+        # 允许拖动(可浮出成子窗口)、可关闭;标签页之间点击切换显示/隐藏。
         self.ai_dock = AIChatDock(self, self.settings)
+        self.ai_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.ai_dock.setFeatures(QDockWidget.DockWidgetFeature.DockMovable
+                                 | QDockWidget.DockWidgetFeature.DockFloatable
+                                 | QDockWidget.DockWidgetFeature.DockClosable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
         self.ai_dock.visibilityChanged.connect(self._on_ai_visibility)
-        self._ai_show_action.setChecked(True)   # 默认显示(更显眼)
         self.ai_dock.show()
+
+        # 游戏日志 dock(标签页,和 AI 并列)
+        self.log_dock = QDockWidget(t("游戏日志", "Game Log"), self)
+        self.log_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
+        self.log_dock.setFeatures(QDockWidget.DockWidgetFeature.DockMovable
+                                  | QDockWidget.DockWidgetFeature.DockFloatable
+                                  | QDockWidget.DockWidgetFeature.DockClosable)
+        self.log_dock.setWidget(self.log_view)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.log_dock)
+        self.tabifyDockWidget(self.ai_dock, self.log_dock)   # 并成一个 tab:点击标签切换 AI/日志
+        self.log_dock.hide()
 
         # ---- 技能管理器(游戏运行时辅助功能,可插拔) ----
         self.skill_mgr = SkillManager(self, self.settings)
@@ -423,8 +419,9 @@ class MainWindow(QMainWindow):
 
     # ---- AI 助手 ----
     def _toggle_ai(self, checked: bool):
-        """AI 菜单 → 显示/隐藏右侧对话栏"""
-        self.ai_dock.setVisible(checked)
+        """显示/隐藏右侧 AI 对话栏(靠其自身标题/关闭控制,不再有菜单入口)"""
+        if hasattr(self, "ai_dock"):
+            self.ai_dock.setVisible(bool(checked))
 
     def open_online_center(self):
         """打开联机方案中心:改为切到「联机」标签卡(卡片形式,非模态)"""
@@ -476,9 +473,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(result)
 
     def _on_ai_visibility(self, visible: bool):
-        """对话栏被点 × 关掉时,同步菜单勾选状态"""
-        if hasattr(self, "_ai_show_action"):
-            self._ai_show_action.setChecked(visible)
+        """AI 对话栏可见性变化(点 ×/拖出成子窗口等)——保留占位,便于以后联动。"""
 
     def ai_context(self) -> str:
         """给 AI 的上下文:启动器设置 + 当前选中的实例信息"""
@@ -980,8 +975,9 @@ class MainWindow(QMainWindow):
 
         # 3) 展开日志面板,显示要执行的命令(方便你理解"启动"到底是什么)
         self.log_view.clear()
-        if not self.log_view.isVisible():
-            self.log_toggle_btn.setChecked(True)  # 触发 _toggle_log 展开
+        if hasattr(self, "log_dock") and not self.log_dock.isVisible():
+            self.log_dock.raise_()
+            self.log_dock.show()
         self.log_view.appendPlainText("> " + " ".join(cmd))
         # 首次运行提示:还没生成过完整游戏目录(saves/配置)时告诉用户
         if not os.path.isdir(os.path.join(game_dir, "saves")):
@@ -1072,10 +1068,13 @@ class MainWindow(QMainWindow):
             self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(崩溃守护等)
 
     def _toggle_log(self, checked: bool):
-        """展开/折叠底部游戏日志面板"""
-        self.log_view.setVisible(checked)
-        self.log_toggle_btn.setText(t("▼ 游戏日志", "▼ Game Log") if checked
-                                    else t("▶ 游戏日志", "▶ Game Log"))
+        """显示/隐藏「游戏日志」标签页(右区 tab)。"""
+        if hasattr(self, "log_dock"):
+            if checked:
+                self.log_dock.raise_()
+                self.log_dock.show()
+            else:
+                self.log_dock.hide()
 
     # ---- 自动 debug:游戏异常退出时收集日志,让 AI 分析 ----
     def _auto_debug(self, code: int):

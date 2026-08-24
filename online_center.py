@@ -526,7 +526,7 @@ def build_tutorials_tab() -> QWidget:
 # 联机方案中心对话框
 # --------------------------------------------------------------------------
 class OnlineCenter(QWidget):
-    """联机方案中心(标签页版,卡片形式):帮我推荐(向导) + 各方案卡片 + 教程与资料"""
+    """联机方案中心(标签页版):参考「下载新资源」——不同方案分类按左侧菜单排成一列。"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -539,28 +539,27 @@ class OnlineCenter(QWidget):
             "· 拿不准?点「帮我推荐」一路选下去。")
         intro.setWordWrap(True)
 
-        self.tabs = QTabWidget()
-        # A) 帮我推荐(放在最前,方便拿不准的玩家)
-        self.wizard = RecommendWizard(self._view_tutorial)
-        self.tabs.addTab(self.wizard, t("帮我推荐", "Recommend"))
-
-        # 现有方案卡片 tab(card 形式)
+        from center_shell import CenterShell
+        self.shell = CenterShell(self, menu_width=150)
+        # 帮我推荐(放最前,方便拿不准的玩家)
+        self.shell.add_section(t("帮我推荐", "Recommend"),
+                               lambda: RecommendWizard(self._view_tutorial))
+        # 各方案分类(左菜单一列)
         for title, items in SCHEMES:
-            self.tabs.addTab(self._build_tab(title, items), title.split("(")[0].strip())
-
-        # B) 教程与资料 tab
-        self._tut_index = self.tabs.count()
-        self.tabs.addTab(build_tutorials_tab(), t("教程与资料", "Tutorials"))
+            self.shell.add_section(title.split("(")[0].strip(),
+                                   lambda ti=title, ii=items: self._build_tab(ti, ii))
+        # 教程与资料
+        self.shell.add_section(t("教程与资料", "Tutorials"), build_tutorials_tab)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(intro)
-        layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.shell, 1)
 
     def _view_tutorial(self, scheme_name: str = ""):
-        """切到「教程与资料」tab(可选的 scheme 定位简化:切过去即可)。"""
-        if hasattr(self, "tabs"):
-            self.tabs.setCurrentIndex(self._tut_index)
+        """切到「教程与资料」(左菜单右侧面板)。"""
+        if hasattr(self, "shell"):
+            self.shell.switch_by_label(t("教程与资料", "Tutorials"))
 
     def _card(self, name: str, desc: str, url: str) -> QWidget:
         """方案卡片:名称 + 描述 + 打开官网,点击卡片也可打开。"""

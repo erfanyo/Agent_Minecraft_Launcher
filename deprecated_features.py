@@ -20,6 +20,14 @@ DEPRECATED_FEATURES = [
                 "代码仍在(内容 tutorial_content.py / 渲染 tutorial_gui.py),可从此临时入口查看。",
         "reopen": "tutorial",
     },
+    {
+        "id": "instance_icons_view",
+        "name": "实例:大图标显示(视图)",
+        "status": "临时弃用",
+        "note": "之前「查看 → 实例:大图标」的大图标列表视图,已连同「查看」菜单一起移除、临时弃用。"
+                "实例列表统一为列表视图;若想要大图标封面可复用「我的版本」右键的封面图。代码仍保留(set_view_mode)。",
+        "reopen": None,
+    },
 ]
 
 
