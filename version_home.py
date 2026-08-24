@@ -17,6 +17,8 @@
 - .launch_btn      —— 左列「启动游戏」大按钮(QPushButton)
 - .refresh_btn     —— 右列「版本」标签里的刷新按钮(QPushButton)
 """
+import threading
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
@@ -33,7 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from changelog import changelog_html, parse_changelog
+from changelog import changelog_html, load_changelog
 from i18n import t
 from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
@@ -264,11 +266,17 @@ class VersionHome(QWidget):
     open_instance_manager_requested = Signal(object)  # inst dict 或 None
     open_settings_requested = Signal()
     login_changed = Signal()
+    _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
+    _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
         self._on_selection_changed(None, None)
+        # 更新日志:后台线程拉取 GitHub CHANGELOG.md,完成后主线程渲染
+        self._changelog_loaded.connect(self._on_changelog_loaded)
+        self._changelog_failed.connect(self._on_changelog_failed)
+        self._load_changelog_async()
 
     # ---------- UI 搭建 ----------
     def _build_ui(self):
@@ -389,13 +397,71 @@ class VersionHome(QWidget):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(12, 12, 12, 12)
+        lay.setSpacing(8)
         self.changelog_view = QTextBrowser()
         self.changelog_view.setOpenExternalLinks(True)
-        self.changelog_view.setHtml(changelog_html(parse_changelog()))
         self.changelog_view.setStyleSheet(
             f"QTextBrowser {{ background: transparent; border: none; color: {text_color()}; }}")
+        self.changelog_status = QLabel()
+        self.changelog_status.setStyleSheet(f"color: {muted_color()};")
+        self.changelog_status.setWordWrap(True)
+        self.changelog_refresh_btn = QPushButton(t("刷新", "Refresh"))
+        self.changelog_refresh_btn.setStyleSheet(card_btn_style())
+        self.changelog_refresh_btn.setMinimumHeight(30)
+        self.changelog_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.changelog_refresh_btn.clicked.connect(self._load_changelog_async)
+
+        # 标题行:更新日志 + 来源说明 + 刷新按钮
+        header = QHBoxLayout()
+        title = QLabel(t("更新日志", "Changelog"))
+        title.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self.changelog_refresh_btn)
+        lay.addLayout(header)
         lay.addWidget(self.changelog_view, 1)
+
+        # 初始态:显示"正在拉取",加载完成后替换
+        self.changelog_view.setHtml(
+            "<p style='color:#888888'>🔄 正在从 GitHub 拉取更新日志…</p>")
+        self.changelog_status.setText(
+            t("来源:github.com/%s/CHANGELOG.md(失败时回退本地)" % "erfanyo/Agent_Minecraft_Launcher",
+              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md (falls back to local)"))
         return w
+
+    def _load_changelog_async(self):
+        """后台线程拉取更新日志(GitHub 优先,失败回退本地),避免卡 UI。"""
+        self.changelog_status.setText(
+            t("正在从 GitHub 拉取…", "Fetching from GitHub…"))
+        self.changelog_view.setHtml(
+            "<p style='color:#888888'>🔄 正在从 GitHub 拉取更新日志…</p>")
+
+        def worker():
+            try:
+                entries = load_changelog()
+                if entries:
+                    self._changelog_loaded.emit(entries)
+                else:
+                    self._changelog_failed.emit("empty")
+            except Exception as e:
+                self._changelog_failed.emit(str(e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_changelog_loaded(self, entries: list):
+        """更新日志拉取成功 → 渲染 HTML。"""
+        self.changelog_view.setHtml(changelog_html(entries))
+        self.changelog_status.setText(
+            t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md(失败时回退本地)",
+              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md (falls back to local)"))
+
+    def _on_changelog_failed(self, err: str):
+        """GitHub 与本地均无可用更新日志 → 显示友好提示。"""
+        self.changelog_view.setHtml(
+            "<p style='color:#888888'>暂时拉不到更新日志(GitHub 与本地均不可用)。"
+            "<br>可点击右上角「刷新」重试,或检查网络。</p>")
+        self.changelog_status.setText(t("拉取失败,请检查网络后点「刷新」",
+                                        "Fetch failed, check network and Refresh"))
 
     def _build_community_tab(self) -> QWidget:
         w = QWidget()

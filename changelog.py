@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-「更新日志」页面的数据源:解析 CHANGELOG.md → 结构化更新日志 → 展示用 HTML。
+「更新日志」页面的数据源:从 GitHub 仓库拉取 CHANGELOG.md → 结构化更新日志 → 展示用 HTML。
 
 CHANGELOG.md 采用 Keep a Changelog + 语义化版本,结构大致为:
 
@@ -15,16 +15,28 @@ CHANGELOG.md 采用 Keep a Changelog + 语义化版本,结构大致为:
     ### 规划
     - ...
 
-本模块只负责解析与排版,不依赖 Qt 之外的界面层,方便被「我的版本」的
-「更新日志」标签页直接调用。
+数据源:优先走 GitHub(浏览器端/仓库里的最新内容);离线时回退到本地 CHANGELOG.md,
+保证「我的版本」的更新日志页始终有内容可读。
+
+本模块只负责解析与排版,不依赖 Qt 之外的界面层。
 """
+import base64
 import html
 import os
 import re
 
+import requests
+
 import paths
 
+REPO = "erfanyo/Agent_Minecraft_Launcher"
+# GitHub Contents API:返回 CHANGELOG.md 的 base64 内容(不依赖默认分支名)
+GITHUB_CHANGELOG_API = f"https://api.github.com/repos/{REPO}/contents/CHANGELOG.md"
+
 CHANGELOG_PATH = os.path.join(paths.BASE_DIR, "CHANGELOG.md")
+
+_HEADERS = {"User-Agent": "AgentMinecraftLauncher-Updater/0.2.1",
+            "Accept": "application/vnd.github.v3+json"}
 
 # 版本标题:## [v0.2.1] - 2026-08-23   或   ## [未发布 / Unreleased]
 _HEAD_RE = re.compile(r"^##\s+\[?(.+?)\]?\s*(?:-\s*(.*))?$")
@@ -39,18 +51,22 @@ def parse_changelog(path: str = CHANGELOG_PATH) -> list:
 
     解析失败或文件不存在时返回空列表(更新日志页面不至于崩,只是空白)。
     """
-    entries = []
     if not os.path.exists(path):
-        return entries
+        return []
     try:
         with open(path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
-        return entries
+        return []
+    return parse_changelog_text(text)
 
+
+def parse_changelog_text(text: str) -> list:
+    """把 CHANGELOG.md 原文解析为结构化列表(与文件路径无关,供在线内容复用)。"""
+    entries = []
     cur = None        # 当前版本条目
     cur_group = None  # 当前分组
-    for raw in text.splitlines():
+    for raw in (text or "").splitlines():
         line = raw.rstrip()
         m = _HEAD_RE.match(line)
         if m:
@@ -81,6 +97,33 @@ def parse_changelog(path: str = CHANGELOG_PATH) -> list:
     if cur:
         entries.append(cur)
     return entries
+
+
+def fetch_from_github(timeout: int = 15) -> str:
+    """从 GitHub 拉取 CHANGELOG.md 原文(Contents API,base64 解码)。
+
+    成功返回文本;失败(网络/非 200/无内容)抛异常,由调用方决定降级。
+    """
+    resp = requests.get(GITHUB_CHANGELOG_API, headers=_HEADERS, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+    content = data.get("content") or ""
+    if data.get("encoding") == "base64":
+        content = base64.b64decode(content).decode("utf-8", errors="replace")
+    if not content.strip():
+        raise OSError("GitHub CHANGELOG.md 为空")
+    return content
+
+
+def load_changelog(timeout: int = 15) -> list:
+    """获取更新日志:优先 GitHub,失败回退本地 CHANGELOG.md。
+
+    返回结构化列表;两者都不可用时返回空列表(UI 渲染空态提示)。
+    """
+    try:
+        return parse_changelog_text(fetch_from_github(timeout=timeout))
+    except Exception:
+        return parse_changelog()
 
 
 def _inline(text: str) -> str:
