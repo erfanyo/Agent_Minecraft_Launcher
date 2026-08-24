@@ -29,7 +29,8 @@
 - 新增「bridge-mod 指南」技能:AI 认知内置私有 Mod(用途/支持范围/装法/测试阶段)
 - 新增「**非主流 Mod 兼容性检查**」技能:提醒 AI 判断某 Mod 在某加载器有没有时,先查"同名跨加载器非官方版"
   (如 Fabric 的 `voxy` 有 GitHub 上非官方的 NeoForge 版)+ "Fabric mod 被转译到 Forge/NeoForge、把
-  `fabric-api` 换成 Forge 等价物"的可能;别急着下结论"没有/缺 fabric-api"。
+  `fabric-api` 换成 Forge 等价物"的可能+ "**选装/需自行编译**的资源(如本整合包里的 `voxy` 为选装、需跑编译脚本,"
+  "缺失≠装漏)"——别急着下结论"没有/缺 fabric-api/缺失依赖"。
 
 ### 🔤 Mod 描述翻译(本地 AI)
 - 93 条 MC 标准译名术语表 + 本地翻译引擎(复用 chat 通道,temp 0.1)
