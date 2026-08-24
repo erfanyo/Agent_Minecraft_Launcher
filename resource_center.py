@@ -149,6 +149,9 @@ class ResourceBrowser(QWidget):
         self._async_timer.timeout.connect(self._drain_async)
         self._async_timer.start(60)
 
+        # 是否已加载过「默认浏览」(打开页即显示列表);已加载则不重复拉取
+        self._auto_loaded = False
+
         self._build_ui()
 
     def _build_ui(self):
@@ -287,6 +290,9 @@ class ResourceBrowser(QWidget):
         layout.addLayout(self._row(self.search_edit, search_btn))
         layout.addWidget(self.split, 1)
 
+        # 切换排序时,若处于默认浏览(空关键词)则重新拉取
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+
     def _row(self, *widgets):
         r = QHBoxLayout()
         for w in widgets:
@@ -417,12 +423,13 @@ class ResourceBrowser(QWidget):
     # ---- 搜索 ----
     def do_search(self):
         query = self.search_edit.text().strip()
-        if not query:
-            return
+        # 允许空关键词:打开资源页即「默认浏览」(空 query → 按 sort_combo 排序,默认 downloads)。
+        # 目标实例/加载器/版本筛选会被尊重(为空则全量);不覆盖用户已输入的关键词。
         gv = self.filter_version.currentText().strip()
         loader = self.filter_loader.currentData()
         order = self.sort_combo.currentData() or "downloads"
         tags = self.tag_edit.text().strip()
+        self._last_query = query
         self.result_list.clear()
         QListWidgetItem(t("搜索中...", "Searching..."), self.result_list)
 
@@ -435,9 +442,25 @@ class ResourceBrowser(QWidget):
         self._async(("search", query, gv, loader, self.project_type, order, tags),
                     fetch, self._fill_results, cache=False)
 
+    def maybe_auto_load(self):
+        """打开/切到本资源页时,若搜索框为空,自动触发一次「默认浏览」。
+        已加载过默认浏览(或正在显示)则不再重复拉取;不覆盖用户已输入的关键词。"""
+        if self.search_edit.text().strip():
+            return
+        if getattr(self, "_auto_loaded", False):
+            return
+        self.do_search()
+
+    def _on_sort_changed(self):
+        """排序切换:处于默认浏览(空关键词)时重新拉取,让列表按新排序刷新。"""
+        if self.search_edit.text().strip():
+            return
+        self.do_search()
+
     def _fill_results(self, hits):
         self.result_list.clear()
         if hits is None:
+            self._auto_loaded = False
             QListWidgetItem(t("搜索失败,请检查网络", "Search failed, check network"), self.result_list)
             return
         for h in hits:
@@ -450,6 +473,8 @@ class ResourceBrowser(QWidget):
             self.result_list.addItem(item)
         if not hits and not self.result_list.count():
             QListWidgetItem(t("(没有找到结果)", "(no results)"), self.result_list)
+        # 记录默认浏览是否已加载(空关键词的结果),供 maybe_auto_load 判断是否重复拉取
+        self._auto_loaded = (getattr(self, "_last_query", "") == "")
 
     # ---- 详情面板 ----
     def _on_selected(self, current, _prev):
@@ -761,6 +786,10 @@ class ResourceCenter(QWidget):
 
     def switch_to(self, idx: int):
         self.stack.setCurrentIndex(idx)
+        # 切到资源浏览器页且搜索框为空 → 自动默认浏览(打开即显示列表,无需先搜索)
+        cur = self.stack.currentWidget()
+        if isinstance(cur, ResourceBrowser):
+            cur.maybe_auto_load()
         for i, btn in enumerate(self._menu_buttons):
             btn.setChecked(i == idx)
 
