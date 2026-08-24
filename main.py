@@ -224,6 +224,9 @@ class MainWindow(QMainWindow):
         # ---- 顶部(精简:菜单栏已移除,入口都进了标签页/设置) ----
         top_bar = QHBoxLayout()
         top_bar.addStretch()
+        # 顶部右侧(最小化按钮下方一带):显示"已有 x 个运行中的实例"(悬停看具体实例)
+        self._running_label = QLabel("")
+        top_bar.addWidget(self._running_label)
         # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
         # - 导入整合包 → 下载新资源 → 实例 →「导入整合包」按钮
         # - 检查更新 / 引导教程(重播) → 放到 设置 → 界面
@@ -346,10 +349,8 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.dl_indicator, 0)   # 状态栏最左 = 窗口左下角
         self.dl_indicator.hide()
 
-        # 运行中的实例指示:最外层显示"已有 x 个运行中的实例",悬停看具体是哪个
+        # 运行中的实例指示:已在顶部右侧显示"已有 x 个运行中的实例"(悬停看具体是哪个)
         self._running_instances = set()
-        self._running_label = QLabel()
-        self.statusBar().addPermanentWidget(self._running_label)   # 状态栏最右
         self._update_running_label()
 
     # ---- 设置 ----
@@ -756,7 +757,7 @@ class MainWindow(QMainWindow):
         self.refresh_instances()
 
     def _update_running_label(self):
-        """刷新状态栏的"已有 x 个运行中的实例"(悬停显示具体实例)"""
+        """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
         n = len(self._running_instances)
         if n:
             self._running_label.setText(f"🟢 已有 {n} 个运行中的实例")
