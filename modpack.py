@@ -82,12 +82,19 @@ def _ensure_base(mc: str, game_dir: str,
 
 def _install_loader_from_deps(deps: dict, mc: str, game_dir: str,
                               status_callback=None, progress_callback=None) -> str | None:
-    """按整合包依赖安装加载器,返回实例的基础(loader 版本 id 或 None)"""
+    """按整合包依赖安装加载器,返回实例的基础(loader 版本 id 或 None)。
+    支持 Modrinth 清单里的 fabric-loader / forge / neoforge(quilt-loader 视为 fabric)。"""
+    loader = None
+    ver = None
     if deps.get("fabric-loader"):
         loader, ver = "fabric", deps["fabric-loader"]
+    elif deps.get("neoforge"):
+        loader, ver = "neoforge", deps["neoforge"]
     elif deps.get("forge"):
         loader, ver = "forge", deps["forge"]
-    else:
+    elif deps.get("quilt-loader"):
+        loader, ver = "fabric", deps["quilt-loader"]
+    if loader is None:
         return None
     ver = None if ver in ("*", "") else ver
     if status_callback:
@@ -261,81 +268,90 @@ def import_modpack(path: str, game_dir: str,
     inst_dir = os.path.join(game_dir, "versions", instance_id)
     if os.path.exists(inst_dir):
         raise ValueError(f"已存在同名实例:{instance_id}(可在导入时自定义实例名)")
+    # 一开始就创建实例目录:让用户立刻看到(下载/解压都在里面进行;导入失败会回滚删除,不留半成品)
+    os.makedirs(inst_dir, exist_ok=True)
     if status_callback:
         status_callback(f"开始导入整合包:{name}(mc {mc})...")
 
-    # 1) 原版本体
-    _ensure_base(mc, game_dir, status_callback, progress_callback)
+    try:
+        # 1) 原版本体
+        _ensure_base(mc, game_dir, status_callback, progress_callback)
 
-    # 2) 加载器:Modrinth 用依赖表;其它格式用传入/解析出的 loader
-    base_instance = None
-    if index is not None:
-        base_instance = _install_loader_from_deps(index.get("dependencies") or {}, mc,
-                                                  game_dir, status_callback, progress_callback)
-    elif loader:
-        if status_callback:
-            status_callback(f"安装加载器 {loader}...")
-        try:
-            base_instance = install_loader(loader, mc, game_dir, loader_version=loader_version,
-                                           progress_callback=progress_callback,
-                                           status_callback=status_callback)
-        except Exception as e:
-            # 包需要这个加载器(CurseForge/Modrinth 声明,或用户手动选了非原版)却装不上
-            # → 不能静默生成一个"原版半成品"(否则 mods 跑不了,基础版本也不会被收进 _versions)。
-            msg = f"加载器 {loader} 安装失败,已取消导入:{e}"
+        # 2) 加载器:Modrinth 用依赖表;其它格式用传入/解析出的 loader
+        base_instance = None
+        if index is not None:
+            base_instance = _install_loader_from_deps(index.get("dependencies") or {}, mc,
+                                                      game_dir, status_callback, progress_callback)
+        elif loader:
             if status_callback:
-                status_callback(msg)
-            raise RuntimeError(msg) from e
-
-    # 3) 创建实例目录,放好版本 JSON 和客户端 jar
-    os.makedirs(inst_dir, exist_ok=True)
-    src_id = base_instance or mc
-    src_json = os.path.join(game_dir, "versions", src_id, src_id + ".json")
-    src_jar = os.path.join(game_dir, "versions", src_id, src_id + ".jar")
-    if os.path.exists(src_json):
-        shutil.copyfile(src_json, os.path.join(inst_dir, instance_id + ".json"))
-    if os.path.exists(src_jar):
-        shutil.copyfile(src_jar, os.path.join(inst_dir, instance_id + ".jar"))
-
-    # 4) 按格式放内容
-    if index is not None:
-        # Modrinth:下载清单里的文件
-        files = index.get("files", [])
-        for i, f in enumerate(files, 1):
-            rel = f.get("path", "")
-            if not rel or rel.startswith("../"):
-                continue
-            dest = os.path.join(inst_dir, rel.replace("/", os.sep))
-            downloads = f.get("downloads") or []
-            if not downloads or os.path.exists(dest):
-                continue
-            if status_callback:
-                status_callback(f"下载整合包文件 {i}/{len(files)}:{os.path.basename(rel)}")
+                status_callback(f"安装加载器 {loader}...")
             try:
-                download_with_mirror(downloads[0], dest,
-                                     sha1=(f.get("hashes") or {}).get("sha1"),
-                                     progress_callback=progress_callback)
+                base_instance = install_loader(loader, mc, game_dir, loader_version=loader_version,
+                                               progress_callback=progress_callback,
+                                               status_callback=status_callback)
             except Exception as e:
+                # 包需要这个加载器(CurseForge/Modrinth 声明,或用户手动选了非原版)却装不上
+                # → 不能静默生成一个"原版半成品"(否则 mods 跑不了,基础版本也不会被收进 _versions)。
+                msg = f"加载器 {loader} 安装失败,已取消导入:{e}"
                 if status_callback:
-                    status_callback(f"文件下载失败(跳过):{os.path.basename(rel)} {e}")
+                    status_callback(msg)
+                raise RuntimeError(msg) from e
 
-    # Modrinth + CurseForge 都解压 overrides / client-overrides(直接覆盖进实例的文件)
-    if index is not None or cf:
-        _extract_zip_to(path, inst_dir, "overrides/", status_callback, progress_callback)
-        _extract_zip_to(path, inst_dir, "client-overrides/", status_callback, progress_callback)
+        # 3) 放好版本 JSON 和客户端 jar
+        src_id = base_instance or mc
+        src_json = os.path.join(game_dir, "versions", src_id, src_id + ".json")
+        src_jar = os.path.join(game_dir, "versions", src_id, src_id + ".jar")
+        if os.path.exists(src_json):
+            shutil.copyfile(src_json, os.path.join(inst_dir, instance_id + ".json"))
+        if os.path.exists(src_jar):
+            shutil.copyfile(src_jar, os.path.join(inst_dir, instance_id + ".jar"))
 
-    if cf:
-        listed = len((manifest.get("files") or []))
-        if status_callback:
-            if listed:
-                status_callback(f"CurseForge 清单里还有 {listed} 个文件需 CurseForge API,已跳过;"
-                                "已解压 overrides(配置/覆盖文件),mod 请用工具从 CurseForge 另行导入")
-            else:
-                status_callback("已解压 overrides(含 mods/配置/覆盖文件),无需 CurseForge 额外下载")
+        # 4) 按格式放内容
+        if index is not None:
+            # Modrinth:下载清单里的文件
+            files = index.get("files", [])
+            for i, f in enumerate(files, 1):
+                rel = f.get("path", "")
+                if not rel or rel.startswith("../"):
+                    continue
+                dest = os.path.join(inst_dir, rel.replace("/", os.sep))
+                downloads = f.get("downloads") or []
+                if not downloads or os.path.exists(dest):
+                    continue
+                if status_callback:
+                    status_callback(f"下载整合包文件 {i}/{len(files)}:{os.path.basename(rel)}")
+                try:
+                    download_with_mirror(downloads[0], dest,
+                                         sha1=(f.get("hashes") or {}).get("sha1"),
+                                         progress_callback=progress_callback)
+                except Exception as e:
+                    if status_callback:
+                        status_callback(f"文件下载失败(跳过):{os.path.basename(rel)} {e}")
 
-    if index is None and not cf:
-        # 扁平:整个 zip 解压成实例(去掉可能存在的单一顶层文件夹)
-        prefix = _flat_single_prefix(names)
-        _extract_zip_to(path, inst_dir, prefix or "", status_callback, progress_callback)
+        # Modrinth + CurseForge 都解压 overrides / client-overrides(直接覆盖进实例的文件)
+        if index is not None or cf:
+            _extract_zip_to(path, inst_dir, "overrides/", status_callback, progress_callback)
+            _extract_zip_to(path, inst_dir, "client-overrides/", status_callback, progress_callback)
 
-    return instance_id
+        if cf:
+            listed = len((manifest.get("files") or []))
+            if status_callback:
+                if listed:
+                    status_callback(f"CurseForge 清单里还有 {listed} 个文件需 CurseForge API,已跳过;"
+                                    "已解压 overrides(配置/覆盖文件),mod 请用工具从 CurseForge 另行导入")
+                else:
+                    status_callback("已解压 overrides(含 mods/配置/覆盖文件),无需 CurseForge 额外下载")
+
+        if index is None and not cf:
+            # 扁平:整个 zip 解压成实例(去掉可能存在的单一顶层文件夹)
+            prefix = _flat_single_prefix(names)
+            _extract_zip_to(path, inst_dir, prefix or "", status_callback, progress_callback)
+
+        return instance_id
+    except Exception as e:
+        # 导入失败:回滚删掉本次新建的实例目录(不留原版半成品)
+        try:
+            shutil.rmtree(inst_dir, ignore_errors=True)
+        except Exception:
+            pass
+        raise
