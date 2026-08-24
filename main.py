@@ -262,6 +262,10 @@ class MainWindow(QMainWindow):
         online_menu = menubar.addMenu(t("联机", "Multiplayer"))
         online_menu.addAction(t("联机方案中心…", "Multiplayer Center…"), self.open_online_center)
 
+        # ---- 帮助:新手教程(模块化:内容在 tutorial_content.py,渲染器在 tutorial_gui.py) ----
+        help_menu = menubar.addMenu(t("帮助", "Help"))
+        help_menu.addAction(t("📖 新手教程…", "Beginner Tutorial…"), self.open_tutorial)
+
         # ---- Tab「我的版本」:仿 PCL2 首页(左 1/3 登录+实例设置+启动按钮,右 2/3 版本/更新日志/动态) ----
         from version_home import VersionHome
         tab_a = VersionHome()
@@ -278,6 +282,7 @@ class MainWindow(QMainWindow):
         tab_a.open_settings_requested.connect(self.open_settings)
         tab_a.login_changed.connect(self._on_login_changed)
         tab_a.one_click_config_requested.connect(self._one_click_config_kind)
+        tab_a.tutorial_requested.connect(self.open_tutorial)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
         from resource_center import ResourceCenter
@@ -399,6 +404,11 @@ class MainWindow(QMainWindow):
         """打开联机方案中心(虚拟局域网/内网穿透/联机 Mod/官方方案)"""
         from online_center import OnlineCenterDialog
         OnlineCenterDialog(self).exec()
+
+    def open_tutorial(self):
+        """打开新手教程(模块化:内容 tutorial_content.py / 渲染 tutorial_gui.py,与 UI 解耦)"""
+        from tutorial_gui import TutorialDialog
+        TutorialDialog(self).exec()
 
     def open_skill_manager(self):
         """打开技能管理(游戏运行时辅助功能,勾选启停)"""

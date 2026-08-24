@@ -274,6 +274,7 @@ class VersionHome(QWidget):
     open_settings_requested = Signal()
     login_changed = Signal()
     one_click_config_requested = Signal(str)  # "bridge"/"rcon"/"auto" → 主窗口处理
+    tutorial_requested = Signal()            # 打开新手教程
     _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
     _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
 
@@ -373,6 +374,14 @@ class VersionHome(QWidget):
         self.config_btn.setMenu(cfg_menu)
         btn_row.addWidget(self.config_btn, 1)
         lay.addLayout(btn_row)
+
+        # 新手教程入口(模块化:内容在 tutorial_content.py,渲染在 tutorial_gui.py)
+        self.tutorial_btn = QPushButton(t("📖 新手教程", "Beginner Tutorial"))
+        self.tutorial_btn.setStyleSheet(card_btn_style())
+        self.tutorial_btn.setMinimumHeight(36)
+        self.tutorial_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.tutorial_btn.clicked.connect(self.tutorial_requested.emit)
+        lay.addWidget(self.tutorial_btn)
 
         return left
 
