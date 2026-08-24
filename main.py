@@ -538,12 +538,13 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage("正在导入整合包...")
 
-        def worker(status_cb, _progress_cb):
+        def worker(status_cb, progress_cb):
             try:
                 instance_id = import_modpack_file(path, paths.GAME_DIR,
                                                  mc_version=mc_version, loader=loader,
                                                  instance_id=instance_id,
-                                                 status_callback=status_cb)
+                                                 status_callback=status_cb,
+                                                 progress_callback=progress_cb)
                 status_cb(f"整合包导入完成:{instance_id} ✅")
             except Exception as e:
                 status_cb(f"❌ 整合包导入失败:{type(e).__name__}: {e}")

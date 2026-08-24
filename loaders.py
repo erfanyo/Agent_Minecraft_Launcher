@@ -365,7 +365,7 @@ def install_loader(loader: str, mc: str, game_dir: str,
                 if status_callback:
                     status_callback(f"下载原版 {parent_id} 客户端...")
                 download_with_mirror(client["url"], base_jar, version_id=parent_id,
-                                     sha1=client.get("sha1"))
+                                     sha1=client.get("sha1"), progress_callback=progress_callback)
 
         # 3) (forge/neoforge) 跑补丁步骤,生成 loader 的 client jar
         if loader in ("forge", "neoforge"):

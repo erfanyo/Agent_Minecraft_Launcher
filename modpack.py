@@ -121,16 +121,17 @@ def _flat_single_prefix(names: list) -> str | None:
     return None
 
 
-def _extract_zip_to(path: str, inst_dir: str, prefix: str, status_callback=None):
+def _extract_zip_to(path: str, inst_dir: str, prefix: str,
+                    status_callback=None, progress_callback=None):
     """把 zip 内容解压进实例目录(去掉 prefix);跳过目录项与路径穿越。
-    prefix 非空时只解压该前缀下的成员(如 overrides/),其余(manifest.json 等)忽略。"""
+    prefix 非空时只解压该前缀下的成员(如 overrides/),其余(manifest.json 等)忽略。
+    progress_callback(done, total):每解压一个文件上报一次,进度进下载指示器/详情。"""
     with zipfile.ZipFile(path) as z:
-        for member in z.namelist():
-            if not member or member.endswith("/"):
-                continue
-            if prefix:   # 只在某前缀下解压,其它文件忽略
-                if not member.startswith(prefix):
-                    continue
+        members = [m for m in z.namelist() if m and not m.endswith("/")
+                   and (not prefix or m.startswith(prefix))]
+        total = len(members)
+        for i, member in enumerate(members, 1):
+            if prefix:
                 rel = member[len(prefix):]
             else:
                 rel = member
@@ -140,6 +141,8 @@ def _extract_zip_to(path: str, inst_dir: str, prefix: str, status_callback=None)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with z.open(member) as src, open(dest, "wb") as dst:
                 shutil.copyfileobj(src, dst)
+            if progress_callback:
+                progress_callback(i, total)
 
 
 def _cf_loader(manifest: dict):
@@ -318,8 +321,8 @@ def import_modpack(path: str, game_dir: str,
 
     # Modrinth + CurseForge 都解压 overrides / client-overrides(直接覆盖进实例的文件)
     if index is not None or cf:
-        _extract_zip_to(path, inst_dir, "overrides/", status_callback)
-        _extract_zip_to(path, inst_dir, "client-overrides/", status_callback)
+        _extract_zip_to(path, inst_dir, "overrides/", status_callback, progress_callback)
+        _extract_zip_to(path, inst_dir, "client-overrides/", status_callback, progress_callback)
 
     if cf:
         listed = len((manifest.get("files") or []))
@@ -333,6 +336,6 @@ def import_modpack(path: str, game_dir: str,
     if index is None and not cf:
         # 扁平:整个 zip 解压成实例(去掉可能存在的单一顶层文件夹)
         prefix = _flat_single_prefix(names)
-        _extract_zip_to(path, inst_dir, prefix or "", status_callback)
+        _extract_zip_to(path, inst_dir, prefix or "", status_callback, progress_callback)
 
     return instance_id
