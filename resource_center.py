@@ -597,6 +597,11 @@ class ResourceBrowser(QWidget):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, h)
             self.result_list.addItem(item)
+            # 列表/图标视图图标:按 slug 从缓存拉,命中即显示图标
+            slug = h.get("slug", "")
+            icon_url = h.get("icon_url", "")
+            if slug and icon_url:
+                threading.Thread(target=self._set_item_icon, args=(item, slug, icon_url), daemon=True).start()
         if not hits and not self.result_list.count():
             QListWidgetItem(t("(没有找到结果)", "(no results)"), self.result_list)
         # 记录默认浏览是否已加载(空关键词的结果),供 maybe_auto_load 判断是否重复拉取
@@ -621,6 +626,7 @@ class ResourceBrowser(QWidget):
             self.mcmod_link.setVisible(False)
             return
         self._current = h
+        self._current_title = h.get("title", "") or h.get("slug", "")
         for w in (self.icon_label, self.title_label, self.meta_label,
                   self.desc_label, self.gv_combo, self.loader_combo,
                   self.ver_combo, self.dl_btn):
@@ -654,9 +660,11 @@ class ResourceBrowser(QWidget):
         self.desc_note_label.setText("")
         self.desc_note_label.setVisible(False)
         self.icon_label.setText("")
+        # 图标:按 slug 缓存(不同版本/加载器同一 Mod 复用),命中即秒回不重复拉。
+        slug = h.get("slug", "")
         icon_url = h.get("icon_url")
-        if icon_url:
-            threading.Thread(target=self._load_icon, args=(icon_url,), daemon=True).start()
+        if slug and icon_url:
+            threading.Thread(target=self._load_icon, args=(slug, icon_url), daemon=True).start()
         # 异步加载项目支持的版本/加载器,并刷新版本下拉
         self.gv_combo.clear()
         self.loader_combo.clear()
@@ -697,6 +705,18 @@ class ResourceBrowser(QWidget):
         self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
         self.desc_note_label.setVisible(True)
 
+        # 先查描述缓存(按 slug 键,跨版本复用;命中直接显示,不再推理)
+        import image_cache
+        cached = image_cache.get_cached_desc(requested_slug)
+        if cached:
+            cur0 = getattr(self, "_current", None)
+            if cur0 and cur0.get("slug") == requested_slug:
+                self.desc_label.setText(cached)
+                self.desc_note_label.setText(t("⚡ 已缓存翻译", "⚡ Cached translation"))
+                self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+                self.desc_note_label.setVisible(True)
+            return
+
         def fetch():
             try:
                 import mod_translate
@@ -723,6 +743,15 @@ class ResourceBrowser(QWidget):
             return
         source = result.get("source")
         text = result.get("text") or ""
+        cur = getattr(self, "_current", None)
+        slug = (cur or {}).get("slug", "") if cur else ""
+        # 成功拿到文本(机翻或译文)→ 写回描述缓存(按 slug 键,跨版本复用)
+        if source in ("translated", "already_cn", "original") and text and slug:
+            try:
+                import image_cache
+                image_cache.set_cached_desc(slug, text)
+            except Exception:
+                pass
         if source == "disabled":
             self.desc_label.setText(text)
             self.desc_note_label.setVisible(False)
@@ -751,17 +780,66 @@ class ResourceBrowser(QWidget):
         self.desc_label.setText(text)
         self.desc_note_label.setVisible(False)
 
-    def _load_icon(self, url: str):
+    def _set_item_icon(self, item, slug: str, url: str):
+        """给搜索结果条目设图标(从缓存拉,跨版本复用)。失败不阻塞(条目仍可点)。"""
         try:
-            import requests
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                from PySide6.QtGui import QPixmap
+            import image_cache
+            from PySide6.QtGui import QPixmap, QIcon
+            data = image_cache.load_icon(slug, url, size=48)
+            if data:
                 pix = QPixmap()
-                pix.loadFromData(resp.content)
-                QTimer.singleShot(0, lambda: self.icon_label.setPixmap(
-                    pix.scaled(56, 56, Qt.AspectRatioMode.KeepAspectRatio,
-                               Qt.TransformationMode.SmoothTransformation)))
+                if pix.loadFromData(data):
+                    icon = QIcon(pix.scaled(
+                        48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation))
+                    QTimer.singleShot(0, lambda i=item, ic=icon: i.setIcon(ic))
+        except Exception:
+            pass
+
+    def _load_icon(self, slug: str, url: str):
+        """按 slug 拉/取图标(用缓存,跨版本复用)。成功在主线程 setPixmap;失败用占位。"""
+        try:
+            from PySide6.QtGui import QPixmap
+            from PySide6.QtCore import QSize
+            from PySide6.QtWidgets import QLabel
+            import image_cache
+            data = image_cache.load_icon(slug, url, size=56)
+            if data:
+                pix = QPixmap()
+                if pix.loadFromData(data):
+                    QTimer.singleShot(0, lambda: self._apply_icon(pix))
+                    return
+            # 失败/无图 → 占位(灰色方块 + 首字母),避免白屏
+            QTimer.singleShot(0, self._placeholder_icon)
+        except Exception:
+            QTimer.singleShot(0, self._placeholder_icon)
+
+    def _apply_icon(self, pix):
+        try:
+            self.icon_label.setPixmap(pix.scaled(
+                56, 56, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+        except Exception:
+            pass
+
+    def _placeholder_icon(self):
+        """无图/加载失败时:灰色圆角方块 + 项目标题首字,避免空白。"""
+        try:
+            from PySide6.QtGui import QColor, QPainter, QPixmap
+            from PySide6.QtCore import QStringConverter
+            title = getattr(self, "_current_title", "?") or "?"
+            pix = QPixmap(56, 56)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            color = QColor("#3a4150")
+            p.setBrush(color); p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(0, 0, 56, 56, 10, 10)
+            p.setPen(QColor("#e7ecf5"))
+            f = p.font(); f.setPointSize(18); f.setBold(True); p.setFont(f)
+            p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, title[:1])
+            p.end()
+            self.icon_label.setPixmap(pix)
         except Exception:
             pass
 

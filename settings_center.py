@@ -257,6 +257,22 @@ class SettingsCenter(QWidget):
         mcpc_row.addWidget(QLabel("MCP 客户端:"))
         mcpc_row.addWidget(self.mcp_clients_edit, 1)
         l.addLayout(mcpc_row)
+        # 缓存管理:清除 Mod 图片/描述缓存(换新图/翻译更新时用)
+        l.addSpacing(12)
+        cache_title = QLabel("🗂 缓存(Mod 图片 & 描述翻译):")
+        cache_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+        l.addWidget(cache_title)
+        cache_hint = QLabel("图片/描述按 Mod 名缓存(不同版本同一 Mod 复用)。若某 Mod 更新了图标或想重翻描述,清除后重新打开该 Mod 即可。")
+        cache_hint.setWordWrap(True); cache_hint.setStyleSheet("color:#8a93a0;")
+        l.addWidget(cache_hint)
+        cache_row = QHBoxLayout(); cache_row.setSpacing(8)
+        clear_icon_btn = QPushButton("清除图片缓存"); set_style(clear_icon_btn, card_btn_style); clear_icon_btn.setMinimumHeight(32)
+        clear_icon_btn.clicked.connect(lambda: self._clear_cache("icons"))
+        clear_desc_btn = QPushButton("清除描述翻译缓存"); set_style(clear_desc_btn, card_btn_style); clear_desc_btn.setMinimumHeight(32)
+        clear_desc_btn.clicked.connect(lambda: self._clear_cache("desc"))
+        cache_row.addWidget(clear_icon_btn)
+        cache_row.addWidget(clear_desc_btn)
+        l.addLayout(cache_row)
         l.addStretch()
         return w
 
@@ -265,6 +281,20 @@ class SettingsCenter(QWidget):
         QApplication.clipboard().setText(getattr(self, "_mcp_url", ""))
         if hasattr(self, "_mcp_status"):
             self._mcp_status.setText("已复制 HTTP 链接 → 客户端「http」选项填它")
+
+    def _clear_cache(self, kind: str):
+        """清除 Mod 图片/描述缓存:kind='icons' 或 'desc'。清完提示删了多少个。"""
+        try:
+            import image_cache
+            if kind == "icons":
+                n = image_cache.clear_icons()
+                msg = f"已清除 {n} 个图片缓存。"
+            else:
+                n = image_cache.clear_desc()
+                msg = f"已清除 {n} 条描述翻译缓存。"
+            QMessageBox.information(self, "清除缓存", msg)
+        except Exception as e:
+            QMessageBox.warning(self, "清除缓存", f"清除失败:{type(e).__name__}: {e}")
 
     def _gen_mcp_files(self):
         """生成 MCP 连接/客户端配置文件,写到启动器创建的 AMCL 文件夹。"""
