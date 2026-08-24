@@ -41,8 +41,11 @@ SCHEMES = [
          "跨平台虚拟局域网,免费支持 25 台设备;适合天南海北的朋友远程一起玩。",
          "https://www.zerotier.com"),
         ("Radmin VPN",
-         "安装即用,创建一个网络后朋友加入,即可像局域网一样联机,延迟低。",
+         "安装即用,创建一个网络后朋友加入,即可像局域网一样联机,延迟低(纯 GUI,无命令行)。",
          "https://www.radmin-vpn.com"),
+        ("蒲公英(Oray)",
+         "国内真 VPN,跨平台(Win/Mac/Linux/Android/iOS);注册账号建网络,各端装客户端加入即组网,国内网络友好。",
+         "https://pgy.oray.com"),
         ("Tailscale",
          "基于 WireGuard 的私有组网,设备多、管理方便,稳定性好。",
          "https://tailscale.com"),
@@ -143,6 +146,8 @@ TUTORIALS = [
     {
         "name": "EasyTier", "cat": "虚拟局域网 · 推荐主路径",
         "text": "开源免费(LGPL-3.0)、去中心化,免账号、免中心服,跨平台(Win/macOS/Linux/手机/OpenWrt)。\n"
+                "安装:Windows 可用 `winget install EasyTier.EasyTier`,或直接下载官方 Release 二进制(解压即用,跨平台);\n"
+                "后端也可自动下载/安装。\n"
                 "方法:朋友们各自安装 easytier-core,用同一「--network-name 房间名 + --network-secret 密钥」加入,即组成同一虚拟网;\n"
                 "用 --no-tun 可免管理员、免装虚拟网卡驱动。\n"
                 "要点:MC 的「局域网广播/自动发现」默认不会穿过虚拟网,所以可靠做法是——host 把本机虚拟 IP 发给朋友,\n"
@@ -200,8 +205,16 @@ TUTORIALS = [
     {
         "name": "Radmin VPN", "cat": "虚拟局域网(仅 Windows)",
         "text": "Windows 专用;安装即用,创建一个网络后朋友加入即可像局域网一样联机,延迟低。\n"
-                "GUI 为主(无真正 CLI),需账号;不开源。",
+                "⚠️ 纯 GUI、无真正 CLI,故**没有「自动安装/配置」按钮**,请按官网/教程手动安装。\n"
+                "需账号;不开源。",
         "url": "https://www.radmin-vpn.com",
+    },
+    {
+        "name": "蒲公英 (Oray)", "cat": "虚拟局域网(国内友好)",
+        "text": "Oray 旗下国内真 VPN,跨平台(Win/Mac/Linux/Android/iOS),与 EasyTier 一样国内网络友好。\n"
+                "方法:注册账号创建网络(选网段/虚拟 IP),各端装客户端后登录并加入同一网络即组网;\n"
+                "创网者把网络 ID/成员账号发给朋友加入即可。",
+        "url": "https://pgy.oray.com",
     },
 ]
 
