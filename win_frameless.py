@@ -41,7 +41,7 @@ def hit_test(hwnd, sx, sy) -> int:
     from ctypes import wintypes
     r = wintypes.RECT()
     ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
-    b = 6
+    b = 12   # 边缘命中判定范围(越宽越好抓;太窄不好拖)
     x = sx - r.left
     y = sy - r.top
     w = r.right - r.left
