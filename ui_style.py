@@ -162,9 +162,91 @@ def primary_btn_style() -> str:
     )
 
 
+def menu_btn_style() -> str:
+    """左侧菜单按钮(左菜单独立模块用):
+    未选中半透明+灰字,悬停提亮,选中=高亮底色+蓝左条+加粗。自适应深色。"""
+    sel = _tz("rgba(91,141,239,0.20)", "rgba(59,142,234,0.16)")
+    hover = _tz("rgba(255,255,255,0.07)", "rgba(59,142,234,0.08)")
+    text = text_color()
+    muted = muted_color()
+    return (
+        f"QPushButton {{ background: transparent; color: {muted}; border: none;"
+        f" border-left: 3px solid transparent; border-radius: 8px;"
+        f" padding: 9px 12px; text-align: left; font-size: 13px; }}"
+        f"QPushButton:hover {{ background: {hover}; color: {text}; }}"
+        f"QPushButton:checked {{ background: {sel}; color: {text}; font-weight: bold;"
+        f" border-left: 3px solid #5B8DEF; }}"
+    )
+
+
 def hint_style() -> str:
     """灰色提示文字(两种主题下都可读)"""
     return f"color: {muted_color()};"
+
+
+def apply_global_dark_palette(app) -> None:
+    """系统是深色主题时,给整个应用设一套深色 QPalette。
+
+    让那些"没写死色"的默认控件(对话框 / QMenu / QTabWidget / QComboBox 下拉 /
+    QMessageBox 等)也变深色,与启动器整体风格一致(此前在 实例详情 等对话框里
+    默认控件是系统浅色 → 不搭)。已用样式表写死色的不受影响。"""
+    if not is_dark_mode():
+        return
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
+    p = QPalette()
+    bg = QColor("#23272f")
+    base = QColor("#1a1d23")
+    text = QColor("#e7ecf5")
+    muted = QColor("#8b96a8")
+    accent = QColor("#5B8DEF")
+    p.setColor(QPalette.ColorRole.Window, bg)
+    p.setColor(QPalette.ColorRole.WindowText, text)
+    p.setColor(QPalette.ColorRole.Base, base)
+    p.setColor(QPalette.ColorRole.AlternateBase, bg)
+    p.setColor(QPalette.ColorRole.Text, text)
+    p.setColor(QPalette.ColorRole.Button, bg)
+    p.setColor(QPalette.ColorRole.ButtonText, text)
+    p.setColor(QPalette.ColorRole.Highlight, accent)
+    p.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    p.setColor(QPalette.ColorRole.ToolTipBase, base)
+    p.setColor(QPalette.ColorRole.ToolTipText, text)
+    p.setColor(QPalette.ColorRole.PlaceholderText, muted)
+    app.setPalette(p)
+
+
+def dialog_dark_style() -> str:
+    """对话框级深色风格(实例详情等用):把默认控件(按钮/下拉/菜单/输入框/列表)统一成
+    启动器的深色圆角样子。浅色主题下返回空串(用系统默认)。"""
+    if not is_dark_mode():
+        return ""
+    border = "rgba(255,255,255,0.10)"
+    bg = "#23272f"
+    base = "#1a1d23"
+    text = text_color()
+    return (
+        f"QMenu {{ background: {bg}; border: 1px solid {border}; border-radius: 8px; padding: 4px; }}"
+        f"QMenu::item {{ padding: 6px 16px; border-radius: 5px; color: {text}; }}"
+        f"QMenu::item:selected {{ background: rgba(91,141,239,0.25); }}"
+        f"QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}"
+        f"QComboBox {{ background: {bg}; color: {text}; border: 1px solid {border};"
+        f" border-radius: 6px; padding: 4px 8px; }}"
+        f"QComboBox QAbstractItemView {{ background: {base}; color: {text};"
+        f" selection-background-color: rgba(91,141,239,0.30); border: 1px solid {border}; }}"
+        f"QPushButton {{ background: #2b2f3a; color: {text}; border: 1px solid {border};"
+        f" border-radius: 6px; padding: 5px 11px; }}"
+        f"QPushButton:hover {{ border-color: #5B8DEF; }}"
+        f"QPushButton:pressed {{ background: #242833; }}"
+        f"QLineEdit, QSpinBox {{ background: {base}; color: {text}; border: 1px solid {border};"
+        f" border-radius: 6px; padding: 3px 6px; }}"
+        f"QListWidget {{ background: {base}; color: {text}; border: 1px solid {border};"
+        f" border-radius: 8px; }}"
+        f"QListWidget::item {{ padding: 4px 6px; border-radius: 4px; }}"
+        f"QListWidget::item:selected {{ background: rgba(91,141,239,0.30); }}"
+        f"QCheckBox {{ color: {text}; }}"
+        f"QTextEdit, QPlainTextEdit {{ background: {base}; color: {text}; border: 1px solid {border}; }}"
+        f"QToolTip {{ background: {bg}; color: {text}; border: 1px solid {border}; }}"
+    )
 
 
 def inner_style() -> str:

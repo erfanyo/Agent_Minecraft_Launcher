@@ -1650,6 +1650,8 @@ class MainWindow(QMainWindow):
 if __name__ == "__main__":
     print("正在获取版本列表(首次约几秒,请稍等)...")
     app = QApplication(sys.argv)
+    from ui_style import apply_global_dark_palette
+    apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
     # 首次启动:还没配置过游戏目录 → 弹引导界面(选路径 + 首次配置 AI)
     first = not (load_settings().get("game_dir") or "").strip()

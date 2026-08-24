@@ -67,8 +67,12 @@ class InstanceManagerDialog(QDialog):
         self.inst_dir = os.path.join(game_dir, "versions", instance["id"])
         self.setWindowTitle(f"实例详情: {self.inst_id}")
         self.setMinimumSize(560, 460)
+        from ui_style import dialog_dark_style
+        self.setStyleSheet(dialog_dark_style())   # 深色兼容:默认控件(菜单/按钮/列表/下拉)统一深色圆角
 
         self.tabs = QTabWidget()
+        from ui_style import tab_style
+        self.tabs.setStyleSheet(tab_style())   # 深色兼容:圆角 + 选中高亮,和「我的版本」标签页一致
         self.tabs.addTab(self._build_mods_tab(), "Mod")
         self.tabs.addTab(self._build_pack_tab("datapack"), "数据包")
         self.tabs.addTab(self._build_pack_tab("shader"), "光影包")

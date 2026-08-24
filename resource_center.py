@@ -871,32 +871,19 @@ class ResourceCenter(QWidget):
         self._shared_inst = None
         self._shared_dir = None
 
-        # ---- 左侧菜单(可折叠) ----
-        self.menu_widget = QWidget()
-        self.menu_widget.setFixedWidth(150)
-        self.menu_layout = QVBoxLayout(self.menu_widget)
-        self.menu_layout.setContentsMargins(8, 8, 8, 8)
-        self.menu_layout.setSpacing(4)
-        self.collapse_btn = QPushButton("◀ 收起")
-        self.collapse_btn.setStyleSheet(card_btn_style())
-        self.collapse_btn.clicked.connect(self._toggle_menu)
-        self.menu_layout.addWidget(self.collapse_btn)
-        self._menu_buttons = []   # (按钮, 面板 index)
-        for idx, (label, icon) in enumerate([
+        # ---- 左侧菜单(独立模块 LeftMenu,无折叠) ----
+        from left_menu import LeftMenu
+        self.menu = LeftMenu(width=150)
+        for label, icon in [
                 (t("首页", "Home"), "🏠"),
                 (t("实例", "Instances"), "📦"),
-                ("🎁 " + t("整合包", "Modpacks"), None),
-                ("🧩 " + t("Mod", "Mods"), None),
-                ("🌄 " + t("光影包", "Shaders"), None),
-                ("🗂 " + t("数据包", "Datapacks"), None),
-                ("🎨 " + t("资源包", "Resourcepacks"), None)]):
-            btn = QPushButton(icon + " " + label if label.startswith(("🏠", "📦")) else label)
-            btn.setCheckable(True)
-            btn.setStyleSheet(card_btn_style())
-            btn.clicked.connect(lambda _c, i=idx: self.switch_to(i))
-            self.menu_layout.addWidget(btn)
-            self._menu_buttons.append(btn)
-        self.menu_layout.addStretch()
+                ("🎁 " + t("整合包", "Modpacks"), ""),
+                ("🧩 " + t("Mod", "Mods"), ""),
+                ("🌄 " + t("光影包", "Shaders"), ""),
+                ("🗂 " + t("数据包", "Datapacks"), ""),
+                ("🎨 " + t("资源包", "Resourcepacks"), "")]:
+            self.menu.add_item(label, icon)
+        self.menu.itemClicked.connect(self.switch_to)
 
         # ---- 右侧面板 ----
         self.stack = QStackedWidget()
@@ -933,7 +920,7 @@ class ResourceCenter(QWidget):
         # ---- 布局 ----
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.menu_widget)
+        layout.addWidget(self.menu)
         layout.addWidget(self.stack, 1)
         self.switch_to(0)
 
@@ -948,21 +935,13 @@ class ResourceCenter(QWidget):
             br._sync_target_ui()
 
     # ---- 菜单 ----
-    def _toggle_menu(self):
-        collapsed = self.menu_widget.width() < 60
-        self.menu_widget.setFixedWidth(44 if not collapsed else 150)
-        self.collapse_btn.setText("▶ 展开" if not collapsed else "◀ 收起")
-        for btn in self._menu_buttons:
-            btn.setText(btn.text()[:2] if not collapsed else btn.text())
-
     def switch_to(self, idx: int):
         self.stack.setCurrentIndex(idx)
         # 切到资源浏览器页且搜索框为空 → 自动默认浏览(打开即显示列表,无需先搜索)
         cur = self.stack.currentWidget()
         if isinstance(cur, ResourceBrowser):
             cur.maybe_auto_load()
-        for i, btn in enumerate(self._menu_buttons):
-            btn.setChecked(i == idx)
+        self.menu.select(idx)
 
     # ---- 首页 ----
     def _build_home(self):
