@@ -6,10 +6,11 @@
 这里维护一份常用 Mod 的对照表(起步 60+ 个,以后随用随加)。
 搜索含中文的关键词时,先查这个库,把中文名映射成 slug,再去 Modrinth 取详情。
 
-数据来源(2026-08-24 决策采用 PCL WikiEntries 派生数据):
-- 库根 `mod_cn_ext.json`:派生自 PCL(PCL2) `PCLCS/Resource/WikiEntries.txt` 的
-  「Modrinth slug ↔ 中文名」事实性译名(~4.6k 条)。文件头 `_meta` 记录 source /
-  attribution / license(source-available)等,详见该文件。
+扩展表(可选):库根 `mod_cn_ext.json`(可选存在)。
+- 数据源**尚未定稿**(2026-08-24 暂停 PCL 派生数据,原因:有 PCL 许可负担,t12 许可解读
+  不建议将 PCL WikiEntries 派生数据打进 exe 再分发)。数据源待定,最终由队长/用户定。
+- 若存在该文件,格式为 `{"_meta": {...来源/署名/许可...}, "entries": {slug: {"name": 中文名,
+  "aliases": [...]}}}`;不存在/损坏则本模块自动降级为只用 `CN_NAMES`。
 - 合并规则:**人工 curated 的 `CN_NAMES` 优先级最高**,`mod_cn_ext.json` 只补充
   `CN_NAMES` 未命中且干净者,**绝不覆盖** curated。合并后的视图懒加载,对外接口
   `find_slugs_by_cn` / `has_cjk` 保持不变。
