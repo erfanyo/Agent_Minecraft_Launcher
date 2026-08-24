@@ -12,7 +12,7 @@ import os
 import requests
 
 from downloader import download_with_mirror
-from mod_cn import CN_NAMES, find_slugs_by_cn, has_cjk
+from mod_cn import CN_NAMES, find_slugs_by_cn, has_cjk, merged_names
 
 BASE = "https://api.modrinth.com/v2"
 
@@ -65,6 +65,9 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
     - query 为空串:has_cjk("")=False → 直接走原生 search_mods(""),即「无关键词默认浏览」
       (全站按 order_by 排序返回),不会因中文过滤或截断返回空。
     """
+    # 合并视图(curated CN_NAMES + mod_cn_ext.json 补充),统一用于标题替换;
+    # 扩展表缺失/损坏时 merged 等价于 CN_NAMES,保持向后兼容。
+    merged = merged_names()
     if has_cjk(query):
         cn_hits = []
         for slug in find_slugs_by_cn(query):
@@ -76,7 +79,7 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
             # (否则像 Jade 这种"支持 Forge 但某版本没发 Forge 版型"的 Mod 会搜不到)
             if loader and loader not in p["loaders"]:
                 continue
-            p["title"] = CN_NAMES.get(slug, p["title"])
+            p["title"] = merged.get(slug, p["title"])
             cn_hits.append(p)
             if len(cn_hits) >= limit:
                 break
@@ -91,7 +94,7 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
                 p = get_project(slug)
             except Exception:
                 continue
-            p["title"] = CN_NAMES.get(slug, p["title"])
+            p["title"] = merged.get(slug, p["title"])
             loose.append(p)
             if len(loose) >= limit:
                 break
@@ -103,7 +106,7 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
     hits = search_mods(query, game_version, loader, limit, project_type,
                        order_by=order_by, tags=tags)
     for h in hits:
-        cn = CN_NAMES.get(h["slug"])
+        cn = merged.get(h["slug"])
         if cn:
             h["title"] = f"{cn}"
     return hits
