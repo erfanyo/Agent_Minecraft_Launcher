@@ -52,6 +52,15 @@
 - 下载进度统一入口:点圆环 → 下载详情可见 AI 下载 / 模型下载进度
 
 ### 🐛 修复
+- **本地模型选择后仍走云端 401**(t14):选「内置本地模型」却请求云端、报"API Key 无效或未配置"。
+  根因:本地路由只看 `ai_provider`,旧/默认配置下 `ai_provider` 仍是云端 provider(如 `deepseek`),
+  于是按云端发请求撞 401。修复:① 本地路由改按 AI 策略(local_first/hybrid)判定,不再依赖可能
+  过期的 `ai_provider`;② 云端通道校验按「公网地址 + 密钥」(本地地址如 localhost 免密钥),没配密钥
+  视为云端不可用并给友好提示,而不是撞 401;③ 本地策略下落到云端时统一取 `ai_cloud_*` 那组配置,
+  避免内置模型空 base_url 拼出无效 URL。
+- **旧配置自动迁移**(t14):`load_settings()` 读旧版 config 时自动把「单一 ai_provider」拆成云端/本地
+  两组,并按 provider 推导连贯的 `ai_strategy`(本地→local_first / 云端→cloud_first),升级后写回磁盘一次;
+  未配过 AI 的新/旧配置保持产品默认 `local_first`,不误改。旧用户用新版本不再出现"策略显示本地、实际走云端 401"。
 - AI 对话 worker 线程跨线程操作 Qt 部件 → 原生崩溃(0xC0000005/0x8):改信号队列 + 销毁竞态防御
 - 云端请求配置错误时干等 3 分钟:超时拆分 + 友好错误,15 秒内明确提示
 - llama.cpp 启动弹命令提示符(加 CREATE_NO_WINDOW);更新日志 GitHub 拉取失败态

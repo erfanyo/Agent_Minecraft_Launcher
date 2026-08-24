@@ -1408,13 +1408,15 @@ class AIChatDock(QDockWidget):
         """顶部策略按钮已由 _refresh_strategy_btn 维护;此方法保留给多模态 tooltip 追加。"""
         if not hasattr(self, "strategy_btn"):
             return
-        model = self.settings.get("ai_model") or "未设置模型"
-        if len(model) > 26:
-            model = model[:24] + "…"
         if self._local_enabled():
+            model = self.settings.get("ai_local_model") or self.settings.get("ai_model") or "未设置模型"
             source = "本地模型(builtin)"
         else:
-            source = "云端模型(" + (self.settings.get("ai_provider") or "cloud") + ")"
+            eff = self._cloud_settings()
+            model = eff.get("ai_model") or "未设置模型"
+            source = "云端模型(" + (eff.get("ai_provider") or "cloud") + ")"
+        if len(model) > 26:
+            model = model[:24] + "…"
         if vis is True:
             badge = "支持看图(多模态)"
         elif vis is False:
@@ -1655,17 +1657,52 @@ class AIChatDock(QDockWidget):
             QDesktopServices.openUrl(url)
 
     # ---- 本地推理(§8.1 拍板 xLAM 模型,grammar 约束) ----
+    def _local_backend(self) -> str:
+        """本地后端类型:builtin(内置)/ ollama / lmstudio。"""
+        return (self.settings.get("ai_local_mode", "builtin") or "builtin").strip()
+
     def _local_enabled(self) -> bool:
-        """当前 provider 是否为内置本地模型"""
-        return self.settings.get("ai_provider") == LOCAL_PROVIDER
+        """是否进入『本地路由』:策略用本地(local_first 或 hybrid)且本地后端是内置。
+        云端优先(cloud_first)或本地后端是 ollama/lmstudio 时,不走本地 grammar 引擎
+        ——ollama/lmstudio 走 OpenAI 兼容路径(chat_with_tools),由云端分支承担。
+        (t14 修复:不再看可能过期的 ai_provider,避免『选了本地模型却仍走云端 401』。)"""
+        if self._current_strategy() == "cloud_first":
+            return False
+        return self._local_backend() == "builtin"
 
     def _cloud_available(self) -> bool:
-        """云端通道是否可用:provider 不是本地模型,且接口地址带 scheme。
-        本地模型(ai_base_url 为空)下路由判到 cloud 时,不能拼出 /chat/completions。"""
-        if self._local_enabled():
+        """云端/兼容通道是否可用:是否配了可用的接口地址(http 开头),公网云还要求有密钥。
+        (t14 修复:
+          1) 不再被『当前是内置本地模型』一刀切挡住——本地优先/混合策略下复杂任务要能落到云端;
+          2) 公网云(如 DeepSeek)没填密钥 → 视为不可用,给友好提示,而不是让用户撞 401。)"""
+        base = (self.settings.get("ai_cloud_base_url")
+                or self.settings.get("ai_base_url") or "").strip()
+        if not base.startswith(("http://", "https://")):
             return False
-        base = (self.settings.get("ai_base_url") or "").strip()
-        return base.startswith(("http://", "https://"))
+        # 本地 OpenAI 兼容服务(127.0.0.1/localhost)无需密钥;公网云端需要密钥,否则发出去就是 401
+        h = base.split("://", 1)[-1].split("/", 1)[0].lower()
+        # 取主机名(去端口,IPv6 去方括号): localhost:11434 -> localhost ; [::1]:1234 -> ::1
+        if h.startswith("["):
+            host = h.split("]")[0][1:] if "]" in h else h
+        else:
+            host = h.split(":")[0]
+        if host in ("localhost", "127.0.0.1", "::1") or host.startswith("127.0.0.1"):
+            return True
+        key = (self.settings.get("ai_cloud_api_key")
+               or self.settings.get("ai_api_key") or "").strip()
+        return bool(key)
+
+    def _cloud_settings(self) -> dict:
+        """云端/兼容通道实际用的那组设置:本地模式下落到云端时用 ai_cloud_*(避免用空 base_url),
+        否则用当前生效的 ai_base_url 等(ollama/lmstudio 等本地兼容服务)。"""
+        s = self.settings
+        if (s.get("ai_cloud_base_url") or "").strip():
+            return {**s,
+                    "ai_provider": s.get("ai_cloud_provider", "deepseek"),
+                    "ai_base_url": s.get("ai_cloud_base_url") or "",
+                    "ai_api_key": s.get("ai_cloud_api_key") or "",
+                    "ai_model": s.get("ai_cloud_model") or ""}
+        return s
 
     def _cloud_unavailable_hint(self) -> str:
         """§1.3 业务语言:本地模型下没有云端通道时的友好提示(不是技术报错)。"""
@@ -2067,11 +2104,13 @@ class AIChatDock(QDockWidget):
                 # t15 修复:纯云端路径(is_local=False)进 chat_with_tools 前也校验云端通道——
                 # ai_base_url 无效(空/无 http scheme)时不发起请求,直接友好提示
                 # (is_local 分支内已有同款检查,这里补云端 provider 直通路径的漏网)。
+                # t14 修复:落到云端时用 _cloud_settings()(本地模型下取 ai_cloud_* 那组),
+                # 避免内置本地模型的空 base_url 拼出 "/chat/completions"。
                 if not self._cloud_available():
                     self.signals.reply.emit(self._cloud_unavailable_hint())
                     self.signals.ring_update.emit()
                     return
-                result = chat_with_tools(messages, s, mount_tools_for(text), executor,
+                result = chat_with_tools(messages, self._cloud_settings(), mount_tools_for(text), executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
                                          return_messages=True)
                 if isinstance(result, tuple):

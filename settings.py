@@ -56,8 +56,10 @@ DEFAULTS = {
 
 
 def load_settings() -> dict:
-    """读配置;没有文件或文件坏了就返回默认值"""
+    """读配置;没有文件或文件坏了就返回默认值。
+    旧版配置(缺 ai_source/ai_strategy 等新字段)自动迁移到新版,并写回磁盘一次。"""
     data = dict(DEFAULTS)
+    migrated = False
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
@@ -74,37 +76,61 @@ def load_settings() -> dict:
                     elif old == "bmclapi" or (isinstance(old, str) and old.startswith("custom:")):
                         data["mirror_strategy"] = "mirror_first"
                     # 没有 mirror_source(全新安装)→ 保持默认 smart_official + bmclapi
-                # AI 设置迁移:把旧式"单一 provider"配置拆成 云端/本地 两组(拆分设置前,ai_source 不存在)
-                if "ai_source" not in saved:
-                    _migrate_ai(data)
+                # AI 设置迁移:把旧式"单一 provider"配置拆成 云端/本地 两组(拆分设置前,ai_source 不存在;
+                # 半升级配置缺 ai_strategy 也在此修正),保证策略与来源连贯,避免旧用户升级后撞云端 401
+                if "ai_source" not in saved or "ai_strategy" not in saved:
+                    if _migrate_ai(data, saved):
+                        migrated = True
         except Exception:
             pass  # 配置文件损坏:退回默认
+    if migrated:
+        # 把升级后的配置写回,旧文件一次到位(下次启动不再重复迁移)
+        try:
+            save_settings(data)
+        except Exception:
+            pass
     return data
 
 
-def _migrate_ai(data: dict):
-    """把旧式"单一 ai_provider"配置拆成 / 映射到 云端与本地两组设置。
+def _migrate_ai(data: dict, saved: dict):
+    """把旧式"单一 ai_provider"配置拆成 / 映射到 云端与本地两组设置,并修正 ai_strategy。
 
-    只在老配置(还没有 ai_source 键)时调用:用当前生效的 ai_provider 判断属于云端还是本地,
-    把 ai_base_url/ai_api_key/ai_model 填到对应那一组,保住用户现有配置。"""
-    prov = data.get("ai_provider", "deepseek")
-    if prov in ("local_builtin", "ollama", "lmstudio"):
-        # 本地一侧
-        data["ai_source"] = "local"
-        data["ai_local_mode"] = "builtin" if prov == "local_builtin" else prov
-        data["ai_local_endpoint"] = (data.get("ai_base_url") or "").strip()
-        if prov == "local_builtin":
-            data["ai_local_model"] = data.get("ai_local_model",
-                                              "qwen3.5-0.8b-xlam-q4km")
-        else:
-            data["ai_local_model"] = (data.get("ai_model") or "").strip()
-    else:
-        # 云端一侧
-        data["ai_source"] = "cloud"
-        data["ai_cloud_provider"] = prov
-        data["ai_cloud_base_url"] = (data.get("ai_base_url") or "").strip()
-        data["ai_cloud_api_key"] = (data.get("ai_api_key") or "").strip()
-        data["ai_cloud_model"] = (data.get("ai_model") or "").strip()
+    只在老配置(缺 ai_source 或 ai_strategy)时调用,幂等:
+    - 用旧配置显式选过的 ai_provider 判断属于云端还是本地,把 ai_base_url/ai_api_key/ai_model 填到对应那一组;
+    - 按当前来源推导一套**连贯**的 ai_strategy(本地→local_first / 云端→cloud_first),
+      避免旧用户升级后出现『策略显示本地、实际却按云端发请求』的错位(否则可能撞云端 401);
+    - 从未配过 AI(旧配置既无 ai_provider 也无 ai_source)→ 保持产品默认,不改策略。"""
+    prov = (saved.get("ai_provider") or "").strip()
+    old_source = (saved.get("ai_source") or "").strip()
+    if not (prov or old_source):
+        return False   # 全新/未配过 AI:保默认(不改策略、不拆分)
+
+    # 1) 拆分云端/本地(仅旧配置缺 ai_source 时)
+    if "ai_source" not in saved:
+        if prov in ("local_builtin", "ollama", "lmstudio"):
+            # 本地一侧
+            data["ai_source"] = "local"
+            data["ai_local_mode"] = "builtin" if prov == "local_builtin" else prov
+            data["ai_local_endpoint"] = (data.get("ai_base_url") or "").strip()
+            if prov == "local_builtin":
+                data["ai_local_model"] = data.get("ai_local_model",
+                                                  "qwen3.5-0.8b-xlam-q4km")
+            else:
+                data["ai_local_model"] = (data.get("ai_model") or "").strip()
+        elif prov:
+            # 云端一侧
+            data["ai_source"] = "cloud"
+            data["ai_cloud_provider"] = prov
+            data["ai_cloud_base_url"] = (data.get("ai_base_url") or "").strip()
+            data["ai_cloud_api_key"] = (data.get("ai_api_key") or "").strip()
+            data["ai_cloud_model"] = (data.get("ai_model") or "").strip()
+
+    # 2) 修正/推导 ai_strategy(旧配置缺 ai_strategy 时,按当前来源定,保证连贯)
+    if "ai_strategy" not in saved:
+        src = data.get("ai_source", "cloud")
+        data["ai_strategy"] = "local_first" if src == "local" else "cloud_first"
+
+    return True
 
 
 def save_settings(settings: dict) -> None:
