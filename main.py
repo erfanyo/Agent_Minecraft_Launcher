@@ -650,23 +650,36 @@ class MainWindow(QMainWindow):
                 self._dl_log.append("✅ 下载任务完成")
                 self.dl_indicator.set_progress(1, 1)    # 满环
                 self.dl_indicator.setToolTip("下载完成,点击查看详情")
-                QTimer.singleShot(2000, self.dl_indicator.hide)  # 2 秒后收起
+                # 常驻:不自动收起(点击看详情/下次下载重置),避免'进度条出现晚'的感知
                 self._dl_finish(True)
             elif kind == "error":
                 self.statusBar().showMessage(f"下载失败: {item[1]}")
                 self._dl_log.append(f"❌ 下载失败: {item[1]}")
                 self.dl_indicator.set_progress(1, 1)
                 self.dl_indicator.setToolTip("下载失败,点击查看详情")
-                QTimer.singleShot(2000, self.dl_indicator.hide)
                 self._dl_finish(False)
 
     def open_download_detail(self):
-        """点击左下角指示器:弹出下载详情(实时刷新当前日志/进度)"""
+        """点击左下角指示器:查看下载详情(非模态,可一直开着实时看进度;不强制置顶/不阻塞)。"""
+        if getattr(self, "_dl_detail", None) is not None:
+            # 已有详情窗 → 直接聚焦,不重复弹
+            try:
+                self._dl_detail.show()
+                self._dl_detail.raise_()
+                self._dl_detail.activateWindow()
+            except Exception:
+                pass
+            return
+
         def live():
             return (list(self._dl_log), self._dl_progress[0], self._dl_progress[1])
         dlg = DownloadDetailDialog(self._dl_log, self._dl_progress[0], self._dl_progress[1],
                                    self, live=live)
-        dlg.exec()
+        # 非模态:不强制保留在页面最前端,用户可切到其它界面同时看进度
+        dlg.setModal(False)
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self._dl_detail = dlg
+        dlg.show()
 
     def _dl_finish(self, _ok):
         self._busy_download(False)
