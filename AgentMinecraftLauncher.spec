@@ -5,7 +5,10 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[
+        ('AMCL/runtime/llama-cpp/*', 'runtime/llama-cpp'),
+        ('bridge-mod/dist/*.jar', 'bridge-mod'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

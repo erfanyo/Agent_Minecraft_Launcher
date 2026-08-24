@@ -31,6 +31,28 @@ from paths import CONFIG_DIR  # noqa: E402
 LLAMA_DIR = os.path.join(CONFIG_DIR, "runtime", "llama-cpp")
 SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server.exe")
 
+
+def _ensure_llama_runtime():
+    """PyInstaller 打包时 llama-cpp 随 exe 内置(_MEIPASS/runtime/llama-cpp);
+    首次运行时复制到便携目录 AMCL/runtime/llama-cpp(临时解压目录重启即丢,不能直接用)。"""
+    if os.path.isfile(SERVER_EXE):
+        return
+    meipass = getattr(sys, "_MEIPASS", "")
+    if not meipass:
+        return
+    src = os.path.join(meipass, "runtime", "llama-cpp")
+    if not os.path.isdir(src):
+        return
+    try:
+        import shutil
+        os.makedirs(LLAMA_DIR, exist_ok=True)
+        for name in os.listdir(src):
+            s = os.path.join(src, name)
+            if os.path.isfile(s):
+                shutil.copy2(s, os.path.join(LLAMA_DIR, name))
+    except OSError:
+        pass
+
 # 默认模型:xLAM 微调版 Q4_K_M(§8.1 拍板)
 DEFAULT_MODEL_ID = "qwen3.5-0.8b-xlam-q4km"
 
@@ -266,6 +288,7 @@ class GrammarToolEngine:
             return
         if model_path is None:
             model_path = model_registry.local_path(self.model_id)
+        _ensure_llama_runtime()
         if not os.path.exists(SERVER_EXE):
             raise RuntimeError(f"llama-server 不存在:{SERVER_EXE}(先运行 .tmp/full_llamacpp.py)")
         self.proc = subprocess.Popen(

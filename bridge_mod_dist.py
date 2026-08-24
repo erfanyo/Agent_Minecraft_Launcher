@@ -85,7 +85,25 @@ def check_bridge_mod(inst_dir: str, loader: str, mc_version: str) -> str:
 def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
                         progress_callback=None) -> str:
     """下载 bridge-mod 到实例 mods 目录,返回文件名。
-    查不到版本表 → 抛 ValueError(给出提示)。"""
+    查不到版本表 → 抛 ValueError(给出提示)。
+    优先内置离线通道:PyInstaller 打包时 jar 随 exe 内置(_MEIPASS/bridge-mod/),
+    命中直接复制,零联网(灵感 #12 离线通道)。"""
+    # 内置 jar 优先(离线通道)
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        import shutil
+        bundled = os.path.join(meipass, "bridge-mod")
+        want = "neoforge" if loader == "neoforge" else "fabric"
+        if os.path.isdir(bundled):
+            for f in sorted(os.listdir(bundled)):
+                low = f.lower()
+                if low.endswith(".jar") and want in low and mc_version in low:
+                    mods_dir = os.path.join(inst_dir, "mods")
+                    os.makedirs(mods_dir, exist_ok=True)
+                    dest = os.path.join(mods_dir, f)
+                    if not os.path.exists(dest) or not _installed_bridge_jar(inst_dir):
+                        shutil.copy2(os.path.join(bundled, f), dest)
+                    return f
     info = bridge_mod_info(loader, mc_version)
     if info is None:
         raise ValueError(
