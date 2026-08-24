@@ -57,6 +57,35 @@ class _DepGraphWorker(QObject):
             self.error.emit(f"{type(e).__name__}: {e}")
 
 
+class DropListWidget(QListWidget):
+    """可接收文件拖放的列表:拖入文件到列表区域 → 交给 on_drop(拷贝到对应文件夹)。"""
+
+    def __init__(self, on_drop=None):
+        super().__init__()
+        self._on_drop = on_drop
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QListWidget.DragDropMode.DropOnly)
+
+    def _has_files(self, e):
+        return e.mimeData().hasUrls()
+
+    def dragEnterEvent(self, e):
+        if self._has_files(e):
+            e.acceptProposedAction()
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        if self._has_files(e):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        if self._on_drop and self._has_files(e):
+            files = [u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile()]
+            self._on_drop(files)
+        e.acceptProposedAction()
+
+
 class InstanceManagerDialog(QWidget):
     """实例详情(可嵌入标签页):无模态,支持 set_instance 复用;也用 `InstanceDetailsView` 别名。"""
 
@@ -114,8 +143,24 @@ class InstanceManagerDialog(QWidget):
         os.makedirs(path, exist_ok=True)
         os.startfile(path)
 
+    def _drop_to_mods(self, files: list):
+        """拖到 Mod 列表区域:把文件拷贝进该实例的 mods 目录,并刷新列表。"""
+        target = os.path.join(self.inst_dir, "mods")
+        os.makedirs(target, exist_ok=True)
+        added = []
+        for src in files or []:
+            try:
+                dest = os.path.join(target, os.path.basename(src))
+                shutil.copy2(src, dest)
+                added.append(os.path.basename(src))
+            except Exception:
+                pass
+        if hasattr(self, "mods_list") and added:
+            self._refresh_mods()
+        return added
+
     def _dir_list_widget(self) -> QListWidget:
-        w = QListWidget()
+        w = DropListWidget()
         w.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         return w
 
@@ -123,6 +168,7 @@ class InstanceManagerDialog(QWidget):
     def _build_mods_tab(self) -> QWidget:
         tab = QWidget()
         self.mods_list = self._dir_list_widget()
+        self.mods_list._on_drop = self._drop_to_mods   # 拖文件到 mods 列表 → 拷进 mods 目录
         enable_btn = QPushButton("启用所选")
         disable_btn = QPushButton("禁用所选")
         delete_btn = QPushButton("删除所选…")

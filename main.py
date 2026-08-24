@@ -364,6 +364,10 @@ class MainWindow(QMainWindow):
         self.dl_indicator.shown.connect(self._place_download_ball)
         self.dl_indicator.hide()
 
+        # 拖放:把文件(整合包)拖进窗口 → 覆盖层提示"松手尝试安装" → 松手导入
+        self.setAcceptDrops(True)
+        self._build_drop_overlay()
+
         # 运行中的实例指示:已在标题栏显示"已有 x 个运行中的实例"(悬停看具体是哪个)
         # (self._running_instances / _running_label 已在创建标题栏时初始化)
         self._update_running_label()
@@ -857,6 +861,84 @@ class MainWindow(QMainWindow):
         import traceback
         self._log_feedback("未捕获异常:\n" + "".join(traceback.format_exception(etype, evalue, tb)),
                            "异常", force=True)
+
+    def _build_drop_overlay(self):
+        """拖入文件时的覆盖层:整窗发白,提示「松手 → 尝试作为整合包安装」。"""
+        ov = QWidget(self)
+        ov.setObjectName("dropOverlay")
+        ov.setStyleSheet("background: rgba(255,255,255,0.90);")
+        lay = QVBoxLayout(ov)
+        lay.setContentsMargins(20, 20, 20, 20)
+        lbl = QLabel(t("🖐 松手 → 尝试作为整合包安装", "Release to install as modpack"))
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color:#222; font-size:17px; font-weight:bold; background: transparent;")
+        lay.addWidget(lbl)
+        ov.setGeometry(self.rect())
+        ov.raise_()
+        ov.hide()
+        self._drop_overlay = ov
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+            if hasattr(self, "_drop_overlay"):
+                self._drop_overlay.setGeometry(self.rect())
+                self._drop_overlay.raise_()
+                self._drop_overlay.show()
+        else:
+            e.ignore()
+
+    def dragMoveEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dragLeaveEvent(self, e):
+        if hasattr(self, "_drop_overlay"):
+            self._drop_overlay.hide()
+
+    def dropEvent(self, e):
+        if hasattr(self, "_drop_overlay"):
+            self._drop_overlay.hide()
+        if e.mimeData().hasUrls():
+            for u in e.mimeData().urls():
+                path = u.toLocalFile()
+                if path:
+                    self.install_modpack_from_path(path)
+            e.acceptProposedAction()
+
+    def install_modpack_from_path(self, path: str):
+        """把本地的整合包文件导入成新实例(拖放入口;自动识别格式)。"""
+        from modpack import detect_modpack_format, import_modpack
+        from PySide6.QtWidgets import QInputDialog
+        fmt = detect_modpack_format(path)
+        mc_version = None
+        loader = None
+        if fmt == "flat":
+            mc_version, ok = QInputDialog.getText(
+                self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
+            if not ok or not mc_version.strip():
+                return
+            mc_version = mc_version.strip()
+            loader, ok2 = QInputDialog.getItem(
+                self, "加载器", "加载器(可选,跳过=原版):",
+                ["(原版)", "fabric", "forge", "neoforge"], 0, False)
+            if ok2:
+                loader = None if loader == "(原版)" else loader
+        elif fmt is None:
+            QMessageBox.information(self, "拖入文件",
+                                    "无法识别该文件为整合包(Modrinth/CurseForge/实例文件夹 zip)。")
+            return
+
+        def worker(status, progress):
+            try:
+                done = import_modpack(path, paths.GAME_DIR, mc_version=mc_version,
+                                      loader=loader, status_callback=status,
+                                      progress_callback=progress)
+                status(f"✅ 整合包导入完成:{done}")
+            except Exception as ex:
+                status(f"❌ 整合包导入失败:{type(ex).__name__}: {ex}")
+        self._run_download(worker)
 
     def _place_download_ball(self):
         """把下载悬浮球摆到内容区右下角:AI 停靠时在 AI dock 左侧(主窗口侧外部),不占底部。
