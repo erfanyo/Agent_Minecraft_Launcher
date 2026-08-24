@@ -65,7 +65,7 @@ class InstanceManagerDialog(QDialog):
         self._inst_loader = instance.get("loader")
         self.game_dir = game_dir
         self.inst_dir = os.path.join(game_dir, "versions", instance["id"])
-        self.setWindowTitle(f"管理实例: {self.inst_id}")
+        self.setWindowTitle(f"实例详情: {self.inst_id}")
         self.setMinimumSize(560, 460)
 
         self.tabs = QTabWidget()

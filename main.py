@@ -262,8 +262,10 @@ class MainWindow(QMainWindow):
         online_menu = menubar.addMenu(t("联机", "Multiplayer"))
         online_menu.addAction(t("联机方案中心…", "Multiplayer Center…"), self.open_online_center)
         # 新手教程入口已隐藏(2026-08-25):第一版效果不够好,临时弃用,
-        # 改为「指引式教程」(箭头+文字)后再上线;仅保留 设置→界面→已弃用功能 里的临时入口。
-        # 保留 open_tutorial 供设置对话框「临时查看」调用。
+        # 改为「引导式教程」(箭头+文本指向真实 UI,用 UI 路由定位)后再上线。
+        # 引导式教程演示:帮助 → 引导教程(演示)…;仅保留 设置→界面→已弃用功能 里的临时入口。
+        help_menu = menubar.addMenu(t("帮助", "Help"))
+        help_menu.addAction(t("📖 引导教程(演示)…", "Guided Tutorial (Demo)…"), self.open_guide_demo)
 
         # ---- Tab「我的版本」:仿 PCL2 首页(左 1/3 登录+实例设置+启动按钮,右 2/3 版本/更新日志/动态) ----
         from version_home import VersionHome
@@ -408,6 +410,26 @@ class MainWindow(QMainWindow):
         """打开新手教程(模块化:内容 tutorial_content.py / 渲染 tutorial_gui.py,与 UI 解耦)"""
         from tutorial_gui import TutorialDialog
         TutorialDialog(self).exec()
+
+    def open_guide_demo(self):
+        """引导式教程演示:spctlight 遮罩 + 箭头 + 文本,用 UI 路由定位真实控件,一步步引导。
+        (模块化:步骤=数据 {route,arrow,text};框架 guide_overlay.GuideDriver + ui_route.resolve)"""
+        from guide_overlay import GuideDriver
+
+        steps = [
+            {"route": [("maintab", "我的版本"), ("btn", "启动游戏")],
+             "arrow": "below",
+             "text": "① 先在右侧实例列表里选中想玩的实例,再点这个「启动游戏」大按钮,就能进游戏。"},
+            {"route": [("maintab", "我的版本"), ("btn", "启动器设置")],
+             "arrow": "below",
+             "text": "② 这里是「启动器设置」:改内存、游戏目录、界面模式(全面/摘要)、AI 助手、镜像源。"},
+            {"route": [("maintab", "下载新资源"), ("btn", "Mod")],
+             "arrow": "below",
+             "text": "③ 下载新资源:像逛商场一样挑 Mod / 光影 / 数据包 / 资源包 / 整合包,选个目标实例就能装。"},
+        ]
+        self._guide_driver = GuideDriver(self, steps)
+        self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))
+        self._guide_driver.start()
 
     def open_skill_manager(self):
         """打开技能管理(游戏运行时辅助功能,勾选启停)"""
@@ -1390,7 +1412,7 @@ class MainWindow(QMainWindow):
             return
         inst = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
-        menu.addAction("管理实例…", lambda: self.open_instance_manager(inst))
+        menu.addAction("实例详情…", lambda: self.open_instance_manager(inst))
         menu.addAction("一键配置 bridge-mod(推荐)…", lambda: self._one_click_bridge_for(inst))
         rcon_menu_item = menu.addAction("一键配置 RCON(临时方案)…", lambda: self._one_click_rcon_for(inst))
         rcon_menu_item.setToolTip("临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放")

@@ -344,7 +344,7 @@ class VersionHome(QWidget):
         self.manage_btn.setMinimumHeight(44)
         self.manage_btn.setStyleSheet(card_btn_style())
         menu = QMenu(self.manage_btn)
-        menu.addAction(t("实例管理(当前实例)…", "Manage current instance…"),
+        menu.addAction(t("实例详情(当前实例)…", "Instance details (current)…"),
                        self._manage_current)
         menu.addAction(t("整体设置…", "Overall settings…"),
                        self.open_settings_requested.emit)
