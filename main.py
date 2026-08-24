@@ -630,9 +630,11 @@ class MainWindow(QMainWindow):
                 self._dl_finish(False)
 
     def open_download_detail(self):
-        """点击左下角指示器:弹出下载详情"""
-        done, total = self._dl_progress
-        dlg = DownloadDetailDialog(self._dl_log, done, total, self)
+        """点击左下角指示器:弹出下载详情(实时刷新当前日志/进度)"""
+        def live():
+            return (list(self._dl_log), self._dl_progress[0], self._dl_progress[1])
+        dlg = DownloadDetailDialog(self._dl_log, self._dl_progress[0], self._dl_progress[1],
+                                   self, live=live)
         dlg.exec()
 
     def _dl_finish(self, _ok):

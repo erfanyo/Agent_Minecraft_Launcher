@@ -113,7 +113,8 @@ def _forge_profile(ver: str, dest_dir: str) -> dict:
             os.remove(jar_path)
 
 
-def _installer_download(installer_url: str, ver: str, game_dir: str) -> tuple:
+def _installer_download(installer_url: str, ver: str, game_dir: str,
+                        progress_callback=None) -> tuple:
     """下载 loader installer jar,返回 (版本JSON, 安装profile, installer路径, 临时目录)。
 
     Forge/NeoForge 的 installer 里有两个 JSON,各管一件事:
@@ -122,7 +123,7 @@ def _installer_download(installer_url: str, ver: str, game_dir: str) -> tuple:
     tmp = os.path.join(game_dir, "versions", "_installer_tmp")
     os.makedirs(tmp, exist_ok=True)
     jar_path = os.path.join(tmp, f"installer-{ver}.jar")
-    download_with_mirror(installer_url, jar_path)
+    download_with_mirror(installer_url, jar_path, progress_callback=progress_callback)
     with zipfile.ZipFile(jar_path) as z:
         installer_profile = json.loads(z.read("install_profile.json"))
         # 版本 JSON 在 jar 里由 install_profile 的 json 字段指路
@@ -138,12 +139,14 @@ def _installer_download(installer_url: str, ver: str, game_dir: str) -> tuple:
     return version_profile, installer_profile, jar_path, tmp
 
 
-def _forge_installer(ver: str, game_dir: str) -> tuple:
-    return _installer_download(FORGE_INSTALLER.format(ver=ver), ver, game_dir)
+def _forge_installer(ver: str, game_dir: str, progress_callback=None) -> tuple:
+    return _installer_download(FORGE_INSTALLER.format(ver=ver), ver, game_dir,
+                               progress_callback=progress_callback)
 
 
-def _neoforge_installer(ver: str, game_dir: str) -> tuple:
-    return _installer_download(NEOFORGE_INSTALLER.format(ver=ver), ver, game_dir)
+def _neoforge_installer(ver: str, game_dir: str, progress_callback=None) -> tuple:
+    return _installer_download(NEOFORGE_INSTALLER.format(ver=ver), ver, game_dir,
+                               progress_callback=progress_callback)
 
 
 def _main_class(jar_path: str) -> str:
@@ -320,10 +323,12 @@ def install_loader(loader: str, mc: str, game_dir: str,
                 loader_ver = f"{mc}-{loader_ver}"
             if status_callback:
                 status_callback(f"安装加载器 forge {loader_ver}...")
-            profile, installer_profile, forge_installer, forge_tmp = _forge_installer(loader_ver, game_dir)
+            profile, installer_profile, forge_installer, forge_tmp = _forge_installer(
+                loader_ver, game_dir, progress_callback)
         elif loader == "neoforge":
             loader_ver = loader_version or _latest_neoforge_version(mc)
-            profile, installer_profile, forge_installer, forge_tmp = _neoforge_installer(loader_ver, game_dir)
+            profile, installer_profile, forge_installer, forge_tmp = _neoforge_installer(
+                loader_ver, game_dir, progress_callback)
         else:
             raise ValueError(f"不支持的加载器:{loader}")
 

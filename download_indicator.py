@@ -78,15 +78,21 @@ class DownloadIndicator(QWidget):
 
 
 class DownloadDetailDialog(QDialog):
-    """下载详情:状态消息流 + 当前进度"""
+    """下载详情:状态消息流 + 当前进度(支持 live 回调实时刷新)。
 
-    def __init__(self, log_lines: list, done: int = 0, total: int = 1, parent=None):
+    live: 可选 callable,返回 (log_lines, done, total);提供时用 QTimer 周期性刷新,
+    这样下载/整合包导入过程中打开详情,能看到实时进度而不是打开时的快照。"""
+
+    def __init__(self, log_lines: list, done: int = 0, total: int = 1, parent=None,
+                 live=None):
         super().__init__(parent)
         self.setWindowTitle("下载详情")
         self.setMinimumSize(460, 320)
+        self._live = live
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(2000)
         for line in log_lines:
             self.log_view.appendPlainText(line)
 
@@ -107,3 +113,28 @@ class DownloadDetailDialog(QDialog):
         layout.addWidget(QLabel("下载内容:"))
         layout.addWidget(self.log_view, 1)
         layout.addLayout(row)
+
+        if self._live is not None:
+            from PySide6.QtCore import QTimer
+            self._timer = QTimer(self)
+            self._timer.timeout.connect(self._refresh)
+            self._timer.start(500)
+
+    def _refresh(self):
+        try:
+            lines, done, total = self._live()
+            n = len(lines)
+            # 只在行数变化时全量重设(避免频繁重绘闪烁)
+            if n != getattr(self, "_n", -1):
+                self.log_view.clear()
+                for line in lines:
+                    self.log_view.appendPlainText(line)
+                self._n = n
+            else:
+                self.log_view.verticalScrollBar().setValue(
+                    self.log_view.verticalScrollBar().maximum())
+            self.progress_bar.setMaximum(max(total, 1))
+            self.progress_bar.setValue(done)
+            self.progress_label.setText(f"{done} / {total}")
+        except Exception:
+            pass

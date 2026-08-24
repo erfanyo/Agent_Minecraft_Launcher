@@ -169,7 +169,8 @@ def install_version_files(d: dict, game_dir: str,
             status_callback("下载资源索引...")
         try:
             # 注意:不能 *idx_task 展开传参——位置会对错(sha1 会跑到 version_id 上)
-            download_with_mirror(idx_task[0], idx_task[1], sha1=idx_task[2])
+            download_with_mirror(idx_task[0], idx_task[1], sha1=idx_task[2],
+                                 progress_callback=progress_callback)
             downloaded += 1
         except Exception as e:
             failures.append((os.path.basename(idx_task[1]), str(e)[:80]))
