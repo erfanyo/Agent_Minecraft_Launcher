@@ -238,24 +238,28 @@ TOOL_GROUP_KEYWORDS = {
 }
 
 
-def available_tools(settings: dict) -> list:
-    """内置 TOOLS + 配置的外部 MCP 服务器工具(完整 schema,供模型选择调用 MCP 工具)。"""
-    tools = list(TOOLS)
+def mcp_tools_schemas(settings: dict) -> list:
+    """配置的外部 MCP 服务器工具 schema(与 TOOLS 同形:{type,function.{name,description,parameters}})。
+    没有配置/连接失败时返回 []。供云端 body["tools"] 追加,让模型"看得见"并调用外部 MCP 工具。"""
     try:
         from mcp_client import connect_mcp_clients
         schemas, _ = connect_mcp_clients(settings.get("mcp_clients") or [])
-        for s in schemas:
-            tools.append({"type": "function", "function": {
-                "name": s["name"], "description": s["description"],
-                "parameters": s["parameters"]}})
+        return [{"type": "function", "function": {
+            "name": s["name"], "description": s["description"],
+            "parameters": s["parameters"]}} for s in schemas]
     except Exception:
-        pass
-    return tools
+        return []
 
 
-def mount_tools_for(text: str) -> list:
+def available_tools(settings: dict) -> list:
+    """内置 TOOLS + 配置的外部 MCP 服务器工具(完整 schema,供模型选择调用 MCP 工具)。"""
+    return list(TOOLS) + mcp_tools_schemas(settings)
+
+
+def mount_tools_for(text: str, settings: dict | None = None) -> list:
     """云端按需挂载工具 schema:通用工具 + 请求文本命中关键词的组(按 TOOL_GROUPS)。
     返回 TOOLS 的子集(每轮请求固定,轮间稳定利于前缀缓存)。
+    settings 非空时,额外追加配置的外部 MCP 工具 schema(追加在截断之后,绝不砍掉)。
     本地路径不受影响(schemas_from_assistant_tools 仍返回全量 TOOLS)。"""
     tl = (text or "").lower()
     names = list(GENERAL_TOOLS)
@@ -269,6 +273,8 @@ def mount_tools_for(text: str) -> list:
     if len(mounted) > CLOUD_MAX_TOOLS:
         # 超限截断:保通用(前 3 个),砍掉排后的组工具
         mounted = mounted[:CLOUD_MAX_TOOLS]
+    if settings:
+        mounted = mounted + mcp_tools_schemas(settings)
     return mounted
 
 
@@ -2453,7 +2459,7 @@ class AIChatDock(QDockWidget):
                     self.signals.reply.emit(self._cloud_unavailable_hint())
                     self.signals.ring_update.emit()
                     return
-                result = chat_with_tools(messages, self._cloud_settings(), mount_tools_for(text), executor,
+                result = chat_with_tools(messages, self._cloud_settings(), mount_tools_for(text, self._cloud_settings()), executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
                                          return_messages=True)
                 if isinstance(result, tuple):

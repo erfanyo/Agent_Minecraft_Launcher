@@ -94,6 +94,7 @@
 - **设置→界面 新增「MCP 集成」**:一键**复制 HTTP 链接**、**生成客户端配置文件**(`AMCL/mcp_config.json` + `AMCL/mcp_http.cmd`,写到启动器创建的 AMCL 文件夹,含 http_url + stdio command/args)。
 - **启动器 AI 作 MCP 客户端**:`mcp_client.py`(HTTP JSON-RPC 客户端,与 mcp_server 对称)。AI 可调用**外部 MCP 服务器**的工具——`assistant.available_tools(settings)` = 内置 TOOLS + 配置的 MCP 工具(`mcp__服务器__工具`),`build_executor` 路由 `mcp__` 调用到对应服务器。设置→界面「**MCP 客户端**」填入外部服务器 url(逗号分隔)即启用。**自环测试通过**:AI 客户端 → 启动器自己的 `--mcp-http` 服务器 → `list_instances`/`get_settings` 均返回。
 - **崩溃诊断 · 修改意见清单(进阶①)**:新增技能「崩溃诊断·修改意见清单」——AI 诊断崩溃/异常时,先读日志(`read_instance_log`)与崩溃报告(`read_crash_report`),然后输出**结构化【修改意见清单】**(每条 = 改什么 + 为什么/怎么做,按严重度排序 + 1~2 条「先试」兜底 + 保留类名/Mod 名/路径),不再只给一段话。
+- **MCP 客户端·模型侧接线(补全闭环)**:之前 `available_tools(settings)` 已实现但**没接进请求的 `body["tools"]`**,导致模型"看不见"外部 MCP 工具、选不到。现在 `mount_tools_for(text, settings)` 在截断之后**追加**配置的 MCP 工具 schema(不超限也不砍掉),云端请求即带上 `mcp__服务器__工具`。自环实测:AI→启动器 `--mcp-http`→`mcp__amcl__list_instances` 返回真实实例列表;`available_tools` 由 20 → 39(含 19 个 MCP 工具)。
 
 ### 🧩 Mod 依赖网络(灵感 #5,简单版)
 - 实例管理 → Mod 页新增「**Mod 依赖网络**」:离线解析该实例各 mod jar 的依赖/冲突,画成一张"谁依赖谁"的网
