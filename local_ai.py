@@ -34,6 +34,63 @@ SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server.exe")
 # 默认模型:xLAM 微调版 Q4_K_M(§8.1 拍板)
 DEFAULT_MODEL_ID = "qwen3.5-0.8b-xlam-q4km"
 
+# ---- 翻译(W1:Mod 描述英→中,复用 chat 通道)----
+# MC 标准译名术语表(内置 30-50 条,随用随加):注入翻译 system prompt 强制标准译名;
+# 命中术语的文本置信度标记为高(mod_translate 会复用本表做置信度判断)。
+MC_GLOSSARY = {
+    # 维度 / 世界
+    "nether": "下界", "the nether": "下界", "end": "末地", "the end": "末地",
+    "overworld": "主世界", "dimension": "维度", "biome": "生物群系",
+    "structure": "结构", "world generation": "世界生成",
+    # 生物 / 刷怪
+    "mob spawner": "刷怪笼", "spawner": "刷怪笼", "mob": "生物", "villager": "村民",
+    "ender dragon": "末影龙", "wither": "凋灵", "zombie": "僵尸", "skeleton": "骷髅",
+    "creeper": "苦力怕", "enderman": "末影人",
+    # 附魔 / 装备
+    "enchant": "附魔", "enchanting": "附魔", "mending": "经验修补", "sharpness": "锋利",
+    "unbreaking": "耐久", "protection": "保护", "fire aspect": "火焰附加",
+    "knockback": "击退", "looting": "抢夺", "fortune": "时运", "efficiency": "效率",
+    "silk touch": "精准采集", "respiration": "水下呼吸", "aqua affinity": "水下速掘",
+    "feather falling": "摔落缓冲", "thorns": "荆棘", "depth strider": "深海探索者",
+    "frost walker": "冰霜行者", "soul speed": "灵魂疾行",
+    # 物品 / 材料
+    "ingot": "锭", "ore": "矿石", "gem": "宝石", "dust": "粉", "plate": "板",
+    "gear": "齿轮", "circuit": "电路板", "alloy": "合金", "bucket": "桶",
+    "sword": "剑", "pickaxe": "镐", "axe": "斧", "shovel": "锹", "hoe": "锄",
+    "bow": "弓", "armor": "盔甲", "helmet": "头盔", "chestplate": "胸甲",
+    "leggings": "护腿", "boots": "靴子",
+    # 玩法 / 机制
+    "crafting": "合成", "craft": "合成", "smelting": "冶炼", "smelt": "冶炼",
+    "mining": "挖掘", "farming": "农业", "farm": "农业", "automation": "自动化",
+    "storage": "存储", "energy": "能量", "power": "能量", "generator": "发电机",
+    "cable": "线缆", "pipe": "管道", "machine": "机器", "multiblock": "多方块",
+    "recipe": "配方", "ore generation": "矿石生成",
+    # Mod 类型 / 常用
+    "mod": "模组", "modpack": "整合包", "shader": "光影", "resource pack": "资源包",
+    "datapack": "数据包", "client side": "客户端", "server side": "服务端",
+    "performance": "性能", "optimization": "优化", "fps": "帧率",
+    "lightweight": "轻量", "compatibility": "兼容性", "configurable": "可配置",
+    "configuration": "配置", "guide": "指南", "overlay": "覆盖层", "widget": "组件",
+}
+
+
+def _build_translate_system(glossary: dict) -> str:
+    """翻译用 system prompt:目标中文 + 强制 MC 标准译名(命中即用标准译名,不直译)。
+    用 <translation>...</translation> 定界 + 少样本示例,约束小模型只吐译文不罗嗦。"""
+    lines = ["你是一个 Minecraft 中文翻译助手。把用户给的英文文本翻译成简体中文。",
+             "规则:",
+             "1. 只输出 <translation> 与 </translation> 之间的译文,不要任何解释、思考、清单或额外内容。",
+             "2. 以下 Minecraft 标准译名必须使用(命中时用标准译名,不要直译):"]
+    lines += [f"   {en} → {cn}" for en, cn in glossary.items()]
+    lines += ["3. 文本本身就是中文时,原样放进标签。",
+              "4. 长文本保持段落结构,译文通顺自然。",
+              "示例:",
+              "输入:This mod adds new ores to the Nether.",
+              "输出:<translation>这个模组为下界添加了新矿石。</translation>",
+              "输入:Enchant your tools with mending and silk touch.",
+              "输出:<translation>用经验修补和精准采集附魔你的工具。</translation>"]
+    return "\n".join(lines)
+
 def schemas_from_assistant_tools() -> dict:
     """从 assistant.TOOLS(单一来源)提取本地 grammar 用的工具 schema。
     这样以后加工具只需改 assistant.py 一处,grammar 自动跟着变。
@@ -162,8 +219,30 @@ def build_gbnf(schemas: dict) -> str:
 
 
 def _type_rule(t: str) -> str:
-    return {"string": "string", "integer": "number", "boolean": "boolean",
-            "array": "array"}.get(t, "string")
+    return {"string": "string", "integer": "number", "number": "number",
+            "boolean": "boolean", "array": "array"}.get(t, "string")
+
+
+def _extract_translation(raw: str) -> str:
+    """从 <translation>...</translation> 定界里取译文;标签缺失/为空时回退:
+    取最后一段非空文本(模型啰嗦时译文通常在末尾),仍空则原样返回。"""
+    raw = (raw or "").strip()
+    start = raw.find("<translation>")
+    if start >= 0:
+        start += len("<translation>")
+        end = raw.find("</translation>", start)
+        if end >= 0:
+            inside = raw[start:end].strip()
+            if inside:
+                return inside
+    # 回退:去掉疑似思考/分析段,取最后一段;并清掉可能残留的开标签
+    parts = [p.strip() for p in raw.splitlines() if p.strip()]
+    if parts:
+        out = parts[-1]
+        if out.startswith("<translation>"):
+            out = out[len("<translation>"):].strip()
+        return out
+    return raw
 
 
 class GrammarToolEngine:
@@ -228,15 +307,19 @@ class GrammarToolEngine:
                 f"<|im_start|>user\n{user_text}<|im_end|> \n"
                 "<|im_start|>assistant\n")
 
-    def chat(self, user_text: str, timeout: int = 120, context: str = "") -> str:
-        """本地自由对话(无 grammar 约束):寒暄/基础介绍/简单问答。
+    def chat(self, user_text: str, timeout: int = 120, context: str = "",
+             system: str = None, n_predict: int = 256, temperature: float = 0.3) -> str:
+        """本地自由对话(无 grammar 约束):寒暄/基础介绍/简单问答/翻译。
         与 tool_call 互补 —— 本地小模型既能"干活"(工具调用)也能"说话"(简单对话)。
-        返回回复文本;失败抛异常,上层可落云端(§1.4)。"""
-        chat_system = ("你是 Agent Minecraft Launcher 启动器的 AI 助手,用中文简洁友好地回答。"
-                       "你可以介绍启动器的功能(下载/启动游戏、装 Mod、查配方、发指令、诊断日志等)。"
-                       "回答要简短(3 句话以内),不知道的就直说。")
+        返回回复文本;失败抛异常,上层可落云端(§1.4)。
+        system: 覆盖默认助手 system prompt(翻译等专用场景传入);
+        n_predict: 最大生成长度(长文本翻译时调大);
+        temperature: 采样温度(翻译用更低值更稳定)。"""
+        chat_system = system or ("你是 Agent Minecraft Launcher 启动器的 AI 助手,用中文简洁友好地回答。"
+                                 "你可以介绍启动器的功能(下载/启动游戏、装 Mod、查配方、发指令、诊断日志等)。"
+                                 "回答要简短(3 句话以内),不知道的就直说。")
         body = {"prompt": self._chat_prompt(user_text, context=context, system=chat_system),
-                "n_predict": 256, "temperature": 0.3,
+                "n_predict": n_predict, "temperature": temperature,
                 "stop": ["<|im_end|>", "</s>"]}
         r = requests.post(f"{self.base}/completion", json=body, timeout=timeout)
         r.raise_for_status()
@@ -247,6 +330,19 @@ class GrammarToolEngine:
             if end >= 0:
                 content = content[end + len("</think>"):].strip()
         return content
+
+    def translate(self, text: str, timeout: int = 90, context: str = "",
+                  glossary: dict = None, n_predict: int = 768) -> str:
+        """英→中翻译(复用 chat 通道,注入 MC 标准译名术语表)。
+        模型按约定把译文放在 <translation>...</translation> 之间;解析失败则
+        原样返回模型输出(置信度由 mod_translate 判断)。失败抛异常(调用方降级显示原文)。"""
+        g = dict(MC_GLOSSARY)
+        if glossary:
+            g.update(glossary)
+        raw = self.chat(text, timeout=timeout, context=context,
+                        system=_build_translate_system(g),
+                        n_predict=n_predict, temperature=0.1)
+        return _extract_translation(raw)
 
     def tool_call(self, user_text: str, timeout: int = 120, context: str = "") -> dict:
         """让模型输出一次工具调用,grammar 保证可解析。返回 {"name":..,"arguments":..}

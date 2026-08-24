@@ -13,7 +13,7 @@ from backup import backup_instance as _backup_impl
 from instances import scan_instances
 from loaders import install_loader
 from modpack import _ensure_base as ensure_base
-from modrinth import download_mod, search_mods_cn
+from modrinth import download_mod, get_project, search_mods_cn
 from settings import load_settings, save_settings
 
 # 可选 Mod 清单(与 GUI 共用;定义在这里避免 CLI 依赖 Qt)
@@ -354,6 +354,26 @@ def set_setting(key: str, value: str, game_dir: str = None) -> str:
     return f"{key} = {s[key]}"
 
 
+def translate_mod_desc(slug: str, game_version: str = "", loader: str = "") -> str:
+    """翻译 Mod 描述(英→中,本地 AI;缓存优先,失败显示原文)。
+    用于:用户问"这个 mod 是干什么的/什么意思"时,取详情并翻成中文。
+    slug 支持中文名(自动解析为 Modrinth slug)。"""
+    slug = _resolve_slug(slug)
+    try:
+        p = get_project(slug)
+    except Exception as e:
+        return f"错误:获取 {slug} 详情失败:{type(e).__name__}: {e}"
+    desc = (p.get("description") or "").strip()
+    title = p.get("title") or slug
+    if not desc:
+        return f"{title}({slug}):该 Mod 没有描述"
+    from mod_translate import translate_text_safe
+    r = translate_text_safe(desc, slug=slug, field="description")
+    head = f"{title}({slug})\n"
+    note = "\n(机翻仅供参考)" if (r["translated"] and r["machine"]) else ""
+    return head + r["text"] + note
+
+
 # 工具名 → 实现函数(供 assistant 工具调用注册)
 TOOL_FUNCS = {
     "list_instances": list_instances,
@@ -371,4 +391,5 @@ TOOL_FUNCS = {
     "get_key_bindings": get_key_bindings,
     "get_recipe_path": get_recipe_path,
     "compare_items": compare_items,
+    "translate_mod_desc": translate_mod_desc,
 }

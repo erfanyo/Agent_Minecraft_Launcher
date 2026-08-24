@@ -1053,8 +1053,8 @@ class AIChatDock(QDockWidget):
         # 浮动/停靠使用 QDockWidget 标题栏右上角自带的浮动按钮(与系统行为整合)
 
         # 顶部:标题 + 当前模型/多模态徽标 + 技能管理入口
-        title = QLabel("AI 助手")
-        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.title_label = QLabel("AI 助手")
+        self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         self.model_label = QLabel("")
         self.model_label.setToolTip("当前使用的模型,以及是否支持看图(多模态)")
         skills_btn = QPushButton("技能管理…")
@@ -1064,6 +1064,7 @@ class AIChatDock(QDockWidget):
             "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"
             " border-radius: 6px; padding: 3px 8px; }"
             "QPushButton:hover { color: #ffffff; border-color: #5B8DEF; }")
+        title = self.title_label
         top_row = QHBoxLayout()
         top_row.setContentsMargins(2, 0, 2, 0)
         top_row.addWidget(title)
@@ -1126,6 +1127,7 @@ class AIChatDock(QDockWidget):
         self._tool_id = 0              # 工具调用编号
         self._entries = []             # 历史条目(kind, ...),展开时整体重渲染
         self._expanded_tools = set()   # 已展开的工具编号
+        self._expanded_ai = set()      # 已展开的长 AI 回答(按 _entries 中的索引)
         self._chat_messages = []       # 真正的对话历史(喂给 LLM 的消息,不含 system)
         self._local_engine = None      # 本地推理引擎(懒加载单例,见 _get_local_engine)
         self._local_downloading = False   # 本地模型下载中标志
@@ -1158,21 +1160,41 @@ class AIChatDock(QDockWidget):
         self._update_model_badge(vis)
 
     def _update_model_badge(self, vis):
-        """顶部模型徽标:显示当前模型名 + 是否支持看图。"""
+        """顶部模型徽标:只显示当前模型来源(本地/云端) + 省略号提示。
+
+        更多信息(模型名/多模态/上下文)收进 tooltip,光标悬停才显示——
+        右侧信息太多时更清爽。省略号 ⋯ 提示"还有更多,悬停查看"。
+        """
         if not hasattr(self, "model_label"):
             return
         model = self.settings.get("ai_model") or "未设置模型"
+        full_model = model
         if len(model) > 22:
             model = model[:20] + "…"
+        # 来源:本地(builtin)or 云端
+        if self._local_enabled():
+            source, color = "🖥 本地", "#2E7D32"
+        else:
+            source, color = "☁ 云端", "#5B8DEF"
+        # 多模态详情(收进 tooltip)
         if vis is True:
-            badge, color = "🖼 支持看图", "#2E7D32"
+            badge = "支持看图(多模态)"
         elif vis is False:
-            badge, color = "🖼 不支持看图", "#8a8f98"
+            badge = "不支持看图"
         else:
             cur = bool(self.settings.get("ai_multimodal", False))
-            badge, color = ("🖼 手动·开" if cur else "🖼 手动·关"), "#B26A00"
-        self.model_label.setText(f"{model} · {badge}")
+            badge = f"图片输入:手动·{'开' if cur else '关'}"
+        self.model_label.setText(
+            f'<span style="color:{color}">{source}</span>'
+            f'<span style="color:#8a8f98"> ⋯</span>')
+        tooltip = (f"当前模型:{full_model}"
+                   f"\n来源:{source.split(' ', 1)[-1]}"
+                   f"\n多模态:{badge}")
+        self.model_label.setToolTip(tooltip)
         self.model_label.setStyleSheet(f"color: {color}; background: transparent;")
+        # 标题"AI 助手"上悬停也显示模型信息(模型能力 + 型号),避免只在小徽标上有
+        if hasattr(self, "title_label"):
+            self.title_label.setToolTip(tooltip)
 
     def _vision_on(self) -> bool:
         return bool(self.settings.get("ai_multimodal", False))
@@ -1210,17 +1232,42 @@ class AIChatDock(QDockWidget):
         self._entries.append(("ai", text))
         self._render_all()
 
+    def _ai_summary(self, text: str, width: int = 90) -> str:
+        """长 AI 回答的折叠摘要:取第一行,超宽截断加省略号。"""
+        first = (text or "").strip().split("\n", 1)[0].strip()
+        if len(first) > width:
+            return first[:width - 1].rstrip() + "…"
+        return first
+
+    def _is_long_ai(self, text: str) -> bool:
+        """判定答案是否值得折叠:多行,或单行超过一定长度。"""
+        t = (text or "").strip()
+        if "\n" in t:
+            return True
+        return len(t) > 130
+
     def _render_all(self):
-        """按条目重绘整个对话流(工具结果展开/收起都在这里决定)"""
+        """按条目重绘整个对话流(工具结果/长回答 展开收起都在这里决定)"""
         self.history.clear()
-        for e in self._entries:
+        for idx, e in enumerate(self._entries):
             kind = e[0]
             if kind == "system":
                 self.history.append(f'<p style="color:#888888;">{_esc(e[1])}</p>')
             elif kind == "user":
                 self.history.append(f'<p><b>你:</b> {_esc(e[1])}</p>')
             elif kind == "ai":
-                self.history.append(f'<p><b>AI:</b> {_esc(e[1])}</p>')
+                body = e[1]
+                if self._is_long_ai(body):
+                    if idx in self._expanded_ai:
+                        self.history.append(
+                            f'<p><b>AI:</b> {_esc(body)} '
+                            f'<a href="ai:{idx}" style="color:#5B8DEF;">[收起]</a></p>')
+                    else:
+                        self.history.append(
+                            f'<p><b>AI:</b> {_esc(self._ai_summary(body))}… '
+                            f'<a href="ai:{idx}" style="color:#5B8DEF;">[展开]</a></p>')
+                else:
+                    self.history.append(f'<p><b>AI:</b> {_esc(body)}</p>')
             elif kind == "tool":
                 # 工具调用:默认折叠成一行摘要,点 [展开] 看完整结果,再点 [收起]
                 _k, tid, name, args, result = e
@@ -1336,7 +1383,7 @@ class AIChatDock(QDockWidget):
             self._rebuild_thumb_row()
 
     def _on_anchor(self, url: QUrl):
-        """点击对话流里的链接:tool:N 展开/收起工具结果;http(s) 用系统浏览器打开"""
+        """点击对话流里的链接:tool:N 展开/收起工具结果;ai:idx 展开/收起长回答;http(s) 用系统浏览器打开"""
         href = url.toString()
         if href.startswith("tool:"):
             try:
@@ -1347,6 +1394,16 @@ class AIChatDock(QDockWidget):
                 self._expanded_tools.discard(tid)
             else:
                 self._expanded_tools.add(tid)
+            self._render_all()
+        elif href.startswith("ai:"):
+            try:
+                idx = int(href.split(":", 1)[1])
+            except ValueError:
+                return
+            if idx in self._expanded_ai:
+                self._expanded_ai.discard(idx)
+            else:
+                self._expanded_ai.add(idx)
             self._render_all()
         elif href.startswith(("http://", "https://")):
             QDesktopServices.openUrl(url)
@@ -1646,14 +1703,22 @@ class AIChatDock(QDockWidget):
 
         def worker():
             try:
-                # 路由分流(§1):本地 provider 时先判规则/难度/歧义
+                # 路由分流(§1):本地 provider 时先判规则/难度/歧义;ai_strategy 三档 + 追问降级
                 if is_local and not images:
                     from task_router import route, match_rule
-                    decision = route(text)
+                    strategy = str(self.settings.get("ai_strategy", "local_first") or "local_first")
+                    # 追问降级:上一轮是规则/chat 作答 → 本轮 follow_up=True,强制转模型
+                    follow_up = bool(getattr(self, "_cheap_replied", False))
+                    setattr(self, "_cheap_replied", False)
+                    # cloud_first 时把云端可用性告诉 route:未配云端 → 规则/本地兜底(降级链不报错)
+                    have_cloud = (self._cloud_available() if strategy == "cloud_first" else True)
+                    decision = route(text, strategy=strategy, have_cloud=have_cloud,
+                                     follow_up=follow_up)
                     if decision["target"] == "rule":
                         reply = match_rule(text) or "(没想好怎么答,稍后再试试)"
                         self.signals.reply.emit(reply)
                         self._update_ctx_ring()
+                        setattr(self, "_cheap_replied", True)   # 规则答过 → 下轮追问强制转模型
                         return
                     if decision["target"] == "chat":
                         # 简单对话/寒暄/基础介绍:本地自由回答(不需要工具)
@@ -1662,6 +1727,7 @@ class AIChatDock(QDockWidget):
                             if ok:
                                 self.signals.reply.emit(reply)
                                 self._update_ctx_ring()
+                                setattr(self, "_cheap_replied", True)   # chat 答过 → 下轮追问转模型
                                 return
                             # 本地 chat 失败 → 有云端则落云端,否则友好提示
                             if self._cloud_available():

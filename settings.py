@@ -32,6 +32,8 @@ DEFAULTS = {
     "ai_local_model": "qwen3.5-0.8b-xlam-q4km",   # 本地模型 id(与 model_registry.RESOURCES 对应)
     "ai_local_auto_download": True,               # 首次用到且未下载 → 自动后台下载(False = 不下载直接走云端)
     "ai_in_game": "off",                          # 游戏内 AI 通道:off(关闭,卸载模型省内存)/ cloud(云端)/ local(本地)
+    "ai_strategy": "local_first",                 # AI 策略三档:local_first(本地优先,省)/ cloud_first(云端优先,强)/ hybrid(混合平衡)
+    "ai_mod_translate": True,                     # Mod 描述本地 AI 翻译(英→中):True=详情显示中文+机翻标注 / False=原文
     # ---- 云端 / 本地 两组独立设置(设置 UI 分开,ai_source 决定当前用哪边)----
     "ai_source": "cloud",          # 当前模型来源:cloud(云端)/ local(本地)
     # 云端模型(ai_source=cloud 时生效;DeepSeek/OpenRouter/硅基流动/智谱/通义/自定义)

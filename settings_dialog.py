@@ -151,6 +151,27 @@ class SettingsDialog(QDialog):
     def _build_ai_tab(self) -> QWidget:
         from PySide6.QtWidgets import QWidget
 
+        # AI 策略三档:决定 AI 对话走本地/云端/混合(业务化文案,保存到 ai_strategy)
+        self.ai_strategy_combo = QComboBox()
+        for label, value in (("本地优先(省钱)", "local_first"),
+                             ("云端优先(更强)", "cloud_first"),
+                             ("混合(平衡)", "hybrid")):
+            self.ai_strategy_combo.addItem(label, value)
+        cur_strategy = self.settings.get("ai_strategy", "local_first") or "local_first"
+        idx = self.ai_strategy_combo.findData(cur_strategy)
+        self.ai_strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.ai_strategy_combo.setToolTip(
+            "决定 AI 对话默认怎么分流:\n"
+            "· 本地优先(省钱):简单操作用本地小模型,复杂任务自动转云端;\n"
+            "· 云端优先(更强):一切走云端大模型(需联网,未配云端会自动降级);\n"
+            "· 混合(平衡):按规则分流 + 模型复核,本地/云端平衡。")
+        ai_strategy_hint = QLabel("AI 策略:本地更省钱、云端更强;切换后立即生效,无需重启。")
+        ai_strategy_hint.setWordWrap(True)
+        ai_strategy_hint.setStyleSheet("color: #888888;")
+        ai_strategy_row = QHBoxLayout()
+        ai_strategy_row.addWidget(QLabel("AI 策略:"))
+        ai_strategy_row.addWidget(self.ai_strategy_combo, 1)
+
         self.ai_form = AISettingsForm(self.settings)
         ai_hint = QLabel("AI 设置会自动保存,下次打开启动器仍然有效。\n"
                          "· 云/本地两块分开配:顶部选「当前使用」哪边,AI 对话就走哪边;\n"
@@ -159,9 +180,26 @@ class SettingsDialog(QDialog):
         ai_hint.setWordWrap(True)
         ai_hint.setStyleSheet("color: #888888;")
 
+        # Mod 描述本地 AI 翻译(英→中)开关:归属 AI 功能,默认开
+        self.mod_translate_check = QCheckBox("Mod 描述本地 AI 翻译(英→中)")
+        self.mod_translate_check.setChecked(bool(self.settings.get("ai_mod_translate", True)))
+        self.mod_translate_check.setToolTip(
+            "在「下载新资源 → 资源详情」面板把英文 Mod 描述翻译成中文。\n"
+            "开:详情显示中文翻译 + \"机翻仅供参考\"标注;关:显示英文原文。")
+        mod_ai_hint = QLabel("开:选 Mod 时详情面板把英文描述翻成中文(本地小模型,翻译在后台跑,不卡界面)。")
+        mod_ai_hint.setWordWrap(True)
+        mod_ai_hint.setStyleSheet("color: #888888;")
+        mod_ai_row = QHBoxLayout()
+        mod_ai_row.addWidget(self.mod_translate_check)
+        mod_ai_row.addStretch()
+
         w = QWidget()
         lay = QVBoxLayout(w)
+        lay.addLayout(ai_strategy_row)
+        lay.addWidget(ai_strategy_hint)
         lay.addWidget(self.ai_form)
+        lay.addLayout(mod_ai_row)
+        lay.addWidget(mod_ai_hint)
         lay.addWidget(ai_hint)
         lay.addStretch()
         return w
@@ -317,6 +355,8 @@ class SettingsDialog(QDialog):
         self.settings["language"] = self.language_combo.currentData()
         self.settings["ui_mode"] = self.ui_mode_combo.currentData()
         self.settings.update(self.ai_form.values())   # 含 ai_multimodal(多模态图片输入)
+        self.settings["ai_strategy"] = self.ai_strategy_combo.currentData()
+        self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors

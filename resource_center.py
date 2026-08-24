@@ -229,6 +229,10 @@ class ResourceBrowser(QWidget):
         self.desc_label = QLabel("")
         self.desc_label.setStyleSheet(hint_style())
         self.desc_label.setWordWrap(True)
+        self.desc_note_label = QLabel("")
+        self.desc_note_label.setWordWrap(True)
+        self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+        self.desc_note_label.setVisible(False)
         self.gv_combo = QComboBox()
         self.loader_combo = QComboBox()
         self.ver_combo = QComboBox()
@@ -245,6 +249,7 @@ class ResourceBrowser(QWidget):
         p.addWidget(self.title_label)
         p.addWidget(self.meta_label)
         p.addWidget(self.desc_label)
+        p.addWidget(self.desc_note_label)
         for _lbl, combo in [(t("游戏版本:", "Game version:"), self.gv_combo),
                             (t("加载器:", "Loader:"), self.loader_combo),
                             (t("版本:", "Version:"), self.ver_combo)]:
@@ -262,7 +267,6 @@ class ResourceBrowser(QWidget):
         for w in (self.icon_label, self.title_label, self.meta_label, self.desc_label,
                   self.gv_combo, self.loader_combo, self.ver_combo, self.dl_btn):
             w.setVisible(False)
-
         self.split = QSplitter(Qt.Orientation.Horizontal)
         self.split.addWidget(self.result_list)
         panel_scroll = QScrollArea()
@@ -470,6 +474,8 @@ class ResourceBrowser(QWidget):
             meta.append("·".join(h["categories"][:6]))
         self.meta_label.setText("  ".join(meta))
         self.desc_label.setText(h.get("description", ""))
+        self.desc_note_label.setText("")
+        self.desc_note_label.setVisible(False)
         self.icon_label.setText("")
         icon_url = h.get("icon_url")
         if icon_url:
@@ -479,6 +485,94 @@ class ResourceBrowser(QWidget):
         self.loader_combo.clear()
         self.ver_combo.clear()
         self._load_project(h)
+        # 后台线程翻译 Mod 描述(不卡 UI);若关闭开关则保持原文
+        self._start_desc_translation(h)
+
+    def _start_desc_translation(self, h):
+        """后台线程翻译当前 Mod 描述(英→中),不卡 UI。
+
+        遵守 mod_translate 规则:
+        - `ai_mod_translate` 关 → 直接显示原文(无翻译调用);
+        - 本身已中文 / 空文本 → 原样;
+        - 命中缓存 → 秒回(二次打开不再触发推理);
+        - 引擎不可用 → 优雅显示原文 + 失败标注,不报错。
+        结果只在当前选中的项目没变时才应用(避免快速切换时旧结果覆盖新选择)。"""
+        desc = (h.get("description") or "").strip()
+        requested_slug = h.get("slug", "")
+        if not desc:
+            self.desc_note_label.setVisible(False)
+            return
+        try:
+            import mod_translate
+            if not mod_translate.enabled():
+                self.desc_note_label.setVisible(False)
+                return
+            # 本身已中文 → 无需翻译,也不闪"翻译中"占位
+            if mod_translate._has_cjk(desc):
+                self.desc_note_label.setVisible(False)
+                return
+        except Exception:
+            self.desc_note_label.setVisible(False)
+            return
+
+        # 翻译中提示(占位文案,完成后替换)
+        self.desc_note_label.setText(t("🔄 正在翻译描述…", "🔄 Translating…"))
+        self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+        self.desc_note_label.setVisible(True)
+
+        def fetch():
+            try:
+                import mod_translate
+                return mod_translate.translate_text_safe(desc, slug=requested_slug, field="description")
+            except Exception:
+                return None
+
+        def on_done(result):
+            # 结果只在当前选中的项目仍等于本次请求时应用
+            cur = getattr(self, "_current", None)
+            if not cur or cur.get("slug") != requested_slug:
+                return
+            self._apply_translation(result)
+
+        # cache=False:让 mod_translate 每次重新读 enabled()/缓存,避免把"关闭时"的
+        # 结果长期缓存到 _async_cache(否则用户之后打开开关也不生效)。
+        self._async(("tr", requested_slug), fetch, on_done, cache=False)
+
+    def _apply_translation(self, result):
+        """把翻译结果应用到详情面板:中文 + 机翻标注 / 失败/关闭 → 原文。"""
+        if not result or not isinstance(result, dict):
+            # 未知异常:保持原文,清掉提示
+            self.desc_note_label.setVisible(False)
+            return
+        source = result.get("source")
+        text = result.get("text") or ""
+        if source == "disabled":
+            self.desc_label.setText(text)
+            self.desc_note_label.setVisible(False)
+            return
+        if source == "already_cn" or source == "original":
+            self.desc_label.setText(text)
+            self.desc_note_label.setVisible(False)
+            return
+        if source == "failed":
+            self.desc_label.setText(text)
+            self.desc_note_label.setText(t("⚠ 翻译失败,已显示原文", "⚠ Translation failed, showing original"))
+            self.desc_note_label.setStyleSheet(f"color: #c78a2e; font-size: 11px;")
+            self.desc_note_label.setVisible(True)
+            return
+        if result.get("machine"):
+            self.desc_label.setText(text)
+            note = t("🤖 机翻仅供参考,请以英文原意为准", "🤖 Machine translation, see original for accuracy")
+            if result.get("confidence") == "low":
+                note = t("🤖 机翻仅供参考(低可信),请以英文原意为准",
+                         "🤖 Machine translation (low confidence), see original")
+            self.desc_note_label.setText(note)
+            self.desc_note_label.setStyleSheet(f"color: #c78a2e; font-size: 11px;")
+            self.desc_note_label.setVisible(True)
+            return
+        # 兜底:显示原文
+        self.desc_label.setText(text)
+        self.desc_note_label.setVisible(False)
 
     def _load_icon(self, url: str):
         try:

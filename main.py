@@ -421,8 +421,19 @@ class MainWindow(QMainWindow):
 
     def ai_context(self) -> str:
         """给 AI 的上下文:启动器设置 + 当前选中的实例信息"""
+        # 输出语言跟随界面/系统选择:中文界面用中文为主,英文界面用英文为主。
+        # 专业/英文术语(如 Mod 名、路径、工具名、报错)保留原样,不强行翻译,避免引入 bug。
+        ui_lang = i18n.get_language()
+        if ui_lang == "en":
+            lang_instr = ("Reply in English by default. Keep technical terms, command names, "
+                          "Mod/instance IDs, paths and error messages in their original form "
+                          "(do not force-translate them).")
+        else:
+            lang_instr = ("默认用中文回答。Mod 名、命令、实例 id、路径、报错等专业/英文术语保留原样,"
+                          "不要强行翻译。")
         lines = [
-            "你是 Agent Minecraft Launcher 启动器里内置的 AI 助手,用中文简洁回答。",
+            "你是 Agent Minecraft Launcher 启动器里内置的 AI 助手。",
+            lang_instr,
             f"启动器设置: 离线游戏名 {self.settings.get('username', 'Player')},"
             f" 内存 {self.settings.get('memory_gb', 2)}G,"
             f" 版本隔离 {'开' if self.settings.get('version_isolation', True) else '关'}",
