@@ -232,7 +232,31 @@ _TUTORIAL_NOTE = "\n—— 通用要点:所有「虚拟局域网」方案会给 
 # EasyTier 后端接入(工程 t24 提供 lan_tools.py;未就绪时优雅降级)
 # --------------------------------------------------------------------------
 def _lan_tools():
-    """按约定接口取 lan_tools 模块;未提供/导入失败返回 None(后端未就绪)。"""
+    """取「联机 CLI 桥接」能力:优先用 lan_bridge 插件(plugin_manager 登记的工具),
+    其次按旧约定 import lan_tools(工程预留)。都不可用返回 None(优雅降级)。"""
+    # 1) 插件模式:如果 lan_bridge 插件已装载,用它登记的工具
+    try:
+        import plugin_manager
+        if "lan_bridge__lan_status" in plugin_manager.TOOLS:
+            class _PluginAdapter:
+                def __init__(self):
+                    self.tool = plugin_manager.TOOLS.get("lan_bridge__lan_status")
+                    self.setup = plugin_manager.TOOLS.get("lan_bridge__lan_setup")
+
+                def easytier_status(self):
+                    _d, _p, h = self.tool
+                    s = h({"kind": "easytier"})
+                    return {"installed": s.startswith("✅")}
+
+                def setup_easytier(self, name, secret):
+                    _d, _p, h = self.setup
+                    out = h({"room_name": name, "secret": secret})
+                    ok = out.startswith("房间已生成")
+                    return {"ok": ok, "room_key": "", "virtual_ip": "", "error": "" if ok else out}
+            return _PluginAdapter()
+    except Exception:
+        pass
+    # 2) 旧约定 lan_tools(后端未就绪时返回 None)
     try:
         import lan_tools
         return lan_tools
