@@ -303,10 +303,15 @@ class MainWindow(QMainWindow):
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu)
 
-        # ---- 主选项卡(我的版本 / 下载新资源) ----
+        # ---- 主选项卡(我的版本 / 下载新资源 / 设置) ----
         self.main_tabs = QTabWidget()
         self.main_tabs.addTab(tab_a, t("我的版本", "Versions"))
         self.main_tabs.addTab(self.resource_center, t("下载新资源", "Resources"))
+        # 设置:改成"和下载新资源平级的标签卡",左菜单(游戏/界面/AI/镜像源)+ 右面板(非模态,引导遮罩可用)
+        from settings_center import SettingsCenter
+        self.settings_center = SettingsCenter(self.settings)
+        self.settings_center.applied.connect(self._on_settings_applied)
+        self.main_tabs.addTab(self.settings_center, t("设置", "Settings"))
 
         # ---- 底部:可折叠的游戏日志(默认收起) ----
         self.log_toggle_btn = QPushButton(t("▶ 游戏日志", "▶ Game Log"))
@@ -366,21 +371,33 @@ class MainWindow(QMainWindow):
 
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
-        """打开设置对话框,确定后刷新本窗口的设置。
-        tab 可选 "mirror":直接切到镜像源页(设置菜单 → 镜像源…)"""
+        """打开设置:切换到「设置」标签卡(非模态,现为顶部标签页)。
+        tab 可选 "mirror":直接切到镜像源小节(设置菜单 → 镜像源…)"""
         from settings_dialog import SettingsDialog
-
+        idx = self.main_tabs.indexOf(self.settings_center)
+        if idx >= 0:
+            self.main_tabs.setCurrentIndex(idx)
+            if tab == "mirror":
+                self.settings_center.shell.switch_by_label(t("镜像源", "Mirror"))
+            return
+        # 兜底:兼容未挂tab的旧路径(一般不会走到)
         dlg = SettingsDialog(self.settings, self, tab=tab)
         if dlg.exec():
             self.settings = dlg.settings
-            self.ai_dock.settings = dlg.settings
-            self.ai_dock.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
-            self.ai_dock.update_local_status()   # 本地模型 provider 切换 → 刷新状态
-            self.ai_dock.maybe_preload_local()   # 切到内置本地模型 → 空闲期预热 server(§8.2)
-            self.skill_mgr.settings = dlg.settings   # 技能启停状态同步
-            self.resource_center.set_ui_mode(dlg.settings.get("ui_mode", "beginner"))
-            self.refresh_instances()   # 游戏目录可能被改了,重新扫描
-            self.statusBar().showMessage("设置已保存")
+            self._on_settings_applied()
+
+    def _on_settings_applied(self):
+        """设置(标签卡)保存后:刷新本窗口与各处联动。"""
+        s = self.settings_center.settings
+        self.settings = s
+        self.ai_dock.settings = s
+        self.ai_dock.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
+        self.ai_dock.update_local_status()   # 本地模型 provider 切换 → 刷新状态
+        self.ai_dock.maybe_preload_local()   # 切到内置本地模型 → 空闲期预热 server(§8.2)
+        self.skill_mgr.settings = s
+        self.resource_center.set_ui_mode(s.get("ui_mode", "beginner"))
+        self.refresh_instances()   # 游戏目录可能被改了,重新扫描
+        self.statusBar().showMessage("设置已保存")
 
     def open_update_dialog(self):
         """设置 → 检查更新:AMCL 启动器 + bridge-mod(帮助菜单已移除,入口并入设置菜单)"""
