@@ -17,6 +17,13 @@
   - 流程收敛:工具描述写明"查不到就停、告诉用户进一次世界";失败返回带"哪些实例有/缺数据"
   - 验证:.tmp/test_recipe_zh.py 9 项 + 全量回归(18+29+CLI+设置)全 PASS
 
+- [x] **Mod 依赖网络 / 反向依赖(灵感 #4+#5,简单版)** — 2026-08-24
+  - `mod_deps.py`:离线解析实例 mods 目录各 jar 元数据(fabric.mod.json / mods.toml),构建依赖图
+    (required/optional/incompatible,标出缺失依赖);`mod_graph.py`:QGraphicsView 渲染(力导向/拖拽/滚轮缩放)
+  - 入口:实例管理 → Mod 页 →「Mod 依赖网络」(后台解析 + "正在分析依赖关系"进度条)
+  - 说明:覆盖本实例已装 mod(离线精准);全网反向依赖(Modrinth 无 dependents API)暂不做
+  - 待办:下载 Mod 时按 Modrinth 正向 dependencies 自动提示"需要什么/冲突"(数据已取到,未接 UI)
+
 ## 🔜 规划中(按需启用)
 
 - [x] **本地推理模块原型:grammar 约束解码(§8.1 续接②先行项)** — 2026-08-23

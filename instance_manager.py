@@ -13,8 +13,9 @@
 import os
 import re
 import shutil
+import threading
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QSpinBox,
     QTabWidget,
@@ -37,6 +39,22 @@ from PySide6.QtWidgets import (
 
 from backup import backup_instance, list_backups, set_ftb_backup_frequency
 from ui_style import hint_style
+
+
+class _DepGraphWorker(QObject):
+    """后台解析 Mod 依赖网络(不卡 UI)。progress(done,total) / done(ModGraph) / error(msg)。"""
+    progress = Signal(int, int)
+    done = Signal(object)
+    error = Signal(str)
+
+    def run(self, mods_dir: str):
+        try:
+            import mod_deps
+            graph = mod_deps.build_graph(mods_dir,
+                                         progress_cb=lambda d, t: self.progress.emit(d, t))
+            self.done.emit(graph)
+        except Exception as e:
+            self.error.emit(f"{type(e).__name__}: {e}")
 
 
 class InstanceManagerDialog(QDialog):
@@ -103,8 +121,13 @@ class InstanceManagerDialog(QDialog):
         open_btn.clicked.connect(lambda: self._open_dir(os.path.join(self.inst_dir, "mods")))
         refresh_btn.clicked.connect(self._refresh_mods)
 
+        # Mod 依赖网络(灵感 #4/#5):解析该实例各 mod 的依赖关系,画成一张网
+        dep_btn = QPushButton("Mod 依赖网络")
+        dep_btn.setToolTip("解析本实例 mod 间的依赖/冲突关系,画成一张『谁依赖谁』的网")
+        dep_btn.clicked.connect(self._open_dep_graph)
+
         row = QHBoxLayout()
-        for b in (enable_btn, disable_btn, delete_btn, open_btn, refresh_btn):
+        for b in (enable_btn, disable_btn, delete_btn, dep_btn, open_btn, refresh_btn):
             row.addWidget(b)
         row.addStretch()
 
@@ -127,6 +150,46 @@ class InstanceManagerDialog(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, f)
             item.setForeground(Qt.GlobalColor.gray if disabled else Qt.GlobalColor.black)
             self.mods_list.addItem(item)
+
+    def _open_dep_graph(self):
+        """「Mod 依赖网络」:后台解析依赖(带进度条)→ 打开网络图。"""
+        mods_dir = os.path.join(self.inst_dir, "mods")
+        jars = self._mod_files()
+        if not jars:
+            QMessageBox.information(self, "Mod 依赖网络",
+                                    "该实例还没有可分析的 Mod\n(先在 mods 目录放几个 mod,或去下载页装)")
+            return
+        # 进度条(非模态,带"正在分析依赖关系")
+        dlg = QProgressDialog("正在分析依赖关系…", None, 0, len(jars), self)
+        dlg.setWindowTitle("Mod 依赖网络")
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setCancelButton(None)
+        dlg.setValue(0)
+        dlg.show()
+
+        worker = _DepGraphWorker()
+        self._dep_worker = worker   # 保持引用,防止 GC 后信号断开
+        worker.progress.connect(lambda done, total: (dlg.setMaximum(max(total, 1)), dlg.setValue(done)))
+
+        def on_done(graph):
+            dlg.close()
+            if graph.stats()["edges"] == 0:
+                QMessageBox.information(self, "Mod 依赖网络",
+                                        "没解析出 mod 间的依赖关系(可能都只依赖游戏本体/加载器,"
+                                        "或元数据不完整)。可点节点看每个 mod 信息。")
+                return
+            from mod_graph import ModDependencyGraphDialog
+            ModDependencyGraphDialog(self.inst_id, graph, self).exec()
+
+        def on_err(msg):
+            dlg.close()
+            QMessageBox.warning(self, "Mod 依赖网络失败", f"解析依赖出错:\n{msg}")
+
+        worker.done.connect(on_done)
+        worker.error.connect(on_err)
+        threading.Thread(target=worker.run, args=(mods_dir,), daemon=True).start()
 
     def _toggle_mods(self, enable: bool):
         mods_dir = os.path.join(self.inst_dir, "mods")
