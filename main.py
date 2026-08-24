@@ -261,10 +261,9 @@ class MainWindow(QMainWindow):
         # ---- 联机方案中心(灵感 #2):按场景推荐联机方案 ----
         online_menu = menubar.addMenu(t("联机", "Multiplayer"))
         online_menu.addAction(t("联机方案中心…", "Multiplayer Center…"), self.open_online_center)
-
-        # ---- 帮助:新手教程(模块化:内容在 tutorial_content.py,渲染器在 tutorial_gui.py) ----
-        help_menu = menubar.addMenu(t("帮助", "Help"))
-        help_menu.addAction(t("📖 新手教程…", "Beginner Tutorial…"), self.open_tutorial)
+        # 新手教程入口已隐藏(2026-08-25):第一版效果不够好,临时弃用,
+        # 改为「指引式教程」(箭头+文字)后再上线;仅保留 设置→界面→已弃用功能 里的临时入口。
+        # 保留 open_tutorial 供设置对话框「临时查看」调用。
 
         # ---- Tab「我的版本」:仿 PCL2 首页(左 1/3 登录+实例设置+启动按钮,右 2/3 版本/更新日志/动态) ----
         from version_home import VersionHome

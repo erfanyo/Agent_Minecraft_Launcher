@@ -375,12 +375,13 @@ class VersionHome(QWidget):
         btn_row.addWidget(self.config_btn, 1)
         lay.addLayout(btn_row)
 
-        # 新手教程入口(模块化:内容在 tutorial_content.py,渲染在 tutorial_gui.py)
+        # 新手教程入口(第一版效果不够好 → 临时弃用,已隐藏;改用「指引式教程」后再上线)
         self.tutorial_btn = QPushButton(t("📖 新手教程", "Beginner Tutorial"))
         self.tutorial_btn.setStyleSheet(card_btn_style())
         self.tutorial_btn.setMinimumHeight(36)
         self.tutorial_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tutorial_btn.clicked.connect(self.tutorial_requested.emit)
+        self.tutorial_btn.setVisible(False)   # 临时隐藏入口;仅 设置→界面→已弃用功能 可临时查看
         lay.addWidget(self.tutorial_btn)
 
         return left

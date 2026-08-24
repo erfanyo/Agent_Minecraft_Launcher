@@ -39,6 +39,7 @@ import paths
 from assistant import AISettingsForm
 from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
 from settings import save_settings
+from ui_style import card_btn_style, muted_color
 
 
 class SettingsDialog(QDialog):
@@ -174,8 +175,35 @@ class SettingsDialog(QDialog):
         lay.addLayout(form)
         lay.addWidget(lang_hint)
         lay.addWidget(mode_hint)
+        lay.addSpacing(10)
+        # ---- 已临时弃用 / 废案(未移除)功能:隐藏主入口,在此登记(见 deprecated_features.py) ----
+        from deprecated_features import get_deprecated
+        dep = get_deprecated()
+        if dep:
+            dep_title = QLabel("⚠️ 已临时弃用 / 废案(未移除)功能:")
+            dep_title.setStyleSheet(f"color: {muted_color()}; font-weight: bold;")
+            lay.addWidget(dep_title)
+            for d in dep:
+                row = QHBoxLayout()
+                info = QLabel(f"<b>{d.get('name')}</b>  ·  状态:{d.get('status','')}<br>"
+                              f"<span style='color:#8a93a0;'>{d.get('note','')}</span>")
+                info.setWordWrap(True)
+                info.setTextFormat(Qt.TextFormat.RichText)
+                row.addWidget(info, 1)
+                if d.get("reopen") == "tutorial":
+                    open_btn = QPushButton("临时查看")
+                    open_btn.setStyleSheet(card_btn_style())
+                    open_btn.clicked.connect(self._reopen_tutorial)
+                    row.addWidget(open_btn)
+                lay.addLayout(row)
         lay.addStretch()
         return w
+
+    def _reopen_tutorial(self):
+        """设置里「临时查看」已弃用的新手教程(主入口已隐藏,仅此保留访问)。"""
+        p = self.parent()
+        if p is not None and hasattr(p, "open_tutorial"):
+            p.open_tutorial()
 
     # ================= AI 助手 =================
     def _build_ai_tab(self) -> QWidget:
