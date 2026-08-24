@@ -209,18 +209,28 @@ def ensure_easytier(progress_callback=None, expected_sha256: str = "") -> dict:
             os.chmod(_core_path(), 0o755)
         except OSError:
             pass
-    # 记录 pin:优先用外部传入的 expected_sha256,其次平台已知钉 _expected_pin(),否则自记录本次下载哈希
+    # 确定应校验的 pin:优先外部传入 expected_sha256,其次平台已知钉 _expected_pin(),否则自记录本次下载哈希
     pin = (expected_sha256 or _expected_pin()).strip()
     if not pin:
         pin = _sha256_of_file(_core_path())
+    # 【安全】解压后**立即校验**再交付,不通过则删除并失败,避免首装就运行被篡改的二进制
+    digest = _sha256_of_file(_core_path())
+    if digest.lower() != pin.lower():
+        try:
+            os.remove(_core_path())
+        except OSError:
+            pass
+        return {"ok": False, "path": _core_path(),
+                "message": f"已下载的 easytier-core sha256 与钉住值不符(期望 {pin[:12]}...,"
+                           f"实际 {digest[:12]}...),已删除。请检查源或重试。"}
     try:
         with open(_pin_path(), "w", encoding="ascii") as f:
             f.write(pin)
     except OSError:
         pass
-    return {"ok": os.path.isfile(_core_path()), "path": _core_path(),
+    return {"ok": True, "path": _core_path(),
             "version": EASYTIER_VERSION,
-            "message": "easytier-core 已就位(sha256 已记录并校验)"}
+            "message": "easytier-core 已就位(解压后 sha256 校验通过)"}
 
 
 # 本模块启动的 easytier-core Popen 进程注册表(pid -> Popen)。
@@ -230,13 +240,6 @@ _REGISTRY: dict = {}
 
 
 # ---- 运行/状态/关闭 ----
-def _run_core(args: list, timeout: float = 15.0) -> subprocess.CompletedProcess:
-    """运行 easytier-core 并收集输出(短超时,主要用于查询/一次性动作)。"""
-    core = _core_path()
-    return subprocess.run([core, *args], capture_output=True, text=True,
-                          timeout=timeout, creationflags=0)
-
-
 def setup_easytier(name: str, secret: str, ipv4: str = "",
                    dhcp: bool = True, progress_callback=None) -> dict:
     """启动一个 EasyTier 节点(host)。返回 {ok, ip, virtual_ip, room_key, message}。
@@ -280,12 +283,16 @@ def setup_easytier(name: str, secret: str, ipv4: str = "",
     # 登记本进程,供 status/stop 识别(即使 tasklist 不可用也能找到)
     _REGISTRY[proc.pid] = proc
 
-    # 读取节点给自己分配的虚拟 IP(从 Web Console 接口或日志);这里先给合理默认
-    ip = ipv4.strip() if ipv4.strip() else _probe_virtual_ip(proc, logf)
+    # 读取**本节点**的虚拟 IP(easytier-cli 查询,比扫日志可靠):先给固定 ipv4 的已知值,
+    # 否则查询节点自身;查不到时给友好提示,但不失败(可能 DHCP 尚未就绪)。
+    ip = ipv4.strip() if ipv4.strip() else _node_virtual_ip()[0]
+    ip_note = ""
+    if not ip:
+        ip_note = " 虚拟 IP 暂未读到(可能分配中),可稍后用「查询状态」再取。"
     room_key = f"{name}|{secret}"
     return {"ok": True, "ip": ip, "virtual_ip": ip, "room_key": room_key,
-            "message": f"EasyTier 已启动(房间:{name}),虚拟 IP {ip or '(待分配)'};"
-                       f"把房间钥匙 {room_key} 发给好友,好友填同一钥匙即入网。"}
+            "message": f"EasyTier 已启动(房间:{name}),虚拟 IP {ip or '(待分配)'}。"
+                       f"把房间钥匙 {room_key} 发给好友,好友填同一钥匙即入网。{ip_note}".strip()}
 
 
 def join_easytier(name: str, secret: str, progress_callback=None) -> dict:
@@ -293,20 +300,38 @@ def join_easytier(name: str, secret: str, progress_callback=None) -> dict:
     return setup_easytier(name, secret, progress_callback=progress_callback)
 
 
-def _probe_virtual_ip(proc, logf: str) -> str:
-    """尽力读取日志里的虚拟 IP;读不到返回空串(默认 DHCP 可能还在分配)。"""
-    import re
+def _cli_path() -> str:
+    """easytier-cli 可执行路径(与 core 同目录)。"""
+    return os.path.join(_easytier_dir(), f"easytier-cli{'.exe' if os.name == 'nt' else ''}")
+
+
+def _node_virtual_ip() -> tuple:
+    """用 easytier-cli 查**本机节点**的虚拟 IP。返回 (ip, message)。
+
+    通过 `easytier-cli -o json node info`(连本进程 RPC portal,默认 127.0.0.1:15888)
+    读取节点自身 `ipv4_addr`(形如 "10.144.0.1/24")——这是本节点虚拟 IP,比扫日志
+    取"首个私网 IP"可靠(后者可能是对端/接口 IP,非本节点)。查不到(未运行/未就绪)
+    返回空 ip 与友好 message。"""
+    cli = _cli_path()
+    if not os.path.isfile(cli):
+        return "", "easytier-cli 未找到,无法读取本节点虚拟 IP。"
     try:
-        if logf and os.path.exists(logf):
-            with open(logf, encoding="utf-8", errors="replace") as f:
-                text = f.read()
-            for m in re.finditer(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", text):
-                ip = m.group(1)
-                if ip.startswith(("10.", "100.", "172.", "192.168.", "169.254.")):
-                    return ip
-    except Exception:
-        pass
-    return ""
+        r = subprocess.run([cli, "-o", "json", "node", "info"],
+                           capture_output=True, text=True, timeout=12)
+    except Exception as e:
+        return "", f"无法查询 EasyTier 节点信息(如未启动/未就绪): {e}"
+    if r.returncode != 0:
+        return "", "easytier-cli 未连到节点(可能尚未启动/未就绪)。"
+    try:
+        import json
+        data = json.loads(r.stdout)
+        addr = (data.get("ipv4_addr") or "").strip()
+    except Exception as e:
+        return "", f"解析 EasyTier 节点信息失败: {e}"
+    if addr:
+        ip = addr.split("/")[0].strip()  # "10.144.0.1/24" -> "10.144.0.1"
+        return ip, ""
+    return "", "EasyTier 节点尚未分配到虚拟 IP(可能 DHCP 分配中)。"
 
 
 def easytier_status() -> dict:
@@ -321,9 +346,10 @@ def easytier_status() -> dict:
         return {"running": False, "installed": True, "ip": "", "pid": None,
                 "message": "easytier-core 未在运行。"}
     pid = procs[0]
-    ip = _probe_virtual_ip(None, os.path.join(_easytier_dir(), "logs", "easytier.log"))
-    return {"running": True, "installed": True, "ip": ip, "pid": pid,
-            "message": f"easytier-core 正在运行(pid={pid})"}
+    ip, ip_msg = _node_virtual_ip()
+    return {"running": True, "installed": True, "ip": ip, "virtual_ip": ip, "pid": pid,
+            "message": (f"easytier-core 正在运行(pid={pid})。" +
+                        (f" 虚拟 IP {ip or '(待分配)'}。" if ip else f" {ip_msg}"))}
 
 
 def stop_easytier() -> dict:
