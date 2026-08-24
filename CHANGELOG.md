@@ -92,6 +92,7 @@
 - **拖放按页面分流**:**只有「我的实例」页**拖入文件才是「整合包安装」;其它页面(设置/联机/下载新资源/实例详情)拖放交给各自控件——实例详情的 **Mod / 数据包 / 光影包** 列表拖入文件即**拷进对应目录**(mods/datapacks/shaderpacks)。
 - **MCP server(stdio + HTTP 两种传输)**:`mcp_server.py` 手写 JSON-RPC 2.0,把启动器工具(agent_tools)暴露成 MCP 工具。`python main.py --mcp` = stdio;`python main.py --mcp-http [port]` = **Streamable-HTTP**,端点 `POST /mcp`,客户端可用「http」选项连 `http://127.0.0.1:8766/mcp`。支持 `initialize/tools·list(20)/tools·call/ping`。
 - **设置→界面 新增「MCP 集成」**:一键**复制 HTTP 链接**、**生成客户端配置文件**(`AMCL/mcp_config.json` + `AMCL/mcp_http.cmd`,写到启动器创建的 AMCL 文件夹,含 http_url + stdio command/args)。
+- **启动器 AI 作 MCP 客户端**:`mcp_client.py`(HTTP JSON-RPC 客户端,与 mcp_server 对称)。AI 可调用**外部 MCP 服务器**的工具——`assistant.available_tools(settings)` = 内置 TOOLS + 配置的 MCP 工具(`mcp__服务器__工具`),`build_executor` 路由 `mcp__` 调用到对应服务器。设置→界面「**MCP 客户端**」填入外部服务器 url(逗号分隔)即启用。**自环测试通过**:AI 客户端 → 启动器自己的 `--mcp-http` 服务器 → `list_instances`/`get_settings` 均返回。
 
 ### 🧩 Mod 依赖网络(灵感 #5,简单版)
 - 实例管理 → Mod 页新增「**Mod 依赖网络**」:离线解析该实例各 mod jar 的依赖/冲突,画成一张"谁依赖谁"的网

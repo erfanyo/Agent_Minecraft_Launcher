@@ -183,7 +183,16 @@ class SettingsCenter(QWidget):
         self._mcp_status = QLabel("")
         self._mcp_status.setWordWrap(True); self._mcp_status.setStyleSheet("color:#8a93a0;")
         l.addWidget(self._mcp_status)
-
+        # MCP 客户端(启动器 AI 去调用的【外部】MCP 服务器):逗号分隔 url
+        self.mcp_clients_edit = QLineEdit()
+        self.mcp_clients_edit.setPlaceholderText(
+            "MCP 客户端(外部服务器→启动器 AI 调用),逗号分隔,如 http://127.0.0.1:9000/mcp")
+        self.mcp_clients_edit.setText(
+            ",".join(c.get("url", "") for c in self.settings.get("mcp_clients", [])))
+        mcpc_row = QHBoxLayout(); mcpc_row.setSpacing(8)
+        mcpc_row.addWidget(QLabel("MCP 客户端:"))
+        mcpc_row.addWidget(self.mcp_clients_edit, 1)
+        l.addLayout(mcpc_row)
         l.addStretch()
         return w
 
@@ -467,5 +476,9 @@ class SettingsCenter(QWidget):
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors
+        # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):逗号分隔 url → [{name,url}]
+        self.settings["mcp_clients"] = [
+            {"name": f"mcp{i + 1}", "url": u.strip()}
+            for i, u in enumerate(self.mcp_clients_edit.text().split(",")) if u.strip()]
         save_settings(self.settings)
         self.applied.emit()

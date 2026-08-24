@@ -238,6 +238,21 @@ TOOL_GROUP_KEYWORDS = {
 }
 
 
+def available_tools(settings: dict) -> list:
+    """内置 TOOLS + 配置的外部 MCP 服务器工具(完整 schema,供模型选择调用 MCP 工具)。"""
+    tools = list(TOOLS)
+    try:
+        from mcp_client import connect_mcp_clients
+        schemas, _ = connect_mcp_clients(settings.get("mcp_clients") or [])
+        for s in schemas:
+            tools.append({"type": "function", "function": {
+                "name": s["name"], "description": s["description"],
+                "parameters": s["parameters"]}})
+    except Exception:
+        pass
+    return tools
+
+
 def mount_tools_for(text: str) -> list:
     """云端按需挂载工具 schema:通用工具 + 请求文本命中关键词的组(按 TOOL_GROUPS)。
     返回 TOOLS 的子集(每轮请求固定,轮间稳定利于前缀缓存)。
@@ -263,8 +278,19 @@ def build_executor(settings: dict, progress_cb=None):
     progress_cb(done, total) 若提供,把底层下载(装 Mod 等)进度传给界面(左下角圆环)。"""
     import inspect
     import agent_tools
+    # MCP 客户端:连接配置的外部 MCP 服务器,AI 可调用它们暴露的工具
+    _mcp_callers = {}
+    try:
+        from mcp_client import connect_mcp_clients
+        _mcp_schemas, _mcp_callers = connect_mcp_clients(settings.get("mcp_clients") or [])
+    except Exception:
+        _mcp_callers = {}
 
     def executor(name: str, args: dict) -> str:
+        # MCP 工具(mcp__服务器__工具)优先路由到对应 MCP 服务器
+        if name in _mcp_callers:
+            from mcp_client import mcp_tool_call
+            return mcp_tool_call(_mcp_callers, name, args)
         # 动态查找:函数名 == 工具名,便于测试打桩与后续扩展
         fn = getattr(agent_tools, name, None)
         if fn is None:
