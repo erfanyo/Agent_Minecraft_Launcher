@@ -1915,6 +1915,12 @@ class MainWindow(QMainWindow):
         self.refresh_instances()
 
 if __name__ == "__main__":
+    import sys as _sys
+    if "--mcp" in _sys.argv:
+        # MCP 服务模式(stdio):供外部 AI 宿主调用启动器工具,不启动 GUI
+        from mcp_server import serve
+        serve()
+        raise SystemExit(0)
     print("正在获取版本列表(首次约几秒,请稍等)...")
     app = QApplication(sys.argv)
     from ui_style import apply_global_dark_palette
