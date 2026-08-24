@@ -152,6 +152,148 @@ def clear_registered_styles() -> None:
     _REFRESH_WIDGETS.clear()
 
 
+# ---------------- 可读性 / 色差检查 ----------------
+# 目的:自定义配色后,防止"文字看不清"(前景/背景对比度不足)或强调色与背景难分辨(明暗/灰度接近)。
+# 用 WCAG 相对亮度 + 对比度。文本可读≥4.5,装饰可区分≥3。
+def hex_to_rgb(color: str) -> tuple:
+    """'#RRGGBB' / '#RGB' → (r,g,b) 0-255。失败返回 (128,128,128)。"""
+    c = (color or "").strip().lower()
+    if c.startswith("#"):
+        c = c[1:]
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    if len(c) == 6:
+        try:
+            return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            pass
+    # rgba(...) 等:取前三个数值,失败用默认
+    if c.startswith("rgba"):
+        import re
+        nums = re.findall(r"[\d.]+", color)
+        try:
+            return (int(float(nums[0])), int(float(nums[1])), int(float(nums[2])))
+        except Exception:
+            return (128, 128, 128)
+    return (128, 128, 128)
+
+
+def _lum(rgb: tuple) -> float:
+    """WCAG 相对亮度 0-1。"""
+    def ch(c):
+        c = c / 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(rgb[0]) + 0.7152 * ch(rgb[1]) + 0.0722 * ch(rgb[2])
+
+
+def contrast_ratio(c1: str, c2: str) -> float:
+    """两个颜色(hex)的 WCAG 对比度,范围 1-21。"""
+    l1, l2 = _lum(hex_to_rgb(c1)), _lum(hex_to_rgb(c2))
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def luminance(c: str) -> float:
+    return _lum(hex_to_rgb(c))
+
+
+def color_difference(c1: str, c2: str) -> float:
+    """感知色差(简化的欧氏距离 0-~441)。越小越接近。"""
+    (r1, g1, b1), (r2, g2, b2) = hex_to_rgb(c1), hex_to_rgb(c2)
+    return ((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2) ** 0.5
+
+
+def saturation(c: str) -> float:
+    """饱和度 0-1(基于 HSV/HSL 的简化:最大值与最小值之差归一化)。"""
+    r, g, b = hex_to_rgb(c)
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx == 0:
+        return 0.0
+    return (mx - mn) / mx
+
+
+def _blend_bg(bg: str) -> str:
+    """把(可能半透明的)背景色叠到当前模式的基础窗口色上,得到"有效背景"用于对比度。
+    这样 rgba(...,0.06) 在暗色下≈近黑,在亮色下≈近白,判读更准。"""
+    if "rgba" not in bg:
+        return bg
+    import re
+    nums = re.findall(r"[\d.]+", bg)
+    try:
+        r, g, b = int(float(nums[0])), int(float(nums[1])), int(float(nums[2]))
+        a = float(nums[3]) if len(nums) > 3 else 1.0
+    except Exception:
+        a = 1.0
+        r = g = b = 128
+    # 基础窗口色(当前模式)
+    base = "#f5f6f9" if not is_dark_mode() else "#23272f"
+    br, bgc, bb = hex_to_rgb(base)
+    nr = int(r * a + br * (1 - a)); ng = int(g * a + bgc * (1 - a)); nb = int(b * a + bb * (1 - a))
+    return f"#{nr:02x}{ng:02x}{nb:02x}"
+
+
+def check_readability(custom: dict) -> list:
+    """检查自定义配色(text/accent 等)相对背景的可读性,返回提示列表(空=没问题)。
+    规则:文字 vs 背景对比度≥4.5 才清晰;强调色 vs 背景需可区分(对比度≥3 或色差/明暗足够)。
+    背景优先用自定义 panel_bg,半透明则按当前模式叠到窗口色上判读。"""
+    msgs = []
+    text = custom.get("text") or current_color("text")
+    accent = custom.get("accent") or current_color("accent")
+    bg = _blend_bg(custom.get("panel_bg") or current_color("panel_bg"))
+    # 1) 文字 vs 背景(主可读性)
+    tc = contrast_ratio(text, bg)
+    if tc < 4.5:
+        msgs.append(f"⚠️ 文字色与背景对比度仅 {tc:.1f}:1(<4.5),正常文字可能看不清。建议换更亮/更暗的文字色或调背景。")
+    elif tc < 7:
+        msgs.append(f"文字与背景对比度 {tc:.1f}:1(达标,但小字/细字仍建议≥7 更稳)。")
+    # 2) 强调色 vs 背景(要能区分)
+    ac = contrast_ratio(accent, bg)
+    if ac < 3 and color_difference(accent, bg) < 100:
+        msgs.append(f"⚠️ 强调色与背景太接近(对比度 {ac:.1f}:1),按钮/高亮/超链接可能看不清。换更醒目或更暗的强调色。")
+    # 3) 灰度/明暗接近告警(色弱用户尤其明显)
+    if abs(luminance(accent) - luminance(text)) < 0.05:
+        msgs.append("强调色与文字明暗过于接近,色弱/灰度下可能难区分。可加粗或选更亮/更暗的强调色。")
+    return msgs
+
+
+# ---------------- 色盲 / 色弱配色模板 ----------------
+# 无障碍预设:针对不同色觉障碍 + 高对比/灰度友好。
+# 只覆盖【强调色一族】(accent* / 选中高亮),不碰 text/panel_bg——后者随当前深浅色自动走,
+# 这样在两种模式下都保持文字/背景可读,色弱用户主要受益于"强调色不混淆"。
+COLOR_BLIND_PRESETS = {
+    "高对比(黑白分明)": {
+        "description": "高对比强调色,最大可读性",
+        "colors": {"accent": "#ffb400", "accent_bright": "#ffc93c", "accent_bg": "#c77c00",
+                    "accent_bg_hover": "#d98e00", "accent_bg_pressed": "#a56500",
+                    "sel_bg": "rgba(255,180,0,0.30)", "menu_sel": "rgba(255,180,0,0.22)"},
+    },
+    "红绿色盲(蓝/黄)": {
+        "description": "避开红绿混淆,用蓝黄做强调",
+        "colors": {"accent": "#1e88e5", "accent_bright": "#42a5f5",
+                    "accent_bg": "#1565c0", "accent_bg_hover": "#1e78d2", "accent_bg_pressed": "#0d47a1",
+                    "sel_bg": "rgba(30,136,229,0.30)", "menu_sel": "rgba(30,136,229,0.22)"},
+    },
+    "蓝黄色盲(红/绿)": {
+        "description": "避开蓝黄混淆,用红绿做强调",
+        "colors": {"accent": "#e53935", "accent_bright": "#ef5350",
+                    "accent_bg": "#c62828", "accent_bg_hover": "#d33835", "accent_bg_pressed": "#b71c1c",
+                    "sel_bg": "rgba(229,57,53,0.30)", "menu_sel": "rgba(229,57,53,0.22)"},
+    },
+    "灰度友好(不看色相)": {
+        "description": "靠明暗/形状区分,不依赖颜色",
+        "colors": {"accent": "#64b5f6", "accent_bright": "#90caf9",
+                    "accent_bg": "#3f7fc4", "accent_bg_hover": "#4e93d4", "accent_bg_pressed": "#33689f",
+                    "sel_bg": "rgba(100,181,246,0.28)", "menu_sel": "rgba(100,181,246,0.20)"},
+    },
+}
+
+
+def apply_color_blind_preset(name: str) -> dict:
+    """按预设名返回要写入 settings 的 ui_custom_colors(空 dict=无效名/无预设)。"""
+    presets = COLOR_BLIND_PRESETS.get(name)
+    return dict(presets["colors"]) if presets else {}
+
+
 # ---------------- 基础配色 ---------------- 
 def _tz(dark: str, light: str) -> str:
     """按当前主题返回 dark 或 light 值"""

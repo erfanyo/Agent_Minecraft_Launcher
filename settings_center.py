@@ -20,7 +20,8 @@ from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
 from i18n import t
 from paths import DEFAULT_GAME_DIR
 from settings import save_settings
-from ui_style import card_btn_style, muted_color, set_style
+from ui_style import (card_btn_style, muted_color, set_style,
+                      COLOR_BLIND_PRESETS, check_readability)
 
 
 def _fmt_mcp_entry(c: dict) -> str:
@@ -199,6 +200,23 @@ class SettingsCenter(QWidget):
         color_hint = QLabel("配色改完**立即覆盖整个启动器**(实时上色,不用等重启);当前设置页同步预览。")
         color_hint.setWordWrap(True); color_hint.setStyleSheet("color:#8a93a0;")
         l.addWidget(color_hint)
+        # 色盲/色弱友好模板(为无障碍预设,一键应用)
+        cb_row = QHBoxLayout(); cb_row.setSpacing(8)
+        cb_row.addWidget(QLabel("配色模板(无障碍):"))
+        self._cb_combo = QComboBox()
+        self._cb_combo.addItem("(无)", "")
+        for _name in COLOR_BLIND_PRESETS:
+            self._cb_combo.addItem(_name, _name)
+        cb_row.addWidget(self._cb_combo, 1)
+        apply_cb_btn = QPushButton("应用模板")
+        set_style(apply_cb_btn, card_btn_style); apply_cb_btn.setMinimumHeight(32)
+        apply_cb_btn.clicked.connect(self._apply_cb_preset)
+        cb_row.addWidget(apply_cb_btn)
+        l.addLayout(cb_row)
+        # 可读性提示(改色后检查文字/强调色是否看不清)
+        self._readability_label = QLabel("")
+        self._readability_label.setWordWrap(True)
+        l.addWidget(self._readability_label)
         self._refresh_color_btn_text()
 
         # MCP 集成:自动生成 连接链接 / 客户端配置文件(存 AMCL 文件夹)
@@ -282,6 +300,40 @@ class SettingsCenter(QWidget):
             v = cur.get(slot)
             b.setText(f"{labels.get(slot, slot)}:" + (v if v else "默认"))
 
+    def _update_readability(self):
+        """改色后检查文字/强调色是否可能看不清,显示在提示行。"""
+        try:
+            from ui_style import get_custom_colors
+            msgs = check_readability(get_custom_colors())
+            lbl = getattr(self, "_readability_label", None)
+            if lbl is None:
+                return
+            if msgs:
+                lbl.setStyleSheet("color:#E53935; font-size:11px;")
+                lbl.setText("\n".join(msgs))
+            else:
+                lbl.setStyleSheet("color:#4CAF50; font-size:11px;")
+                lbl.setText("✅ 配色可读性良好(文字/强调色与背景对比适中)。")
+        except Exception:
+            pass
+
+    def _apply_cb_preset(self):
+        """应用色盲/色弱配色模板(无障碍预设)。"""
+        from ui_style import apply_color_blind_preset
+        name = self._cb_combo.currentData() or ""
+        if not name:
+            return
+        cols = apply_color_blind_preset(name)
+        if not cols:
+            return
+        from ui_style import set_custom_colors
+        set_custom_colors(cols)
+        self.settings["ui_custom_colors"] = cols
+        save_settings(self.settings)
+        self._refresh_color_btn_text()
+        self._retheme()
+        self._update_readability()
+
     def _pick_color(self, slot: str, label: str):
         from PySide6.QtGui import QColor
         from PySide6.QtWidgets import QColorDialog
@@ -297,6 +349,7 @@ class SettingsCenter(QWidget):
         save_settings(self.settings)
         self._refresh_color_btn_text()
         self._retheme()
+        self._update_readability()
 
     def _reset_colors(self):
         from ui_style import clear_custom_colors
@@ -305,6 +358,7 @@ class SettingsCenter(QWidget):
         save_settings(self.settings)
         self._refresh_color_btn_text()
         self._retheme()
+        self._update_readability()
 
     def _retheme(self):
         """自定义配色改了 → 实时重刷整应用上色(之前要重启才生效)。"""
