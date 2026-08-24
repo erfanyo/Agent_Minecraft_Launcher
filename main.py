@@ -306,9 +306,17 @@ class MainWindow(QMainWindow):
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu)
 
-        # ---- 主选项卡(我的版本 / 下载新资源 / 设置) ----
+        # ---- 主选项卡(我的版本 / 实例详情 / 下载新资源 / 设置) ----
         self.main_tabs = QTabWidget()
         self.main_tabs.addTab(tab_a, t("我的版本", "Versions"))
+        # 实例详情:放在「我的版本」右边;未选择实例时隐藏,选择后出现(带滑入/淡入动画)
+        from instance_manager import InstanceManagerDialog
+        self.instance_details = InstanceManagerDialog()
+        self.instance_details.setObjectName("instance_details")
+        self._inst_details_tab_idx = self.main_tabs.addTab(
+            self.instance_details, t("实例详情", "Instance Details"))
+        self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
+        tab_a.instance_selected.connect(self._on_instance_selected)
         self.main_tabs.addTab(self.resource_center, t("下载新资源", "Resources"))
         # 设置:改成"和下载新资源平级的标签卡",左菜单(游戏/界面/AI/镜像源)+ 右面板(非模态,引导遮罩可用)
         from settings_center import SettingsCenter
@@ -1608,10 +1616,48 @@ class MainWindow(QMainWindow):
         self._run_download(worker)
 
     def open_instance_manager(self, inst):
-        """打开实例管理对话框(Mod/数据包/光影/YSM/TACZ/KubeJS/备份存档)"""
-        from instance_manager import InstanceManagerDialog
-        dlg = InstanceManagerDialog(inst, paths.GAME_DIR, self)
-        dlg.exec()
+        """打开「实例详情」:改为切到「实例详情」标签页(非模态)并填充该实例。"""
+        if inst is None:
+            self._hide_instance_details()
+            return
+        self._show_instance_details(inst, switch=True)
+
+    def _on_instance_selected(self, inst):
+        """首页选中实例变化 → 显示/隐藏「实例详情」标签页(带滑入动画)。"""
+        if inst is None:
+            self._hide_instance_details()
+        else:
+            self._show_instance_details(inst, switch=False)   # 选中即可见,不强制跳到该页
+
+    def _show_instance_details(self, inst, switch: bool):
+        self.instance_details.set_instance(inst, paths.GAME_DIR)
+        was_hidden = not self.main_tabs.isTabVisible(self._inst_details_tab_idx)
+        self.main_tabs.setTabVisible(self._inst_details_tab_idx, True)
+        if was_hidden:
+            self._animate_instance_details_in()
+        if switch:
+            self.main_tabs.setCurrentIndex(self._inst_details_tab_idx)
+
+    def _hide_instance_details(self):
+        self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
+
+    def _animate_instance_details_in(self):
+        """标签页出现动画:淡入 + 轻微上浮(标签栏右侧其它标签右移由 QTabWidget 重排完成)。"""
+        try:
+            from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation
+            from PySide6.QtWidgets import QGraphicsOpacityEffect
+            w = self.instance_details
+            eff = QGraphicsOpacityEffect(w)
+            w.setGraphicsEffect(eff)
+            anim = QPropertyAnimation(eff, b"opacity", self)
+            anim.setDuration(320)
+            anim.setStartValue(0.0)
+            anim.setEndValue(1.0)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._inst_anim = anim
+        except Exception:
+            pass
 
     def _home_open_instance_manager(self, inst):
         """「我的版本」首页 → 实例设置/版本设置 需要打开实例管理时调用。

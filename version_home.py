@@ -275,6 +275,7 @@ class VersionHome(QWidget):
     login_changed = Signal()
     one_click_config_requested = Signal(str)  # "bridge"/"rcon"/"auto" → 主窗口处理
     tutorial_requested = Signal()            # 打开新手教程
+    instance_selected = Signal(object)       # 选中实例(或 None)→ 主窗口 显示/隐藏「实例详情」标签页
     _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
     _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
 
@@ -327,33 +328,7 @@ class VersionHome(QWidget):
         self.launch_hint.setWordWrap(True)
         lay.addWidget(self.launch_hint)
 
-        # 启动游戏下方:启动器设置(设置核心入口) + 管理 ▾(实例管理/整体设置/版本选择)
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        self.settings_btn = QPushButton(t("启动器设置", "Launcher settings"))
-        self.settings_btn.setStyleSheet(card_btn_style())
-        self.settings_btn.setMinimumHeight(44)
-        self.settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_btn.clicked.connect(self.open_settings_requested.emit)
-        btn_row.addWidget(self.settings_btn, 1)
-
-        self.manage_btn = QToolButton()
-        self.manage_btn.setText(t("管理 ▾", "Manage ▾"))
-        self.manage_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.manage_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.manage_btn.setMinimumHeight(44)
-        self.manage_btn.setStyleSheet(card_btn_style())
-        menu = QMenu(self.manage_btn)
-        menu.addAction(t("实例详情(当前实例)…", "Instance details (current)…"),
-                       self._manage_current)
-        menu.addAction(t("整体设置…", "Overall settings…"),
-                       self.open_settings_requested.emit)
-        menu.addSeparator()
-        menu.addAction(t("版本选择", "Choose version"), self._focus_version_tab)
-        self.manage_btn.setMenu(menu)
-        btn_row.addWidget(self.manage_btn, 1)
-
-        # 一键配置 ▾:集中管理运行配置(一键配置 RCON / 下载并配置 bridge-mod)
+        # 启动游戏下方:一键配置 ▾(设置/实例详情已改为顶部标签页,不再在此放按钮)
         self.config_btn = QToolButton()
         self.config_btn.setText(t("一键配置 ▾", "One-click ▾"))
         self.config_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -372,8 +347,7 @@ class VersionHome(QWidget):
             lambda: self.one_click_config_requested.emit("rcon"))
         rcon_item.setToolTip("临时方案:需要 Lan Server Properties,进世界后按 ESC → 对局域网开放")
         self.config_btn.setMenu(cfg_menu)
-        btn_row.addWidget(self.config_btn, 1)
-        lay.addLayout(btn_row)
+        lay.addWidget(self.config_btn)
 
         # 新手教程入口(第一版效果不够好 → 临时弃用,已隐藏;改用「指引式教程」后再上线)
         self.tutorial_btn = QPushButton(t("📖 新手教程", "Beginner Tutorial"))
@@ -534,7 +508,7 @@ class VersionHome(QWidget):
 
     # ---------- 内部逻辑 ----------
     def _on_selection_changed(self, current, _previous):
-        """选中实例变化 → 更新实例设置卡片 + 启动按钮副标题。"""
+        """选中实例变化 → 更新实例设置卡片 + 启动按钮副标题,并通知主窗口(显示/隐藏「实例详情」标签页)。"""
         inst = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
         self.inst_card.set_instance(inst)
         if inst is not None:
@@ -543,6 +517,7 @@ class VersionHome(QWidget):
             self.launch_hint.setText(t("选择右侧版本后启动", "Pick a version on the right"))
         self.launch_btn.setToolTip(
             inst.get("id", "") if inst is not None else t("先选择实例", "Select an instance first"))
+        self.instance_selected.emit(inst)
 
     def _manage_current(self):
         """「管理 ▾」→ 实例管理:打开当前选中实例的管理对话框。"""

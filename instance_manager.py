@@ -57,20 +57,31 @@ class _DepGraphWorker(QObject):
             self.error.emit(f"{type(e).__name__}: {e}")
 
 
-class InstanceManagerDialog(QDialog):
-    def __init__(self, instance: dict, game_dir: str, parent=None):
+class InstanceManagerDialog(QWidget):
+    """实例详情(可嵌入标签页):无模态,支持 set_instance 复用;也用 `InstanceDetailsView` 别名。"""
+
+    def __init__(self, instance: dict = None, game_dir: str = None, parent=None):
         super().__init__(parent)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self.inst_id = None
+        self.inst_dir = None
+        self.shell = None
+        if instance is not None:
+            self.set_instance(instance, game_dir)
+
+    def set_instance(self, instance: dict, game_dir: str):
+        """(重新)填充某实例的详情:清掉旧 shell,重建左菜单 + 右面板。"""
+        # 清旧内容
+        if self.shell is not None:
+            self._layout.removeWidget(self.shell)
+            self.shell.deleteLater()
         self.inst_id = instance["id"]
         self._inst_base = instance.get("base") or instance["id"]
         self._inst_loader = instance.get("loader")
         self.game_dir = game_dir
         self.inst_dir = os.path.join(game_dir, "versions", instance["id"])
-        self.setWindowTitle(f"实例详情: {self.inst_id}")
-        self.setMinimumSize(620, 480)
-        from ui_style import dialog_dark_style
-        self.setStyleSheet(dialog_dark_style())   # 深色兼容:默认控件(菜单/按钮/列表/下拉)统一深色圆角
 
-        # 实例详情改为「左菜单 + 右面板」(复用 CenterShell,和 下载新资源/设置 同一套布局)
         from center_shell import CenterShell
         self.shell = CenterShell(self, menu_width=150)
         self.shell.add_section("Mod", self._build_mods_tab)
@@ -85,10 +96,7 @@ class InstanceManagerDialog(QDialog):
         self.shell.add_section("指令库", self._build_command_tab)
         self.shell.add_section("运行配置", self._build_config_tab)
         self.shell.add_section("备份·存档", self._build_backup_tab)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.shell)
+        self._layout.addWidget(self.shell)
 
     # ---------- 工具 ----------
     def _mod_files(self) -> list:
