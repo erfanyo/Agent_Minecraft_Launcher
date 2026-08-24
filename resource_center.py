@@ -204,8 +204,26 @@ class ResourceBrowser(QWidget):
         self._icon_visibility_timer.setSingleShot(True)
         self._icon_visibility_timer.timeout.connect(self._enqueue_visible_icons)
         self._icon_visibility_timer.start(120)   # 列表填充/滚动后稍等,等布局稳定再算可见行
+        self._icon_placeholder = self._make_placeholder_icon(44)   # 列表项左侧固定占位(图到前先占住)
 
         self._build_ui()
+
+    @staticmethod
+    def _make_placeholder_icon(size: int = 44):
+        """预置的占位图标(淡灰圆角方块):列表项左侧固定占位,文本从它右侧开始。
+        真图标懒加载后来替换这个占位,文本位置不变(不重排/不跳动)。"""
+        try:
+            from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon
+            pix = QPixmap(size, size)
+            pix.fill(Qt.GlobalColor.transparent)
+            p = QPainter(pix)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            p.setBrush(QColor("#2b2f3a")); p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(1, 1, size - 2, size - 2, 8, 8)
+            p.end()
+            return QIcon(pix)
+        except Exception:
+            return QIcon()
 
     def _build_ui(self):
         # ---- 搜索区 ----
@@ -608,6 +626,8 @@ class ResourceBrowser(QWidget):
             text = f"{h['title']}\n{h.get('description', '')[:60]}" + (f"\n{meta}" if meta else "")
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, h)
+            # 左侧先占一个固定大小的框:文本从它右侧开始,真图标到了才替换(不重排)
+            item.setIcon(self._icon_placeholder)
             self.result_list.addItem(item)
         if not hits and not self.result_list.count():
             QListWidgetItem(t("(没有找到结果)", "(no results)"), self.result_list)
