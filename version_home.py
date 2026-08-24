@@ -54,9 +54,17 @@ _PLANNED_LOGIN = [
 _AVATAR_PALETTE = ["#5B8DEF", "#6BCB77", "#FF6B6B", "#FFD93D", "#B980F0",
                    "#4ECDC4", "#F78FB3", "#82B74B", "#E07B54", "#3E7CB1"]
 
+# 头像尺寸:默认 64,窗口/卡片很小时主动缩小,避免与昵称/登录方式重叠
+_AVATAR_BASE = 64
+_AVATAR_MIN = 28
 
-def _avatar_pixmap(name: str, size: int = 64) -> QPixmap:
-    """按昵称生成一个圆形占位头像(后期接入真实皮肤/头像系统后可替换)。"""
+
+def _avatar_pixmap(name: str, size: int = _AVATAR_BASE) -> QPixmap:
+    """按昵称生成一个圆形占位头像。
+
+    后期接入真实皮肤/头像系统:只要换成按玩家皮肤生成 pixmap(签名同 `(name, size)`),
+    这里即可无缝替换为皮肤头像,无需改动调用方。
+    """
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
@@ -86,6 +94,8 @@ class LoginCard(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._avatar_size = _AVATAR_BASE   # 当前头像尺寸(随窗口自适应)
+        self._name = ""
         self._build_ui()
         self.refresh()
 
@@ -95,7 +105,7 @@ class LoginCard(QWidget):
         self.setStyleSheet(f"#loginCard {{ {panel_style()} }}")
 
         self.avatar_label = QLabel()
-        self.avatar_label.setFixedSize(64, 64)
+        self.avatar_label.setFixedSize(self._avatar_size, self._avatar_size)
         self.avatar_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.name_label = QLabel()
@@ -143,11 +153,38 @@ class LoginCard(QWidget):
         lay.addWidget(self.status_label)
         lay.addWidget(self.login_btn, 0, Qt.AlignmentFlag.AlignCenter)
 
+    def resizeEvent(self, event):
+        """窗口/卡片变小时主动缩小头像与昵称字号,避免与下方信息重叠。"""
+        super().resizeEvent(event)
+        self._apply_avatar_size()
+
+    def _apply_avatar_size(self):
+        """按卡片可用空间计算合适头像尺寸(太小则缩小),并同步昵称字号。
+
+        头像随卡片宽度/高度成比例缩放:空间宽裕 → 回到 64;空间紧张 → 主动缩小,
+        避免头像与昵称/登录方式在小窗口里重叠。"""
+        avail = max(36, min(self.width(), self.height()) - 40)
+        # 0.55 系数:卡片可用空间约 116px 时头像降到 64 以下并继续随空间缩小
+        size = int(round(max(_AVATAR_MIN, min(_AVATAR_BASE, avail * 0.55))))
+        if size != self._avatar_size:
+            self._avatar_size = size
+            self.avatar_label.setFixedSize(size, size)
+            self.avatar_label.setPixmap(_avatar_pixmap(self._name or "Steve", size))
+        # 昵称字号跟随空间:头像很小(空间紧张)时缩小文字,恢复时回到默认
+        if size <= 40:
+            fs = max(12, int(size * 0.36))
+            self.name_label.setStyleSheet(
+                f"font-weight: bold; font-size: {fs}px; color: {text_color()};")
+        else:
+            self.name_label.setStyleSheet(
+                f"font-weight: bold; font-size: 17px; color: {text_color()};")
+
     def refresh(self):
         """根据最新设置刷新:头像/昵称/登录方式。"""
         self._settings = load_settings()
         name = self._settings.get("username", "Steve") or "Steve"
-        self.avatar_label.setPixmap(_avatar_pixmap(name, 64))
+        self._name = name
+        self.avatar_label.setPixmap(_avatar_pixmap(name, self._avatar_size))
         self.name_label.setText(name)
         method = self._settings.get("login_method", LOGIN_OFFLINE)
         if method == LOGIN_OFFLINE:
