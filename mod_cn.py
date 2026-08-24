@@ -5,7 +5,19 @@
 参考 PCL2 的做法:平台 API 只认英文 slug,中文名靠本地库翻译。
 这里维护一份常用 Mod 的对照表(起步 60+ 个,以后随用随加)。
 搜索含中文的关键词时,先查这个库,把中文名映射成 slug,再去 Modrinth 取详情。
+
+数据来源(2026-08-24 决策采用 PCL WikiEntries 派生数据):
+- 库根 `mod_cn_ext.json`:派生自 PCL(PCL2) `PCLCS/Resource/WikiEntries.txt` 的
+  「Modrinth slug ↔ 中文名」事实性译名(~4.6k 条)。文件头 `_meta` 记录 source /
+  attribution / license(source-available)等,详见该文件。
+- 合并规则:**人工 curated 的 `CN_NAMES` 优先级最高**,`mod_cn_ext.json` 只补充
+  `CN_NAMES` 未命中且干净者,**绝不覆盖** curated。合并后的视图懒加载,对外接口
+  `find_slugs_by_cn` / `has_cjk` 保持不变。
 """
+import json
+import os
+
+# 人工 curated:最高优先级,永远不被外部表覆盖。
 CN_NAMES = {
     # ---- 性能优化 ----
     "sodium": "钠 (Sodium)",
@@ -83,6 +95,48 @@ CN_NAMES = {
     "enderchests": "末影箱子 (EnderChests)",
 }
 
+_EXT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mod_cn_ext.json")
+
+# 合并后的懒加载缓存(仅当成功读到 mod_cn_ext.json 时才填充)
+_EXT_CACHE = None
+
+
+def _load_ext():
+    """懒加载 mod_cn_ext.json,返回 {slug: name} 或 {}。
+    只补充 CN_NAMES 未命中者,curated 优先;文件缺失/损坏则返回空。"""
+    global _EXT_CACHE
+    if _EXT_CACHE is not None:
+        return _EXT_CACHE
+    merged = {}
+    try:
+        if os.path.exists(_EXT_FILE):
+            with open(_EXT_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = data.get("entries", {}) if isinstance(data, dict) else {}
+            for slug, info in entries.items():
+                if not isinstance(slug, str) or not slug:
+                    continue
+                name = info.get("name") if isinstance(info, dict) else None
+                if not name or not isinstance(name, str):
+                    continue
+                # curated 优先:CN_NAMES 已有该 slug 则不覆盖
+                if slug in CN_NAMES:
+                    continue
+                merged[slug] = name
+    except Exception:
+        merged = {}
+    _EXT_CACHE = merged
+    return merged
+
+
+def merged_names():
+    """返回合并后的 {slug: 中文名};curated 优先,外部表只补未命中者。"""
+    names = dict(CN_NAMES)
+    for slug, name in _load_ext().items():
+        if slug not in names:
+            names[slug] = name
+    return names
+
 
 def has_cjk(text: str) -> bool:
     """判断文本里是否含中文(CJK 统一表意文字)"""
@@ -90,10 +144,12 @@ def has_cjk(text: str) -> bool:
 
 
 def find_slugs_by_cn(query: str) -> list:
-    """用中文名(或其片段)查库,返回匹配的 Modrinth slug 列表"""
+    """用中文名(或其片段)查库,返回匹配的 Modrinth slug 列表。"""
     q = query.strip().lower()
     hits = []
-    for slug, cn in CN_NAMES.items():
-        if q in cn.lower() or cn.lower() in q:
+    # 用合并视图(含 mod_cn_ext.json 补充的条目)
+    for slug, cn in merged_names().items():
+        low = cn.lower()
+        if q in low or low in q:
             hits.append(slug)
     return hits
