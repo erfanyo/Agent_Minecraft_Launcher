@@ -425,12 +425,12 @@ class VersionHome(QWidget):
         self.changelog_view.setHtml(
             "<p style='color:#888888'>🔄 正在从 GitHub 拉取更新日志…</p>")
         self.changelog_status.setText(
-            t("来源:github.com/%s/CHANGELOG.md(失败时回退本地)" % "erfanyo/Agent_Minecraft_Launcher",
-              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md (falls back to local)"))
+            t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md",
+              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md"))
         return w
 
     def _load_changelog_async(self):
-        """后台线程拉取更新日志(GitHub 优先,失败回退本地),避免卡 UI。"""
+        """后台线程从 GitHub 拉取更新日志,避免卡 UI。"""
         self.changelog_status.setText(
             t("正在从 GitHub 拉取…", "Fetching from GitHub…"))
         self.changelog_view.setHtml(
@@ -452,13 +452,13 @@ class VersionHome(QWidget):
         """更新日志拉取成功 → 渲染 HTML。"""
         self.changelog_view.setHtml(changelog_html(entries))
         self.changelog_status.setText(
-            t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md(失败时回退本地)",
-              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md (falls back to local)"))
+            t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md",
+              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md"))
 
     def _on_changelog_failed(self, err: str):
-        """GitHub 与本地均无可用更新日志 → 显示友好提示。"""
+        """从 GitHub 拉取失败 → 显示友好提示 + 重试入口。"""
         self.changelog_view.setHtml(
-            "<p style='color:#888888'>暂时拉不到更新日志(GitHub 与本地均不可用)。"
+            "<p style='color:#888888'>暂时拉不到更新日志(网络或 GitHub 不可用)。"
             "<br>可点击右上角「刷新」重试,或检查网络。</p>")
         self.changelog_status.setText(t("拉取失败,请检查网络后点「刷新」",
                                         "Fetch failed, check network and Refresh"))

@@ -15,8 +15,8 @@ CHANGELOG.md 采用 Keep a Changelog + 语义化版本,结构大致为:
     ### 规划
     - ...
 
-数据源:优先走 GitHub(浏览器端/仓库里的最新内容);离线时回退到本地 CHANGELOG.md,
-保证「我的版本」的更新日志页始终有内容可读。
+数据源:从 GitHub 仓库拉取 CHANGELOG.md(不依赖本地文件),失败时由调用方
+显示错误/重试态,保证「我的版本」更新日志页始终用的是线上最新内容。
 
 本模块只负责解析与排版,不依赖 Qt 之外的界面层。
 """
@@ -116,14 +116,14 @@ def fetch_from_github(timeout: int = 15) -> str:
 
 
 def load_changelog(timeout: int = 15) -> list:
-    """获取更新日志:优先 GitHub,失败回退本地 CHANGELOG.md。
+    """只从 GitHub 拉取更新日志(不依赖本地 CHANGELOG.md)。
 
-    返回结构化列表;两者都不可用时返回空列表(UI 渲染空态提示)。
+    返回结构化列表;拉取失败(离线/非 200/空)抛异常,由调用方显示错误/重试态。
     """
     try:
         return parse_changelog_text(fetch_from_github(timeout=timeout))
     except Exception:
-        return parse_changelog()
+        raise
 
 
 def _inline(text: str) -> str:
@@ -134,13 +134,13 @@ def _inline(text: str) -> str:
 def changelog_html(entries: list | None = None) -> str:
     """把解析结果排成一段可在 QTextBrowser 里显示的 HTML。
 
-    entries 缺省时重新解析 CHANGELOG.md。若仍然为空(文件损坏),
+    entries 缺省时重新从 GitHub 拉取。若仍然为空(拉取失败/网络不可用),
     返回一段说明文案,保证「更新日志」页始终有内容可读。
     """
     if entries is None:
-        entries = parse_changelog()
+        entries = parse_changelog_text(fetch_from_github())
     if not entries:
-        return "<p style='color:#888888'>未找到更新日志(CHANGELOG.md 缺失或为空)。</p>"
+        return "<p style='color:#888888'>未找到更新日志(GitHub 拉取失败或为空)。</p>"
 
     parts = ['<html><body style="font-family:Sans-Serif; font-size:13px; color:inherit;">']
     for entry in entries:
