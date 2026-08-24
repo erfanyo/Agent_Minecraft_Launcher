@@ -288,9 +288,8 @@ class MainWindow(QMainWindow):
         self.settings_center.applied.connect(self._on_settings_applied)
         self.main_tabs.addTab(self.settings_center, t("设置", "Settings"))
 
-        # ---- 游戏日志:改为右侧标签页(QDockWidget),和 AI 助手 tab 并列,可拖出成子窗口 ----
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
+        # ---- 游戏日志:已挪进「实例详情」左菜单的「游戏日志」项(不再占右侧 dock) ----
+        self.log_view = self.instance_details.log_view   # 复用实例详情里的常驻日志 view(流持续追加)
 
         # ---- 组装整个窗口 ----
         central = QWidget()
@@ -314,16 +313,7 @@ class MainWindow(QMainWindow):
         self.ai_dock.visibilityChanged.connect(self._on_ai_visibility)
         self.ai_dock.show()
 
-        # 游戏日志 dock(标签页,和 AI 并列)
-        self.log_dock = QDockWidget(t("游戏日志", "Game Log"), self)
-        self.log_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
-        self.log_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable
-                                  | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-                                  | QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        self.log_dock.setWidget(self.log_view)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.log_dock)
-        self.tabifyDockWidget(self.ai_dock, self.log_dock)   # 并成一个 tab:点击标签切换 AI/日志
-        self.log_dock.hide()
+        # 游戏日志已挪进实例详情,不再有独立 dock(AI 助手单独在右侧作标签页)
 
         # ---- AI 助手被 × / 隐藏时:收窄成贴在右边缘的小条(留「展开」) ----
         self._build_ai_strip()
@@ -996,10 +986,8 @@ class MainWindow(QMainWindow):
             return
 
         # 3) 展开日志面板,显示要执行的命令(方便你理解"启动"到底是什么)
+        # 3) 清空并写入要执行的命令到游戏日志(在「实例详情 → 游戏日志」里看)
         self.log_view.clear()
-        if hasattr(self, "log_dock") and not self.log_dock.isVisible():
-            self.log_dock.raise_()
-            self.log_dock.show()
         self.log_view.appendPlainText("> " + " ".join(cmd))
         # 首次运行提示:还没生成过完整游戏目录(saves/配置)时告诉用户
         if not os.path.isdir(os.path.join(game_dir, "saves")):
@@ -1090,13 +1078,11 @@ class MainWindow(QMainWindow):
             self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(崩溃守护等)
 
     def _toggle_log(self, checked: bool):
-        """显示/隐藏「游戏日志」标签页(右区 tab)。"""
-        if hasattr(self, "log_dock"):
-            if checked:
-                self.log_dock.raise_()
-                self.log_dock.show()
-            else:
-                self.log_dock.hide()
+        """显示游戏日志:切到「实例详情」标签页并选中「游戏日志」项(若有实例)。"""
+        if getattr(self, "_inst_details_tab_idx", None) is not None:
+            self.main_tabs.setCurrentIndex(self._inst_details_tab_idx)
+        if hasattr(self, "instance_details") and self.instance_details.shell is not None:
+            self.instance_details.shell.switch_by_label("游戏日志")
 
     # ---- 自动 debug:游戏异常退出时收集日志,让 AI 分析 ----
     def _auto_debug(self, code: int):

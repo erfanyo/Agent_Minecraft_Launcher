@@ -67,6 +67,9 @@ class InstanceManagerDialog(QWidget):
         self.inst_id = None
         self.inst_dir = None
         self.shell = None
+        # 游戏日志:常驻(跨 set_instance 复用,不随重建丢失内容)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
         if instance is not None:
             self.set_instance(instance, game_dir)
 
@@ -96,7 +99,16 @@ class InstanceManagerDialog(QWidget):
         self.shell.add_section("指令库", self._build_command_tab)
         self.shell.add_section("运行配置", self._build_config_tab)
         self.shell.add_section("备份·存档", self._build_backup_tab)
+        self.shell.add_section("游戏日志", self._build_log_panel)   # 日志放进实例详情(原为右侧 dock)
         self._layout.addWidget(self.shell)
+
+    def _build_log_panel(self) -> QWidget:
+        """游戏日志面板:承载常驻 log_view(实时流持续追加,切换实例不清空)。"""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.log_view)
+        return w
 
     # ---------- 工具 ----------
     def _mod_files(self) -> list:
