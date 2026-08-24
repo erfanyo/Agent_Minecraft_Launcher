@@ -14,6 +14,7 @@
   fmt = detect_modpack_format(path)  # 'modrinth'/'curseforge'/'flat'/None
   import_modpack(path, game_dir, mc_version='1.20.1', loader='fabric')
 """
+import concurrent.futures
 import json
 import os
 import re
@@ -207,6 +208,52 @@ def suggested_instance_id(path: str) -> str:
     return _safe_name(os.path.splitext(os.path.basename(path))[0])
 
 
+# 并行下载整合包 mod 文件的工作线程数(单个文件失败不中断其它)
+_MOD_DL_WORKERS = 6
+
+
+def _download_mods_parallel(files: list, inst_dir: str,
+                            status_callback=None, progress_callback=None) -> None:
+    """并行下载整合包清单里的文件(Modrinth .mrpack)。逐个文件会慢,这里 6 线程并行。
+
+    - 每个文件一个任务(下载+sha1 校验);单个失败只提示跳过,不中断整体。
+    - progress_callback(done, total)= 按【文件数】的完成进度(每下完一个报一次),直接驱动下载指示器。
+    - status_callback 报"整合包文件 x/N:文件名",让用户看得到在下哪个。
+    """
+    jobs = []
+    for f in files:
+        rel = f.get("path", "")
+        if not rel or rel.startswith("../"):
+            continue
+        dest = os.path.join(inst_dir, rel.replace("/", os.sep))
+        downloads = f.get("downloads") or []
+        if not downloads or os.path.exists(dest):
+            continue
+        jobs.append((f, rel, downloads[0], dest, (f.get("hashes") or {}).get("sha1")))
+    if not jobs:
+        return
+    total = len(jobs)
+
+    def one(job):
+        _f, _rel, url, dest, sha1 = job
+        try:
+            download_with_mirror(url, dest, sha1=sha1)
+            return True, os.path.basename(_rel)
+        except Exception as e:
+            return False, f"{os.path.basename(_rel)} {e}"
+
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=_MOD_DL_WORKERS) as ex:
+        futs = {ex.submit(one, j): j for j in jobs}
+        for fut in concurrent.futures.as_completed(futs):
+            ok, msg = fut.result()
+            done += 1
+            if status_callback:
+                status_callback(("✅ " if ok else "⚠️ ") + f"整合包文件 {done}/{total}:{msg}")
+            if progress_callback:
+                progress_callback(done, total)
+
+
 def import_modpack(path: str, game_dir: str,
                    mc_version: str | None = None,
                    loader: str | None = None,
@@ -308,25 +355,8 @@ def import_modpack(path: str, game_dir: str,
 
         # 4) 按格式放内容
         if index is not None:
-            # Modrinth:下载清单里的文件
-            files = index.get("files", [])
-            for i, f in enumerate(files, 1):
-                rel = f.get("path", "")
-                if not rel or rel.startswith("../"):
-                    continue
-                dest = os.path.join(inst_dir, rel.replace("/", os.sep))
-                downloads = f.get("downloads") or []
-                if not downloads or os.path.exists(dest):
-                    continue
-                if status_callback:
-                    status_callback(f"下载整合包文件 {i}/{len(files)}:{os.path.basename(rel)}")
-                try:
-                    download_with_mirror(downloads[0], dest,
-                                         sha1=(f.get("hashes") or {}).get("sha1"),
-                                         progress_callback=progress_callback)
-                except Exception as e:
-                    if status_callback:
-                        status_callback(f"文件下载失败(跳过):{os.path.basename(rel)} {e}")
+            # Modrinth:并行下载清单里的文件(6 线程,逐文件报进度)
+            _download_mods_parallel(index.get("files", []), inst_dir, status_callback, progress_callback)
 
         # Modrinth + CurseForge 都解压 overrides / client-overrides(直接覆盖进实例的文件)
         if index is not None or cf:
