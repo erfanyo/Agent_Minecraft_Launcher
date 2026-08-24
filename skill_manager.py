@@ -232,8 +232,57 @@ class BridgeModGuide(Skill):
                 "并说明它是测试阶段私有 Mod。")
 
 
+class CloudAIConfigGuide(Skill):
+    """云端 AI 配置指南:让 AI 教用户一步步配好云端模型(DeepSeek/OpenRouter/国内/自定义)"""
+    id = "cloud_ai_config_guide"
+    name = "云端 AI 配置指南"
+    description = ("教用户配置云端 AI(设置 → AI 助手 → 云端块):选服务商 → 自动填接口地址 "
+                   "→ 去平台注册拿 API Key 粘贴 → 填模型名 → **点连接测试/发一条消息验证**。\n"
+                   "覆盖 DeepSeek/OpenRouter/硅基流动/智谱GLM/通义千问/自定义,以及 401/402/404/429\n"
+                   "等失败原因。云端=更强,本地=免费离线;未配云端时「本地优先/混合」仍可用内置本地。")
+    category = "AI 助手"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【云端 AI 配置指南已启用】用户想配置「云端 AI」时,带他按下面步骤做,"
+                "并把**最终结果验证到底**(AI规划 §4.3 验证最终结果):\n"
+                "\n"
+                "① 定位:设置 →「AI 助手」→「云端块」(AI 策略选「云端优先」或「混合」时显示);\n"
+                "② 选「服务商」(下拉 _CLOUD_PROVIDERS:DeepSeek(推荐,便宜好用)/ OpenRouter / "
+                "硅基流动 / 智谱 GLM / 通义千问 / 自定义);\n"
+                "③ 「接口地址」:选服务商后自动填(如 DeepSeek→https://api.deepseek.com/v1),"
+                "别手改除非自定义;custom 让用户自己填;\n"
+                "④ 「API 密钥」:引导用户**去对应平台官网注册**(DeepSeek platform、"
+                "OpenRouter、siliconflow、open.bigmodel.cn、dashscope.aliyuncs.com 等)生成 Key,"
+                "复制粘贴进来(本地/离线模式留空);提醒 Key 是敏感信息、不要外发;\n"
+                "⑤ 「模型」:按服务商自动填默认(DeepSeek→deepseek-chat;OpenRouter→"
+                "deepseek/deepseek-chat-v3-0324:free;硅基流动→Qwen/Qwen2.5-7B-Instruct;"
+                "智谱→glm-4-flash;通义→qwen-plus);也可让用户按需改;\n"
+                "⑥ **验证最终结果(最重要)**:保存后,切到 AI 面板发一条消息,看是否有正常回复;"
+                "或点「🛠 测试工具」/「连接测试」式的自测,确认 Key 真的能用。"
+                "**别只描述流程,要让用户/你确认实际能通**;\n"
+                "⑦ 若用户已有可用 Key 但想换服务商:只需改服务商+Key+模型,地址会自动跟;\n"
+                "\n"
+                "【常见适配】OpenRouter 部分模型**会看图**(图像输入),模型名如 "
+                "`anthropic/claude-3.5-sonnet`;硅基流动/智谱/通义为国内(通常无需翻墙,"
+                "速度/合规更稳);custom 自定义接口(OpenAI 兼容 /v1)。\n"
+                "\n"
+                "【失败路径友好解释(AI规划 §4.5)】按错误码提示,别让用户干等:\n"
+                "- 401 = API Key 无效或未配置 → 检查密钥是否粘全/正确/没多余空格;\n"
+                "- 402 = 账户余额不足 → 提示充值(DeepSeek 按量计费);\n"
+                "- 404 = 接口地址或模型名不存在 → 检查设置的接口地址/模型名;\n"
+                "- 429 = 请求太频繁 → 稍后再试;\n"
+                "- 网络异常/超时 = 查联网、确认接口地址正确(可让用户在浏览器打开该地址验证)。\n"
+                "\n"
+                "【未配云端也能用】若用户没配/配不好云端,「本地优先」或「混合」也能走**内置本地模型**"
+                "(离线免费,首次自动下载约 500MB);云端是「更强」但**可选**的增强项——"
+                "对应定位:**云端=大脑(更强),本地=手(免费离线)**。让用户权衡,别强推。\n"
+                "\n"
+                "【可读文本】用户想直接看教程时,把以上要点整理成一段人类可读说明发给他。")
+
+
 BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit,
-                  BridgeModGuide]
+                  BridgeModGuide, CloudAIConfigGuide]
 
 
 # ================= 管理器 =================
