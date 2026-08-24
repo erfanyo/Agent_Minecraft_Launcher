@@ -95,6 +95,7 @@
 - **启动器 AI 作 MCP 客户端**:`mcp_client.py`(HTTP JSON-RPC 客户端,与 mcp_server 对称)。AI 可调用**外部 MCP 服务器**的工具——`assistant.available_tools(settings)` = 内置 TOOLS + 配置的 MCP 工具(`mcp__服务器__工具`),`build_executor` 路由 `mcp__` 调用到对应服务器。设置→界面「**MCP 客户端**」填入外部服务器 url(逗号分隔)即启用。**自环测试通过**:AI 客户端 → 启动器自己的 `--mcp-http` 服务器 → `list_instances`/`get_settings` 均返回。
 - **崩溃诊断 · 修改意见清单(进阶①)**:新增技能「崩溃诊断·修改意见清单」——AI 诊断崩溃/异常时,先读日志(`read_instance_log`)与崩溃报告(`read_crash_report`),然后输出**结构化【修改意见清单】**(每条 = 改什么 + 为什么/怎么做,按严重度排序 + 1~2 条「先试」兜底 + 保留类名/Mod 名/路径),不再只给一段话。
 - **MCP 客户端·模型侧接线(补全闭环)**:之前 `available_tools(settings)` 已实现但**没接进请求的 `body["tools"]`**,导致模型"看不见"外部 MCP 工具、选不到。现在 `mount_tools_for(text, settings)` 在截断之后**追加**配置的 MCP 工具 schema(不超限也不砍掉),云端请求即带上 `mcp__服务器__工具`。自环实测:AI→启动器 `--mcp-http`→`mcp__amcl__list_instances` 返回真实实例列表;`available_tools` 由 20 → 39(含 19 个 MCP 工具)。
+- **MCP 客户端支持 stdio 传输(接 MC 资料库 MCP)**:调研发现**几乎没有公网托管的 HTTP MC 资料库 MCP**(唯一托管实例 `minecraft-wiki-mcp.goett.top/mcp` 实测间歇 403、限流不可靠),可靠的是**本地 stdio**。于是给 `mcp_client.py` 加 `MCPStdioClient`(一行一个 JSON-RPC 消息,逐行读写子进程 stdin/stdout),`connect_mcp_clients` 支持 `{transport:'stdio', command:...}`(命令字符串用 shlex 拆,支持带空格的路径/quoted)。HTTP 客户端补上 Streamable-HTTP 必需的 `Accept: application/json, text/event-stream` 头 + `Mcp-Session-Id` 会话透传。**设置→界面 MCP 客户端**框改为用 `;` 分隔(兼容旧逗号),每条两种写法:`http://…/mcp` 或 `名字>=本地命令`(如 `mcwiki>=uvx mc-wiki-fetch-mcp`)。自环实测:stdio 客户端→启动器 `--mcp` 服务器→19 个工具、`list_instances` 调用成功。
 
 ### 🧩 Mod 依赖网络(灵感 #5,简单版)
 - 实例管理 → Mod 页新增「**Mod 依赖网络**」:离线解析该实例各 mod jar 的依赖/冲突,画成一张"谁依赖谁"的网
