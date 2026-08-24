@@ -181,13 +181,17 @@ def _model_downloaded() -> bool:
 
 def _external_config() -> tuple:
     """读外部 OpenAI 兼容引擎设置(如 LM Studio 的 9B):(base, model)。
-    设置键 ai_local_base / ai_local_model;空 = 用内置 llama-server。"""
+    设置键 ai_local_mode(内置查 'lmstudio'/'ollama')+ ai_local_endpoint / ai_local_model;
+    非 lmstudio 且无 endpoint → 返回 ('','') 用内置 llama-server。"""
     try:
         from settings import load_settings
         s = load_settings()
-        base = (s.get("ai_local_base") or "").strip()
+        mode = (s.get("ai_local_mode") or "builtin")
+        base = (s.get("ai_local_endpoint") or "").strip()
         model = (s.get("ai_local_model") or "").strip()
-        return base, model
+        if mode in ("lmstudio", "ollama") or (base and model):
+            return base, model
+        return "", ""
     except Exception:
         return "", ""
 
