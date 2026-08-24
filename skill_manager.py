@@ -232,6 +232,34 @@ class BridgeModGuide(Skill):
                 "并说明它是测试阶段私有 Mod。")
 
 
+class CrossLoaderModGuide(Skill):
+    """非主流/跨加载器 Mod 检查:AI 判断兼容性/缺失依赖时不要想当然
+    (例: voxy 本是 Fabric mod,却有 GitHub 上的非官方 NeoForge 版)"""
+    id = "cross_loader_mod_guide"
+    name = "非主流 Mod 兼容性检查"
+    description = ("提醒 AI:存在「同名但跨加载器」的非主流 Mod(如 Fabric 专属 mod 有非官方的 "
+                   "NeoForge/Forge 移植版,常见于 GitHub/CurseForge),以及「Fabric Mod 被转译到 "
+                   "Forge/NeoForge、把 fabric-api 换成 Forge 等价物」的可能。"
+                   "判断某个 Mod 在指定加载器上有没有时,先检查是否有社区移植版,别过早说'没有'。")
+    category = "AI 助手"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【非主流/跨加载器 Mod 检查已启用】给用户判断 Mod 兼容性、缺失依赖、'某加载器上有没有这个 Mod'时,"
+                "先别下结论,注意三种可能:\n"
+                "- **同名跨加载器的非官方版**:很多 Mod 本是某一加载器专属,但有人在社区出过另一加载器的移植版"
+                "(常见于 GitHub / CurseForge,文件名常带 `-forge`、`-neoforge` 后缀,大概率**非官方**)。"
+                "例:`voxy` 本是 **Fabric** 优化 Mod,却存在 GitHub 发布的 **NeoForge** 版(非官方版,不稳定)。\n"
+                "- **存在'转译/迁移'的可能**:有些 Fabric Mod 被迁移(transpiled)到 Forge/NeoForge,"
+                "会把 `fabric-api` 依赖换成 Forge 等价物,或直接内嵌进移植版。"
+                "所以**'缺 fabric-api' 不一定真缺**——可能是被移植版内嵌或等价替代,别急着报'装了 A 缺 B'。\n"
+                "- **提示策略**:当某 Mod 在当前加载器上'找不到/没适配'时,应向用户说明"
+                "'可能只有 Fabric 原版,但有非官方 NeoForge/Forge 移植版(会更易出 bug、不随原版更新)'"
+                "让用户自己决定是否装非官方版;若用户想装,提醒其风险。\n"
+                "判断前可先用 search_mods / translate_mod_desc / 读实例 mods 核对该 Mod 的真实加载器与依赖,"
+                "不要凭印象断定。")
+
+
 class CloudAIConfigGuide(Skill):
     """云端 AI 配置指南:让 AI 教用户一步步配好云端模型(DeepSeek/OpenRouter/国内/自定义)"""
     id = "cloud_ai_config_guide"
@@ -282,7 +310,7 @@ class CloudAIConfigGuide(Skill):
 
 
 BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit,
-                  BridgeModGuide, CloudAIConfigGuide]
+                  BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide]
 
 
 # ================= 管理器 =================

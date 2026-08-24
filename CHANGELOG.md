@@ -27,6 +27,9 @@
 - **云端 token 优化**:工具按需挂载(每轮输入 -63%)+ max_tokens 限长 + 结构利于 DeepSeek 前缀缓存
 - AI 面板:策略快捷切换按钮;未选模型时隐藏发送/自测;输出语言跟随界面;长回答首行摘要+展开
 - 新增「bridge-mod 指南」技能:AI 认知内置私有 Mod(用途/支持范围/装法/测试阶段)
+- 新增「**非主流 Mod 兼容性检查**」技能:提醒 AI 判断某 Mod 在某加载器有没有时,先查"同名跨加载器非官方版"
+  (如 Fabric 的 `voxy` 有 GitHub 上非官方的 NeoForge 版)+ "Fabric mod 被转译到 Forge/NeoForge、把
+  `fabric-api` 换成 Forge 等价物"的可能;别急着下结论"没有/缺 fabric-api"。
 
 ### 🔤 Mod 描述翻译(本地 AI)
 - 93 条 MC 标准译名术语表 + 本地翻译引擎(复用 chat 通道,temp 0.1)
