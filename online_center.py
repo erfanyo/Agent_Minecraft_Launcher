@@ -28,6 +28,11 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import t
+from ui_style import card_btn_style, muted_color, panel_style
+
+
+def _open_url(url: str):
+    QDesktopServices.openUrl(QUrl(url))
 
 # --------------------------------------------------------------------------
 # 现有方案卡片(按场景 tab)
@@ -520,13 +525,11 @@ def build_tutorials_tab() -> QWidget:
 # --------------------------------------------------------------------------
 # 联机方案中心对话框
 # --------------------------------------------------------------------------
-class OnlineCenterDialog(QDialog):
-    """联机方案中心:帮我推荐(向导) + 各方案卡片 + 教程与资料"""
+class OnlineCenter(QWidget):
+    """联机方案中心(标签页版,卡片形式):帮我推荐(向导) + 各方案卡片 + 教程与资料"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("联机方案中心")
-        self.setMinimumSize(620, 500)
 
         intro = QLabel(
             "怎么选:\n"
@@ -541,7 +544,7 @@ class OnlineCenterDialog(QDialog):
         self.wizard = RecommendWizard(self._view_tutorial)
         self.tabs.addTab(self.wizard, t("帮我推荐", "Recommend"))
 
-        # 现有方案卡片 tab
+        # 现有方案卡片 tab(card 形式)
         for title, items in SCHEMES:
             self.tabs.addTab(self._build_tab(title, items), title.split("(")[0].strip())
 
@@ -550,6 +553,7 @@ class OnlineCenterDialog(QDialog):
         self.tabs.addTab(build_tutorials_tab(), t("教程与资料", "Tutorials"))
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(intro)
         layout.addWidget(self.tabs, 1)
 
@@ -558,35 +562,46 @@ class OnlineCenterDialog(QDialog):
         if hasattr(self, "tabs"):
             self.tabs.setCurrentIndex(self._tut_index)
 
+    def _card(self, name: str, desc: str, url: str) -> QWidget:
+        """方案卡片:名称 + 描述 + 打开官网,点击卡片也可打开。"""
+        c = QWidget()
+        c.setStyleSheet(panel_style())
+        lay = QVBoxLayout(c)
+        lay.setContentsMargins(12, 10, 12, 10)
+        name_label = QLabel(name)
+        name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        desc_label = QLabel(desc)
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet(f"color: {muted_color()};")
+        open_btn = QPushButton(t("打开官网", "Open website"))
+        open_btn.setFixedWidth(90)
+        open_btn.setStyleSheet(card_btn_style())
+        open_btn.clicked.connect(lambda _c, u=url: _open_url(u))
+        c.mousePressEvent = lambda _e, u=url: _open_url(u)   # 点击卡片主题也可打开
+        r = QHBoxLayout()
+        r.addWidget(open_btn)
+        r.addStretch()
+        lay.addWidget(name_label)
+        lay.addWidget(desc_label)
+        lay.addLayout(r)
+        return c
+
     def _build_tab(self, title: str, items: list) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         box = QWidget()
         v = QVBoxLayout(box)
-
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(10)
         head = QLabel(f"—— {title} ——")
         head.setStyleSheet("font-weight: bold; color: #555555;")
         v.addWidget(head)
-
         for name, desc, url in items:
-            name_label = QLabel(name)
-            name_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-            desc_label = QLabel(desc)
-            desc_label.setWordWrap(True)
-            desc_label.setStyleSheet("color: #666666;")
-            open_btn = QPushButton(t("打开官网", "Open website"))
-            open_btn.setFixedWidth(90)
-            open_btn.clicked.connect(lambda _c, u=url: QDesktopServices.openUrl(QUrl(u)))
-
-            row = QHBoxLayout()
-            row.addWidget(open_btn)
-            row.addStretch()
-
-            v.addWidget(name_label)
-            v.addWidget(desc_label)
-            v.addLayout(row)
-            v.addSpacing(8)
-
+            v.addWidget(self._card(name, desc, url))
         v.addStretch()
         scroll.setWidget(box)
         return scroll
+
+
+# 兼容旧引用(原为模态对话框)
+OnlineCenterDialog = OnlineCenter

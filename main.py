@@ -244,30 +244,22 @@ class MainWindow(QMainWindow):
         self._inst_list_action.toggled.connect(
             lambda on: on and self.set_view_mode(self.instance_list, False, "instances"))
 
-        # ---- 设置:和"文件"平级 ----
-        settings_menu = menubar.addMenu(t("设置", "Settings"))
-        settings_menu.addAction(t("设置对话框…", "Settings…"), self.open_settings)
-        settings_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
-        settings_menu.addSeparator()
-        settings_menu.addAction(t("镜像源…", "Mirror Sources…"),
-                                lambda: self.open_settings(tab="mirror"))
+        # 「设置」菜单已移除:设置改为顶部标签卡(同级别的「设置」标签页)。
+        # 「检查更新」移入 帮助 菜单;镜像源 在 设置→界面 也有,入口并入。
 
         # ---- AI 助手:顶级菜单(和"查看"同级,更显眼) ----
         ai_menu = menubar.addMenu("AI")
         self._ai_show_action = ai_menu.addAction(t("显示 AI 助手", "Show AI Assistant"))
         self._ai_show_action.setCheckable(True)
         self._ai_show_action.toggled.connect(self._toggle_ai)
-        # AI 设置入口已移除(进设置对话框);技能管理入口已移到 AI 子窗口顶部;
+        # AI 设置入口已移除(进设置标签页);技能管理入口已移到 AI 子窗口顶部;
         # 「发送游戏指令…」入口已隐藏:由指令中心 skill 与 bridge-mod 的新通道替代
-        # 帮助菜单已移除:其中"检查更新"与设置菜单里的重复(设置 → 检查更新…)
 
-        # ---- 联机方案中心(灵感 #2):按场景推荐联机方案 ----
-        online_menu = menubar.addMenu(t("联机", "Multiplayer"))
-        online_menu.addAction(t("联机方案中心…", "Multiplayer Center…"), self.open_online_center)
+        # 「联机」菜单已移除:改为「下载新资源」右侧的「联机」标签卡(卡片形式)。
         # 新手教程入口已隐藏(2026-08-25):第一版效果不够好,临时弃用,
         # 改为「引导式教程」(箭头+文本指向真实 UI,用 UI 路由定位)后再上线。
-        # 引导式教程演示:帮助 → 引导教程(演示)…;仅保留 设置→界面→已弃用功能 里的临时入口。
         help_menu = menubar.addMenu(t("帮助", "Help"))
+        help_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
         help_menu.addAction(t("📖 引导教程(演示)…", "Guided Tutorial (Demo)…"), self.open_guide_demo)
 
         # ---- Tab「我的版本」:仿 PCL2 首页(左 1/3 登录+实例设置+启动按钮,右 2/3 版本/更新日志/动态) ----
@@ -318,6 +310,11 @@ class MainWindow(QMainWindow):
         self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
         tab_a.instance_selected.connect(self._on_instance_selected)
         self.main_tabs.addTab(self.resource_center, t("下载新资源", "Resources"))
+        # 联机方案中心:改为「下载新资源」右侧的标签卡(卡片形式)
+        from online_center import OnlineCenter
+        self.online_center = OnlineCenter()
+        self.online_center.setObjectName("online_center")
+        self._online_tab_idx = self.main_tabs.addTab(self.online_center, t("联机", "Multiplayer"))
         # 设置:改成"和下载新资源平级的标签卡",左菜单(游戏/界面/AI/镜像源)+ 右面板(非模态,引导遮罩可用)
         from settings_center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
@@ -430,9 +427,9 @@ class MainWindow(QMainWindow):
         self.ai_dock.setVisible(checked)
 
     def open_online_center(self):
-        """打开联机方案中心(虚拟局域网/内网穿透/联机 Mod/官方方案)"""
-        from online_center import OnlineCenterDialog
-        OnlineCenterDialog(self).exec()
+        """打开联机方案中心:改为切到「联机」标签卡(卡片形式,非模态)"""
+        if hasattr(self, "_online_tab_idx"):
+            self.main_tabs.setCurrentIndex(self._online_tab_idx)
 
     def open_tutorial(self):
         """打开新手教程(模块化:内容 tutorial_content.py / 渲染 tutorial_gui.py,与 UI 解耦)"""
