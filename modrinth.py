@@ -178,6 +178,7 @@ def _find_version(slug: str, game_version: str | None, loader: str | None,
         "filename": f.get("filename", "mod.jar"),
         "url": f.get("url", ""),
         "size": f.get("size", 0),
+        "sha1": (f.get("hashes") or {}).get("sha1"),   # Modrinth 提供,下载后完整性校验
         "dependencies": v.get("dependencies", []),
     }
 
@@ -209,5 +210,6 @@ def download_mod(slug: str, game_version: str, loader: str, mods_dir: str,
         return None
     os.makedirs(mods_dir, exist_ok=True)
     dest = os.path.join(mods_dir, info["filename"])
-    download_with_mirror(info["url"], dest, progress_callback=progress_callback)
+    download_with_mirror(info["url"], dest, sha1=info.get("sha1"),
+                         progress_callback=progress_callback)
     return info["filename"]
