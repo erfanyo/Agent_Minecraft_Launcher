@@ -298,6 +298,8 @@ class MainWindow(QMainWindow):
 
         # ---- 启动器日志:已作为「我的实例 → 启动器日志」子标签页(与 MC 动态同级) ----
         self.log_view = tab_a.log_view   # 复用首页子标签页里的常驻日志 view(流持续追加)
+        # 启动器尽可能把所有反馈(状态/异常/操作)记进日志,方便 AI 定位问题
+        self._log_feedback_setup()
 
         # ---- 组装整个窗口 ----
         central = QWidget()
@@ -457,20 +459,28 @@ class MainWindow(QMainWindow):
         TutorialDialog(self).exec()
 
     def open_guide_demo(self):
-        """引导式教程演示:spctlight 遮罩 + 箭头 + 文本,用 UI 路由定位真实控件,一步步引导。
-        (模块化:步骤=数据 {route,arrow,text};框架 guide_overlay.GuideDriver + ui_route.resolve)"""
+        """打开引导式新手教程(正式步骤):spctlight + 箭头 + 文本,用 UI 路由指向真实界面。"""
         from guide_overlay import GuideDriver
 
         steps = [
-            {"route": [("maintab", "我的版本"), ("btn", "启动游戏")],
+            {"route": [("maintab", "我的实例"), ("btn", "启动游戏")],
              "arrow": "below",
-             "text": "① 先在右侧实例列表里选中想玩的实例,再点这个「启动游戏」大按钮,就能进游戏。"},
-            {"route": [("maintab", "我的版本"), ("btn", "启动器设置")],
+             "text": "① 在右侧「实例」列表挑一个想玩的实例,再点这个「启动游戏」大按钮就进游戏了。"},
+            {"route": [("maintab", "我的实例"), ("btn", "导入整合包")],
              "arrow": "below",
-             "text": "② 这里是「启动器设置」:改内存、游戏目录、界面模式(全面/摘要)、AI 助手、镜像源。"},
+             "text": "② 已有整合包(.mrpack / .zip)?点「导入整合包」,自动导入成一个新实例。"},
+            {"route": [("maintab", "我的实例"), ("btn", "一键配置")],
+             "arrow": "below",
+             "text": "③ 「一键配置」:一键装 bridge-mod(游戏内指令口/配方导出,推荐)或临时 RCON。"},
             {"route": [("maintab", "下载新资源"), ("btn", "Mod")],
              "arrow": "below",
-             "text": "③ 下载新资源:像逛商场一样挑 Mod / 光影 / 数据包 / 资源包 / 整合包,选个目标实例就能装。"},
+             "text": "④ 下载新资源:像逛商场,挑 Mod / 光影包 / 数据包 / 资源包 / 整合包。"},
+            {"route": [("maintab", "设置"), ("btn", "界面")],
+             "arrow": "below",
+             "text": "⑤ 设置 → 界面:切「全面 / 摘要」界面模式、自定义配色、检查更新、重播本教程。"},
+            {"route": [("maintab", "联机"), ("btn", "首页")],
+             "arrow": "below",
+             "text": "⑥ 联机:按场景推荐联机方案(虚拟局域网不用同一WiFi/内网穿透/联机Mod)。"},
         ]
         self._guide_driver = GuideDriver(self, steps)
         self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))
@@ -804,6 +814,44 @@ class MainWindow(QMainWindow):
         self._busy_download(False)
         self.load_versions()
         self.refresh_instances()
+
+    def _log_feedback_setup(self):
+        """启动器反馈进日志:状态栏消息 + 未捕获异常 → 「启动器日志」(并写文件供 AI 读取)。"""
+        self.log_view.setMaximumBlockCount(20000)
+        self.statusBar().messageChanged.connect(
+            lambda m: self._log_feedback(m, "状态"))
+        # 日志文件(供 AI 定位问题读取):.minecraft/logs/launcher.log
+        try:
+            self._launcher_log_path = os.path.join(paths.GAME_DIR, "logs", "launcher.log")
+            os.makedirs(os.path.dirname(self._launcher_log_path), exist_ok=True)
+        except Exception:
+            self._launcher_log_path = None
+        # 未捕获异常 → 记录(主线程);worker 线程由各自 try/except 报
+        import sys as _sys
+        _sys.excepthook = self._excepthook
+
+    def _log_feedback(self, text, tag="", force=False):
+        """把一条反馈写进「启动器日志」(线程安全:经 QTimer 回主线程 append)+ 日志文件。"""
+        text = (text or "").strip()
+        if not text:
+            return
+        line = f"[{time.strftime('%H:%M:%S')}]{(' ' + str(tag)) if tag else ''} {text}"
+        def _ap():
+            self.log_view.appendPlainText(line)
+            self.log_view.verticalScrollBar().setValue(
+                self.log_view.verticalScrollBar().maximum())
+            if self._launcher_log_path:
+                try:
+                    with open(self._launcher_log_path, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except Exception:
+                    pass
+        QTimer.singleShot(0, _ap)
+
+    def _excepthook(self, etype, evalue, tb):
+        import traceback
+        self._log_feedback("未捕获异常:\n" + "".join(traceback.format_exception(etype, evalue, tb)),
+                           "异常", force=True)
 
     def _place_download_ball(self):
         """把下载悬浮球摆到内容区右下角:AI 停靠时在 AI dock 左侧(主窗口侧外部),不占底部。
