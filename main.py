@@ -404,6 +404,33 @@ class MainWindow(QMainWindow):
         dlg = UpdateDialog(self)
         dlg.exec()
 
+    def nativeEvent(self, eventType, message):
+        """Windows:WM_NCHITTEST → 无边框窗口四边/四角均可拉拽缩放;并补齐任务栏最小化样式。"""
+        if sys.platform == "win32" and eventType == b"windows_generic_MSG":
+            import ctypes
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0084:   # WM_NCHITTEST
+                if not (self.isMaximized() or self.isFullScreen()):
+                    lparam = int(msg.lParam)
+                    sx = ctypes.c_short(lparam & 0xFFFF).value
+                    sy = ctypes.c_short((lparam >> 16) & 0xFFFF).value
+                    from win_frameless import hit_test
+                    hit = hit_test(int(self.winId()), sx, sy)
+                    if hit != 1:
+                        return True, hit
+        return super().nativeEvent(eventType, message)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if sys.platform == "win32" and getattr(self, "_win_patched", False) is False:
+            try:
+                from win_frameless import apply_win_styles
+                apply_win_styles(int(self.winId()))
+                self._win_patched = True
+            except Exception:
+                pass
+
     def closeEvent(self, event):
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
         if hasattr(self, "ai_dock"):
