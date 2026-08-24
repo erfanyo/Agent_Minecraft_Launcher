@@ -563,13 +563,14 @@ class MainWindow(QMainWindow):
         def worker(status_cb, progress_cb):
             try:
                 dbg("worker: import_modpack_file BEGIN")
-                instance_id = import_modpack_file(path, paths.GAME_DIR,
-                                                 mc_version=mc_version, loader=loader,
-                                                 instance_id=instance_id,
-                                                 status_callback=status_cb,
-                                                 progress_callback=progress_cb)
-                dbg(f"worker: import_modpack_file OK -> {instance_id}")
-                status_cb(f"整合包导入完成:{instance_id} ✅")
+                # 注意:返回变量用 done_id,避免和闭包里的 instance_id 同名导致 UnboundLocalError
+                done_id = import_modpack_file(path, paths.GAME_DIR,
+                                             mc_version=mc_version, loader=loader,
+                                             instance_id=instance_id,
+                                             status_callback=status_cb,
+                                             progress_callback=progress_cb)
+                dbg(f"worker: import_modpack_file OK -> {done_id}")
+                status_cb(f"整合包导入完成:{done_id} ✅")
             except Exception as e:
                 dbg(f"worker: import_modpack_file EXC: {type(e).__name__}: {e}\n{_tb.format_exc()}")
                 status_cb(f"❌ 整合包导入失败:{type(e).__name__}: {e}")
