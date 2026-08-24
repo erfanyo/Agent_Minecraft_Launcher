@@ -1401,10 +1401,8 @@ class AIChatDock(QDockWidget):
         self.input.recentClicked.connect(self._pick_recent_screenshots)
         # 浮动/停靠使用 QDockWidget 标题栏右上角自带的浮动按钮(与系统行为整合)
 
-        # 顶部:标题 + 当前模型/多模态徽标 + 技能管理入口
-        self.title_label = QLabel("AI 助手")
-        self.title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        # 模型策略按钮:可点击切换 AI 策略三档(本地优先/云端优先/混合),并显示当前档
+        # 顶部:标题由 dock 边框自带(不再在面板内重复显示 "AI 助手");
+        # 这里直接放 策略切换 + 本地模型状态 + 技能管理。模型策略按钮:可点击切换 AI 策略三档。
         self.strategy_btn = QToolButton()
         self.strategy_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.strategy_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1421,11 +1419,8 @@ class AIChatDock(QDockWidget):
             "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"
             " border-radius: 6px; padding: 3px 8px; }"
             "QPushButton:hover { color: #ffffff; border-color: #5B8DEF; }")
-        title = self.title_label
         top_row = QHBoxLayout()
         top_row.setContentsMargins(2, 0, 2, 0)
-        top_row.addWidget(title)
-        top_row.addSpacing(6)
         top_row.addWidget(self.strategy_btn)
         # 本地模型状态(未下载/下载中/已就绪/推理中),仅本地 provider 时显示
         self.local_status_label = QLabel("")
