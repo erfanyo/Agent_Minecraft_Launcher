@@ -149,15 +149,19 @@ class SettingsDialog(QDialog):
         lang_hint = QLabel("切换语言后需重启启动器生效(检测系统语言:中文系统自动用中文)")
         lang_hint.setStyleSheet("color: #888888;")
 
-        # 界面模式(新手多提示 / 专家少提示)
+        # 界面模式(全面:多提示/科普;摘要:精简) —— 对外叫「全面 / 摘要」,
+        # 不用「新手 / 专家」(免得显得看不起新手)。值保持 beginner/expert 兼容旧配置。
         self.ui_mode_combo = QComboBox()
-        for label, value in (("新手(显示更多提示与科普)", "beginner"),
-                             ("专家(精简提示)", "expert")):
+        for label, value in ((t("全面(显示更多提示与科普)", "Full (more tips & guides)"), "beginner"),
+                             (t("摘要(精简提示)", "Summary (concise)"), "expert")):
             self.ui_mode_combo.addItem(label, value)
         mode = self.settings.get("ui_mode", "beginner")
         idx = self.ui_mode_combo.findData(mode)
         self.ui_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        mode_hint = QLabel("新手模式:首页显示资源结构科普、更详细的状态提示;专家模式:全部隐藏/精简。")
+        mode_hint = QLabel(t(
+            "全面:首页显示资源结构科普、更详细的状态提示;摘要:隐藏科普、精简提示。",
+            "Full: shows resource guide & detailed hints; Summary: hides them (concise)."))
+        mode_hint.setWordWrap(True)
         mode_hint.setStyleSheet("color: #888888;")
         mode_hint.setWordWrap(True)
 

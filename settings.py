@@ -18,7 +18,9 @@ DEFAULTS = {
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
     "language": "auto",          # 界面语言:auto(跟随系统)/ zh / en(见 i18n.py)
-    "ui_mode": "beginner",       # 界面模式:beginner(新手,多提示/科普)/ expert(专家,精简)
+    "ui_mode": "beginner",       # 界面模式:beginner=全面(多提示/科普)/ expert=摘要(精简)。
+                                 # 对外显示名叫「全面 / 摘要」(不用"新手/专家",免得显得看不起新手);
+                                 # 值保持 beginner/expert 以兼容旧配置。
     # AI 助手(OpenAI 兼容接口)
     "ai_provider": "deepseek",
     "ai_base_url": "https://api.deepseek.com/v1",

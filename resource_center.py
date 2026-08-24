@@ -49,7 +49,8 @@ RESOURCE_CATEGORIES = [
     ("resourcepack", "🎨 资源包", "resourcepacks"),
 ]
 
-# 新手科普:MC 社区资源结构(首页展示,让想自己挑资源的人先看懂"都是些什么")
+# MC 社区资源结构科普(首页展示,让想自己挑资源的人先看懂"都是些什么";
+# ui_mode=全面 时显示,摘要 时隐藏)
 _RESOURCE_GUIDE = [
     "🧩 Mod:修改/扩展游戏玩法(如机械动力、JEI 物品管理器),放进 mods 文件夹,"
     "需要 Fabric/Forge/NeoForge 加载器才能用",
@@ -59,7 +60,7 @@ _RESOURCE_GUIDE = [
     "不需要加载器",
     "🎨 资源包:改纹理/音效/界面外观,不改变玩法,放进 resourcepacks,原版直接支持",
     "📦 整合包:Mod + 配置 + 可选存档的一键合集,适合想直接玩成品的人",
-    "⚡ 辅助 Mod:性能优化(钠/锂)和信息显示(玉/JEI),新手建议先装这些",
+    "⚡ 辅助 Mod:性能优化(钠/锂)和信息显示(玉/JEI),推荐先装这些",
 ]
 
 
@@ -865,7 +866,7 @@ class ResourceCenter(QWidget):
             cards.addWidget(b)
         layout.addLayout(cards)
         layout.addSpacing(18)
-        # 新手科普:MC 社区资源结构(新手模式显示,专家模式隐藏)
+        # MC 资源结构科普(「全面」模式显示,「摘要」模式隐藏;见 set_ui_mode)
         self.guide_title = QLabel(
             t("📚 了解 MC 资源结构(自己挑资源前先看一眼):",
               "MC resource types (read before picking):"))
@@ -882,14 +883,22 @@ class ResourceCenter(QWidget):
         return home
 
     def set_ui_mode(self, mode: str):
-        """新手模式显示科普/提示;专家模式隐藏"""
-        beginner = mode != "expert"
+        """界面模式(对外叫「全面 / 摘要」,内部 beginner/expert 兼容旧配置):
+        全面(beginner)= 显示科普/提示;摘要(expert)= 隐藏科普、精简提示。
+        ⚠️ 规范:以后新增界面提示/科普,都要来这里按模式做显隐(见 项目规划.md 界面规范)。
+        """
+        self._ui_mode = "expert" if str(mode or "") in ("expert", "summary") else "beginner"
+        full = self._ui_mode != "expert"
         if hasattr(self, "guide_title"):
-            self.guide_title.setVisible(beginner)
+            self.guide_title.setVisible(full)
         for l in getattr(self, "_guide_labels", []):
-            l.setVisible(beginner)
+            l.setVisible(full)
         if hasattr(self, "home_hint"):
-            self.home_hint.setVisible(beginner)
+            self.home_hint.setVisible(full)
+
+    def is_full_mode(self) -> bool:
+        """当前是否为「全面」模式(显示科普/详细提示)。"""
+        return getattr(self, "_ui_mode", "beginner") != "expert"
 
     # ---- 对外接口 ----
     def set_hooks(self, instance_dir, on_download, on_start_instance):
