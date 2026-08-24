@@ -153,7 +153,16 @@ class SettingsCenter(QWidget):
         self.language_combo = QComboBox()
         for label, value in (("自动(跟随系统)", "auto"), ("中文", "zh"), ("English", "en")):
             self.language_combo.addItem(label, value)
+        # 可选语言包(第三方/玩梗):从这里选能整包换肤
+        try:
+            import i18n
+            for pid, meta in i18n.list_packs().items():
+                self.language_combo.addItem(f"语言包:{meta['name']}({pid})", pid)
+        except Exception:
+            pass
         idx = self.language_combo.findData(self.settings.get("language", "auto"))
+        if idx < 0:
+            idx = self.language_combo.findData("auto")
         self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
         self.ui_mode_combo = QComboBox()

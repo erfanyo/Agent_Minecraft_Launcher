@@ -221,6 +221,21 @@ class MainWindow(QMainWindow):
         load_theme_from_settings(self.settings)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
+        # ---- 语言包(第三方/玩梗语言):从 AMCL/languages/ 加载 *.json + 插件注册的包 ----
+        # 语言包 = 用 {"原文": "替换文本"} 覆盖启动器所有文本;可选,切换后重启生效。
+        try:
+            import i18n as _i18n
+            import os as _os
+            _pack_dir = _os.path.join(paths.CONFIG_DIR, "languages")
+            _n = _i18n.load_packs_from_dir(_pack_dir)
+            _lang = self.settings.get("language", "auto")
+            # 若选中语言是语言包 id → 加载后再激活(否则用 zh/en/auto)
+            if _lang in _i18n.list_packs():
+                _i18n.set_language(_lang)
+            print(f"[语言包] 从 {_pack_dir} 加载 {_n} 个;当前语言 {_i18n.get_language()}")
+        except Exception as e:
+            print(f"[语言包] 加载异常:{type(e).__name__}: {e}")
+
         # ---- 插件系统:启动时静态装载插件(plugins/*.py),登记工具/页面/设置/技能 ----
         # 被禁用的插件(settings["plugins_disabled"])跳过;默认关闭的插件需显式启用。
         # 提前到这里装载(先于 设置中心/技能管理器 创建),让插件登记内容立即可见。
