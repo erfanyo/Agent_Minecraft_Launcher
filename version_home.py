@@ -238,7 +238,7 @@ class InstanceSettingsCard(QWidget):
         self.setObjectName("instCard")
         self.setStyleSheet(f"#instCard {{ {panel_style()} }}")
 
-        self.title = QLabel(t("实例设置", "Instance settings"))
+        self.title = QLabel(t("当前选择", "Current selection"))
         self.title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {muted_color()};")
         self.inst_label = QLabel(t("未选择实例", "No instance selected"))
         self.inst_label.setWordWrap(True)
@@ -276,6 +276,7 @@ class VersionHome(QWidget):
     one_click_config_requested = Signal(str)  # "bridge"/"rcon"/"auto" → 主窗口处理
     tutorial_requested = Signal()            # 打开新手教程
     instance_selected = Signal(object)       # 选中实例(或 None)→ 主窗口 显示/隐藏「实例详情」标签页
+    refresh_requested = Signal()             # 切回「实例」标签页请求刷新(无刷新按钮,自动刷)
     _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
     _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
 
@@ -312,23 +313,7 @@ class VersionHome(QWidget):
         self.inst_card = InstanceSettingsCard()
         lay.addWidget(self.inst_card)
 
-        lay.addStretch(1)
-
-        # 启动游戏大按钮
-        self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
-        self.launch_btn.setMinimumHeight(56)
-        self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.launch_btn.setStyleSheet(launch_btn_style())
-        lay.addWidget(self.launch_btn)
-
-        # 启动按钮下方的小字(当前选中版本,类似 PCL 的 "No Flesh Within Chest")
-        self.launch_hint = QLabel(t("选择右侧版本后启动", "Pick a version on the right"))
-        self.launch_hint.setStyleSheet(f"color: {muted_color()};")
-        self.launch_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.launch_hint.setWordWrap(True)
-        lay.addWidget(self.launch_hint)
-
-        # 启动游戏下方:一键配置 ▾(设置/实例详情已改为顶部标签页,不再在此放按钮)
+        # 一键配置 ▾(移到启动游戏上方;设置/实例详情已改标签页,这里只留运行配置)
         self.config_btn = QToolButton()
         self.config_btn.setText(t("一键配置 ▾", "One-click ▾"))
         self.config_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -349,14 +334,14 @@ class VersionHome(QWidget):
         self.config_btn.setMenu(cfg_menu)
         lay.addWidget(self.config_btn)
 
-        # 新手教程入口(第一版效果不够好 → 临时弃用,已隐藏;改用「指引式教程」后再上线)
-        self.tutorial_btn = QPushButton(t("📖 新手教程", "Beginner Tutorial"))
-        self.tutorial_btn.setStyleSheet(card_btn_style())
-        self.tutorial_btn.setMinimumHeight(36)
-        self.tutorial_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tutorial_btn.clicked.connect(self.tutorial_requested.emit)
-        self.tutorial_btn.setVisible(False)   # 临时隐藏入口;仅 设置→界面→已弃用功能 可临时查看
-        lay.addWidget(self.tutorial_btn)
+        lay.addStretch(1)
+
+        # 启动游戏大按钮(启动按钮下方不再显示"选中实例"小字——左侧卡片已展示)
+        self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
+        self.launch_btn.setMinimumHeight(56)
+        self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.launch_btn.setStyleSheet(launch_btn_style())
+        lay.addWidget(self.launch_btn)
 
         return left
 
@@ -371,12 +356,23 @@ class VersionHome(QWidget):
         self.tabs.setDocumentMode(True)
         self.tabs.setStyleSheet(tab_style())
 
-        self.tabs.addTab(self._build_version_tab(), t("版本", "Versions"))
+        self._version_tab_index = self.tabs.addTab(self._build_version_tab(), t("实例", "Instances"))
         self.tabs.addTab(self._build_changelog_tab(), t("更新日志", "Changelog"))
         self.tabs.addTab(self._build_community_tab(), t("MC 动态", "Community"))
+        # 切回「实例」标签页时自动刷新(不再有刷新按钮)
+        self.tabs.currentChanged.connect(self._on_home_tab_changed)
 
         lay.addWidget(self.tabs)
         return right
+
+    def set_instance_count(self, n: int):
+        """把右列「实例」标签页文本更新为「实例(共x个)」。"""
+        if hasattr(self, "tabs") and hasattr(self, "_version_tab_index"):
+            self.tabs.setTabText(self._version_tab_index, t(f"实例(共{n}个)", f"Instances ({n})"))
+
+    def _on_home_tab_changed(self, index: int):
+        if index == self._version_tab_index:
+            self.refresh_requested.emit()
 
     def _build_version_tab(self) -> QWidget:
         w = QWidget()
@@ -384,20 +380,7 @@ class VersionHome(QWidget):
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(10)
 
-        header = QHBoxLayout()
-        title = QLabel(t("我的实例", "My instances"))
-        title.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
-        header.addWidget(title)
-        header.addStretch(1)
-        self.count_label = QLabel("0")
-        self.count_label.setStyleSheet(f"color: {muted_color()};")
-        header.addWidget(self.count_label)
-        self.refresh_btn = QPushButton(t("刷新", "Refresh"))
-        self.refresh_btn.setStyleSheet(card_btn_style())
-        self.refresh_btn.setMinimumHeight(30)
-        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        header.addWidget(self.refresh_btn)
-        lay.addLayout(header)
+        # 「我的实例」标题与「刷新」按钮已移除:标签页文本显示实例数,切回本页自动刷新
 
         self.instance_list = QListWidget()
         self.instance_list.setStyleSheet(list_style())
@@ -496,8 +479,8 @@ class VersionHome(QWidget):
         self.login_card.refresh()
 
     def set_current_instances(self, instances: list):
-        """刷新实例数量(由 MainWindow.refresh_instances 调用)。"""
-        self.count_label.setText(f"共 {len(instances)} 个")
+        """刷新实例数量(由 MainWindow.refresh_instances 调用)→ 更新「实例(共x个)」标签文本。"""
+        self.set_instance_count(len(instances))
 
     def current_instance(self):
         """当前在「版本」列表里选中的实例 dict(没选返回 None)。"""
@@ -508,13 +491,9 @@ class VersionHome(QWidget):
 
     # ---------- 内部逻辑 ----------
     def _on_selection_changed(self, current, _previous):
-        """选中实例变化 → 更新实例设置卡片 + 启动按钮副标题,并通知主窗口(显示/隐藏「实例详情」标签页)。"""
+        """选中实例变化 → 更新「当前选择」卡片,并通知主窗口(显示/隐藏「实例详情」标签页)。"""
         inst = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
         self.inst_card.set_instance(inst)
-        if inst is not None:
-            self.launch_hint.setText(inst.get("label") or inst.get("id", ""))
-        else:
-            self.launch_hint.setText(t("选择右侧版本后启动", "Pick a version on the right"))
         self.launch_btn.setToolTip(
             inst.get("id", "") if inst is not None else t("先选择实例", "Select an instance first"))
         self.instance_selected.emit(inst)

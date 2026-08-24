@@ -127,8 +127,28 @@ class SettingsCenter(QWidget):
                 open_btn = QPushButton("临时查看"); open_btn.setStyleSheet(card_btn_style())
                 open_btn.clicked.connect(self._reopen_tutorial); row.addWidget(open_btn)
             l.addLayout(row)
+        # 检查更新 / 重播引导教程(原在菜单栏,现并入设置 → 界面;重播按钮不放在最外层)
+        l.addSpacing(8)
+        upd_btn = QPushButton(t("检查更新…", "Check for Updates…"))
+        tut_btn = QPushButton(t("重播引导教程", "Replay guided tutorial"))
+        for b in (upd_btn, tut_btn):
+            b.setStyleSheet(card_btn_style()); b.setMinimumHeight(32)
+        upd_btn.clicked.connect(self._open_update)
+        tut_btn.clicked.connect(self._open_guide)
+        more_row = QHBoxLayout(); more_row.addWidget(upd_btn); more_row.addWidget(tut_btn); more_row.addStretch()
+        l.addLayout(more_row)
         l.addStretch()
         return w
+
+    def _open_update(self):
+        p = self.window()
+        if p is not None and hasattr(p, "open_update_dialog"):
+            p.open_update_dialog()
+
+    def _open_guide(self):
+        p = self.window()
+        if p is not None and hasattr(p, "open_guide_demo"):
+            p.open_guide_demo()
 
     def _reopen_tutorial(self):
         p = self.window()

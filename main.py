@@ -221,47 +221,25 @@ class MainWindow(QMainWindow):
         load_theme_from_settings(self.settings)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
-        # ---- 顶部(已精简,设置移入菜单栏) ----
+        # ---- 顶部(精简:菜单栏已移除,入口都进了标签页/设置) ----
         top_bar = QHBoxLayout()
         top_bar.addStretch()
+        # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
+        # - 导入整合包 → 下载新资源 → 实例 →「导入整合包」按钮
+        # - 检查更新 / 引导教程(重播) → 放到 设置 → 界面
+        # - 打开游戏目录 / 清空实例 / 刷新版本列表 意义不大,不再放外层入口
+        # 相关方法(load_versions/import_modpack/open_game_dir/clear_instances/open_update_dialog)仍保留可调用。
 
-        # ---- 菜单栏(基础启动器的骨架) ----
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu(t("文件", "File"))
-        file_menu.addAction(t("刷新版本列表", "Refresh Version List"), self.load_versions)
-        file_menu.addAction(t("导入整合包(.mrpack / .zip)…", "Import Modpack (.mrpack/.zip)…"), self.import_modpack)
-        file_menu.addAction(t("打开游戏目录", "Open Game Directory"), self.open_game_dir)
-        file_menu.addAction(t("清空所有实例…", "Clear All Instances…"), self.clear_instances)
-        file_menu.addSeparator()
-        file_menu.addAction(t("退出", "Quit"), self.close)
-
-        # 「查看」菜单已移除(2026-08-25):实例「大图标」显示功能临时弃用(见 deprecated_features.py);
-        # 实例列表默认列表视图。需要大图标时沿用右列版本列表。
-
-        # 「设置」菜单已移除:设置改为顶部标签卡(同级别的「设置」标签页)。
-        # 「检查更新」移入 帮助 菜单;镜像源 在 设置→界面 也有,入口并入。
-
-        # 「AI」菜单已移除(2026-08-25):AI 助手改为右侧标签页,右上角靠其自身标题/关闭控制,
-        # 不再需要菜单顶部的「显示 AI 助手」。
-
-        # 「联机」菜单已移除:改为「下载新资源」右侧的「联机」标签卡(卡片形式)。
-        # 新手教程入口已隐藏(2026-08-25):第一版效果不够好,临时弃用,
-        # 改为「引导式教程」(箭头+文本指向真实 UI,用 UI 路由定位)后再上线。
-        help_menu = menubar.addMenu(t("帮助", "Help"))
-        help_menu.addAction(t("检查更新…", "Check for Updates…"), self.open_update_dialog)
-        help_menu.addAction(t("📖 引导教程(演示)…", "Guided Tutorial (Demo)…"), self.open_guide_demo)
-
-        # ---- Tab「我的版本」:仿 PCL2 首页(左 1/3 登录+实例设置+启动按钮,右 2/3 版本/更新日志/动态) ----
+        # ---- Tab「我的实例」:仿 PCL2 首页(左 1/3 登录+当前选择+启动按钮,右 2/3 实例/更新日志/动态) ----
         from version_home import VersionHome
         tab_a = VersionHome()
         self.home_panel = tab_a                     # 保留引用,便于刷新登录显示等
         self.instance_list = tab_a.instance_list    # 版本列表(兼容旧引用:右键/视图/双击)
         self.launch_btn = tab_a.launch_btn          # 启动游戏大按钮
-        self.refresh_inst_btn = tab_a.refresh_btn   # 右列「版本」里的刷新按钮
-        # 旧行为保留:双击启动 + 启动按钮 + 刷新
+        # 旧行为保留:双击启动 + 启动按钮;刷新按钮已移除,切回「实例」标签页自动刷新
         self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)
         self.launch_btn.clicked.connect(self.launch_selected_instance)
-        self.refresh_inst_btn.clicked.connect(self.refresh_instances)
+        tab_a.refresh_requested.connect(self.refresh_instances)
         # 新首页抛出的信号 → 启动器处理
         tab_a.open_instance_manager_requested.connect(self._home_open_instance_manager)
         tab_a.open_settings_requested.connect(self.open_settings)
@@ -289,7 +267,7 @@ class MainWindow(QMainWindow):
 
         # ---- 主选项卡(我的版本 / 实例详情 / 下载新资源 / 设置) ----
         self.main_tabs = QTabWidget()
-        self.main_tabs.addTab(tab_a, t("我的版本", "Versions"))
+        self.main_tabs.addTab(tab_a, t("我的实例", "My Instances"))
         # 实例详情:放在「我的版本」右边;未选择实例时隐藏,选择后出现(带滑入/淡入动画)
         from instance_manager import InstanceManagerDialog
         self.instance_details = InstanceManagerDialog()
