@@ -159,8 +159,64 @@ class SettingsCenter(QWidget):
         color_hint.setWordWrap(True); color_hint.setStyleSheet("color:#8a93a0;")
         l.addWidget(color_hint)
         self._refresh_color_btn_text()
+
+        # MCP 集成:自动生成 连接链接 / 客户端配置文件(存 AMCL 文件夹)
+        l.addSpacing(12)
+        mcp_title = QLabel("🔌 MCP 集成(外部 AI 调用启动器):")
+        mcp_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+        l.addWidget(mcp_title)
+        import os as _os, sys as _sys
+        _proj = _os.path.dirname(_os.path.abspath(__file__))
+        _main_py = _os.path.join(_proj, "main.py")
+        self._mcp_pyexe = _sys.executable
+        self._mcp_main_py = _main_py
+        self._mcp_url = "http://127.0.0.1:8766/mcp"
+        mcp_row = QHBoxLayout(); mcp_row.setSpacing(8)
+        mcp_lbl = QLabel(f"HTTP 链接: {self._mcp_url}")
+        mcp_lbl.setStyleSheet("color:#8a93a0;")
+        mcp_row.addWidget(mcp_lbl, 1)
+        copy_btn = QPushButton("复制链接"); copy_btn.setStyleSheet(card_btn_style())
+        copy_btn.clicked.connect(self._copy_mcp_link); mcp_row.addWidget(copy_btn)
+        gen_btn = QPushButton("生成配置文件"); gen_btn.setStyleSheet(card_btn_style())
+        gen_btn.clicked.connect(self._gen_mcp_files); mcp_row.addWidget(gen_btn)
+        l.addLayout(mcp_row)
+        self._mcp_status = QLabel("")
+        self._mcp_status.setWordWrap(True); self._mcp_status.setStyleSheet("color:#8a93a0;")
+        l.addWidget(self._mcp_status)
+
         l.addStretch()
         return w
+
+    def _copy_mcp_link(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(getattr(self, "_mcp_url", ""))
+        if hasattr(self, "_mcp_status"):
+            self._mcp_status.setText("已复制 HTTP 链接 → 客户端「http」选项填它")
+
+    def _gen_mcp_files(self):
+        """生成 MCP 连接/客户端配置文件,写到启动器创建的 AMCL 文件夹。"""
+        import json as _json, os as _os, paths as _paths
+        cfg = {
+            "name": "amcl",
+            "transport": "http",
+            "http_url": self._mcp_url,
+            "stdio": {"command": self._mcp_pyexe, "args": [self._mcp_main_py, "--mcp"]},
+            "command": f'"{self._mcp_pyexe}" "{self._mcp_main_py}" --mcp-http 8766',
+            "note": "客户端选 http → 用 http_url;选 本地命令/stdio → 用 stdio 的 command+args;"
+                    "或在本机该命令行启动。",
+        }
+        d = _paths.CONFIG_DIR
+        _os.makedirs(d, exist_ok=True)
+        cfg_path = _os.path.join(d, "mcp_config.json")
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            _json.dump(cfg, f, ensure_ascii=False, indent=2)
+        cmd_path = _os.path.join(d, "mcp_http.cmd")
+        with open(cmd_path, "w", encoding="utf-8") as f:
+            f.write('@echo off\r\nchcp 65001 >nul\r\necho AMCL MCP HTTP: '
+                    + self._mcp_url + '\r\necho 客户端选 http 填上面地址, Ctrl+C 停止。\r\n'
+                    + f'"{self._mcp_pyexe}" "{self._mcp_main_py}" --mcp-http 8766\r\npause\r\n')
+        if hasattr(self, "_mcp_status"):
+            self._mcp_status.setText(f"已生成 {cfg_path} 与 {cmd_path}(在 AMCL 文件夹)")
 
     # ---- 配色(自定义主题) ----
     def _refresh_color_btn_text(self):
