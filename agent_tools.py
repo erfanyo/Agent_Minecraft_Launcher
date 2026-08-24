@@ -55,6 +55,17 @@ def search_mods(query: str, game_version: str = "", loader: str = "") -> str:
                      for h in hits[:15])
 
 
+def search_modpacks(query: str, game_version: str = "", loader: str = "") -> str:
+    """搜整合包(Modrinth 项目类型 modpack,即 .mrpack),支持中文名。
+    用户想"装一个整合包/整合包推荐"时用;结果里的 slug 可交给 install_modpack 直接下载导入。"""
+    hits = search_mods_cn(query, game_version or None, loader or None,
+                          project_type="modpack")
+    if not hits:
+        return "(没有找到整合包;可换关键词,或该整合包不在 Modrinth,需要用网盘/手动下载)"
+    return "\n".join(f"{h['title']}  slug={h['slug']}  ⬇{h['downloads']:,}"
+                     for h in hits[:12])
+
+
 def read_instance_log(instance: str, tail: int = 80, game_dir: str = None) -> str:
     log = os.path.join(_gd(game_dir), "versions", instance, "logs", "latest.log")
     if not os.path.isfile(log):
@@ -212,6 +223,69 @@ def install_instance(version: str, loader: str = "", loader_version: str = "",
                 for slug in OPTIMIZE_MODS.get(mr_loader, []):
                     download_mod(slug, version, mr_loader, mods_dir)
     return f"实例就绪:{instance_id}"
+
+
+def install_modpack(slug_or_url: str, instance_name: str = "",
+                    game_dir: str = None, progress_callback=None) -> str:
+    """下载并导入整合法包(Modrinth 项目类型 modpack,即 .mrpack)。
+
+    用法/时机:用户想"装一个整合包"且给的是 Modrinth 链接/slug 时直接下载导入成新实例
+    (自动装基础版+加载器+整合包全部 mod)。若整合包不在 Modrinth 上,返回明确提示,
+    让用户用网盘/官方链接手动下载,再引导(可配合安装引导)。
+
+    - slug_or_url: Modrinth 整合包 slug 或完整链接(如 https://modrinth.com/modpack/smithing)。
+    - instance_name: 可选,自定义实例名(不传用整合包名)。
+    """
+    import os as _os
+    import shutil as _sh
+    from modpack import import_modpack
+    from modrinth import (download_modpack, get_modpack_file, get_project,
+                          resolve_modpack_ref)
+    gd = _gd(game_dir)
+    ref = resolve_modpack_ref(slug_or_url)
+    if not ref:
+        return ("错误:无法识别整合包引用(需要 Modrinth 链接或 slug,"
+                "如 https://modrinth.com/modpack/smithing)。可先用 search_modpacks 搜。")
+    try:
+        proj = get_project(ref)
+    except Exception as e:
+        return (f"错误:Modrinth 上找不到整合包 {ref}({type(e).__name__}: {e})。"
+                "它可能不在 Modrinth —— 把下载链接/网盘链接给用户,让 TA 手动下载后"
+                "用启动器的「导入整合包」或告诉我路径由我来配置。")
+    if proj.get("project_type") != "modpack":
+        return (f"错误:{proj.get('title')} 不是整合包(项目类型是 {proj.get('project_type')})。"
+                "整合包在 Modrinth 项目类型为 modpack;若想装单个 Mod 请用 install_mod。")
+    # 确定要用的 .mrpack 文件(不指定版本 → 最新)
+    try:
+        info = get_modpack_file(ref)
+    except Exception as e:
+        return f"错误:获取整合包 {ref} 的下载信息失败:{type(e).__name__}: {e}"
+    if not info:
+        return (f"错误:{proj.get('title')} 没有可下载的 .mrpack 文件。"
+                "可能需要向作者申请权限或手动下载,请把官方下载链接给用户。")
+    # 下载 .mrpack 到 downloads 目录的细分子目录(临时),导入成功后清理
+    work = _os.path.join(gd, "downloads", "modpack_tmp")
+    try:
+        local = download_modpack(ref, work, progress_callback=progress_callback)
+    except Exception as e:
+        return f"错误:下载整合包 {ref} 失败:{type(e).__name__}: {e}"
+    if not local:
+        return f"错误:{proj.get('title')} 下载失败(无可用文件)。"
+    try:
+        # instance_name 为空 → import_modpack 默认用包名/文件名
+        inst = import_modpack(local, gd, instance_id=instance_name or None,
+                              status_callback=print,
+                              progress_callback=progress_callback)
+    except Exception as e:
+        # 导入失败可能是同名实例;兜底给友好提示
+        return (f"错误:导入整合包失败:{type(e).__name__}: {e}。"
+                "已存在同名实例时请自定义 instance_name。")
+    finally:
+        try:
+            _sh.rmtree(work, ignore_errors=True)
+        except Exception:
+            pass
+    return f"✅ 整合包导入完成:{inst}({info.get('version_number', '最新')}, {proj.get('title')})"
 
 
 def backup_instance(instance: str, game_dir: str = None) -> str:
@@ -382,11 +456,14 @@ TOOL_FUNCS = {
     "list_instances": list_instances,
     "list_mods": list_mods,
     "search_mods": search_mods,
+    "search_modpacks": search_modpacks,
     "read_instance_log": read_instance_log,
     "read_crash_report": read_crash_report,
     "get_settings": get_settings,
     "install_mod": install_mod,
+    "install_mods": install_mods,
     "install_instance": install_instance,
+    "install_modpack": install_modpack,
     "backup_instance": backup_instance,
     "set_setting": set_setting,
     "send_game_command": send_game_command,

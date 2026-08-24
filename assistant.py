@@ -96,6 +96,12 @@ TOOLS = [
            "game_version": {"type": "string", "description": "游戏版本,如 26.2"},
            "loader": {"type": "string", "description": "加载器:fabric/forge"}},
           ["query"]),
+    _tool("search_modpacks", "搜索整合包(Modrinth 项目类型 modpack,即 .mrpack),支持中文名。"
+          "用户想'装一个整合包/有什么整合包推荐'时用它;返回结果里的 slug 可交给 install_modpack 直接下载导入",
+          {"query": {"type": "string", "description": "搜索词,如 '整合包' 或 '史密斯' 或 'skyblock'"},
+           "game_version": {"type": "string", "description": "可选,游戏版本过滤"},
+           "loader": {"type": "string", "description": "可选,加载器过滤"}},
+          ["query"]),
     _tool("list_mods", "列出某实例已安装的 Mod 文件",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("read_instance_log", "读取某实例最近的游戏日志(诊断报错/崩溃用)",
@@ -142,6 +148,14 @@ TOOLS = [
                      "description": "要装的 Mod 列表,如 [\"钠\",\"锂\",\"玉\"] 或 [\"sodium\",\"lithium\",\"jade\"]"},
            "instance": {"type": "string", "description": "实例 id(用 list_instances 查)"}},
           ["slugs", "instance"]),
+    _tool("install_modpack", "下载并导入整合包(Modrinth 项目类型 modpack,即 .mrpack)。"
+          "用户想'装一个整合包'且给的是 Modrinth 链接/slug 时直接用,自动创建新实例"
+          "(装基础版+加载器+整合包全部 mod,可能要几分钟,期间等待勿重复调用)。"
+          "若整合包不在 Modrinth 上会返回提示,此时把网盘/官方下载链接给用户,"
+          "引导 TA 下载后用启动器导入或把路径告诉我。写操作,需要工作区写权限",
+          {"slug_or_url": {"type": "string", "description": "Modrinth 整合包 slug 或链接,如 https://modrinth.com/modpack/smithing"},
+           "instance_name": {"type": "string", "description": "可选,自定义实例名(不传用整合包名)"}},
+          ["slug_or_url"]),
     _tool("backup_instance", "备份某实例:存档打包 zip + 模组列表 txt(写操作)",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("set_setting", "修改启动器设置,如 memory_gb=6(写操作)",
@@ -181,8 +195,8 @@ TOOLS = [
 ]
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
-WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "launch_game",
-               "backup_instance", "set_setting"}
+WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "install_modpack",
+               "launch_game", "backup_instance", "set_setting"}
 
 # ================= t16 云端工具按需挂载 =================
 # 目标:云端每轮请求不再全量带 17 个工具 schema(每轮浪费几千 token),
@@ -203,6 +217,7 @@ TOOL_GROUPS = {
     "settings": ["set_setting"],
     "instance": ["install_instance", "launch_game", "backup_instance"],
     "mod": ["search_mods", "install_mod", "install_mods", "list_mods"],
+    "modpack": ["search_modpacks", "install_modpack"],
     "recipe": ["get_recipe_path", "compare_items"],
     "command": ["send_game_command", "get_command_guide"],
     "log": ["read_instance_log", "read_crash_report"],
@@ -215,6 +230,7 @@ TOOL_GROUP_KEYWORDS = {
     "instance": ["建", "创建", "下载", "实例", "启动", "备份", "原版", "装一个", "install"],
     "mod": ["mod", "模组", "装", "安装", "钠", "锂", "玉", "jei", "sodium", "lithium",
             "jade", "搜", "搜索", "fabric", "forge"],
+    "modpack": ["整合包", "整合法", "整合", "集成", "modpack", "整合包推荐", "装整合"],
     "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
     "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
     "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因"],
@@ -263,7 +279,8 @@ def build_executor(settings: dict, progress_cb=None):
                 backup_note = f"(备份失败:{e})"
         # 把 progress_cb 塞给支持它的下载工具(install_mod / install_mods / install_instance 等)
         out_args = dict(args)
-        if progress_cb is not None and name in ("install_mod", "install_mods", "install_instance"):
+        if progress_cb is not None and name in ("install_mod", "install_mods",
+                                                "install_instance", "install_modpack"):
             try:
                 sig = inspect.signature(fn)
                 if "progress_callback" in sig.parameters:

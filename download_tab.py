@@ -84,10 +84,16 @@ class DownloadTab(QWidget):
         self.download_btn.clicked.connect(self._on_start)
         # 按钮始终可点:没选版本时点击会给明确提示(见 _on_start)
 
+        # 直接选本地整合包文件导入(复用文件菜单的导入整合包流程,不用先配 MC 版本/加载器)
+        self.import_btn = QPushButton("导入整合包(.mrpack/.zip)…")
+        self.import_btn.setToolTip("已有整合包文件(Modrinth .mrpack / CurseForge .zip / 实例文件夹 zip)?直接选文件导入成新实例")
+        self._import_cb = None
+
         bottom = QHBoxLayout()
         bottom.addWidget(self.status_label)
         bottom.addStretch()
         bottom.addWidget(self.progress_bar)
+        bottom.addWidget(self.import_btn)
         bottom.addWidget(self.download_btn)
 
         # 左侧菜单与右侧面板之间用 QSplitter:分隔线可拖到任意位置
@@ -493,3 +499,13 @@ class DownloadTab(QWidget):
     def bind_start(self, callback):
         """绑定"开始下载"回调(与 _on_start 并存,先检查版本再触发下载)"""
         self.download_btn.clicked.connect(callback)
+
+    def bind_import(self, callback):
+        """绑定"导入整合包"回调(选本地 .mrpack/.zip 直接导入成新实例)"""
+        self._import_cb = callback
+        self.import_btn.clicked.connect(self._on_import)
+
+    def _on_import(self):
+        """点"导入整合包":把选择交给外层(打开文件对话框 + 后台导入)"""
+        if self._import_cb:
+            self._import_cb()

@@ -288,7 +288,8 @@ class MainWindow(QMainWindow):
         self.resource_center.set_hooks(
             instance_dir=self.game_dir_for,
             on_download=self._resource_download,
-            on_start_instance=self.start_instance_download)
+            on_start_instance=self.start_instance_download,
+            on_import_modpack=self.import_modpack)
 
 
         # 右键菜单:实例(启动/打开目录/删除)

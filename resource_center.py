@@ -901,13 +901,16 @@ class ResourceCenter(QWidget):
         return getattr(self, "_ui_mode", "beginner") != "expert"
 
     # ---- 对外接口 ----
-    def set_hooks(self, instance_dir, on_download, on_start_instance):
-        """注入:实例目录函数 / 下载回调 / 开始下载实例回调"""
+    def set_hooks(self, instance_dir, on_download, on_start_instance, on_import_modpack=None):
+        """注入:实例目录函数 / 下载回调 / 开始下载实例回调 / 导入整合包回调"""
         self._instance_dir = instance_dir
         self._on_download_cb = on_download
         self._on_start_cb = on_start_instance
+        self._on_import_cb = on_import_modpack
         for br in self.browsers.values():
             br.set_instance_dir_fn(instance_dir)
+        if self.download_tab is not None and on_import_modpack:
+            self.download_tab.bind_import(on_import_modpack)
 
     def set_latest_versions(self, release: str, snapshot: str):
         self.home_latest.setText(

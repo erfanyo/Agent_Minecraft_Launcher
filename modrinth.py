@@ -31,6 +31,8 @@ def get_project(slug: str) -> dict:
         "game_versions": d.get("game_versions", []),
         "loaders": d.get("loaders", []),
         "icon_url": d.get("icon_url", ""),
+        # 项目类型:mod / modpack / datapack / shader / resourcepack 等
+        "project_type": d.get("project_type", "mod"),
     }
 
 
@@ -265,3 +267,79 @@ def download_mod(slug: str, game_version: str, loader: str, mods_dir: str,
     download_with_mirror(info["url"], dest, sha1=info.get("sha1"),
                          progress_callback=progress_callback)
     return info["filename"]
+
+
+# ---------------- 整合包(Modrinth 项目类型 modpack) ----------------
+import re as _re
+
+def resolve_modpack_ref(ref: str) -> str:
+    """从 Modrinth 链接 / slug / 'modpack/<slug>' 里解析出 slug。
+    支持:
+    - https://modrinth.com/modpack/<slug>/version/<vid>
+    - modrinth.com/modpack/<slug>
+    - 纯 slug(如 'smithing')
+    - 'modpack/<slug>'
+    解析不出返回空串。"""
+    ref = (ref or "").strip()
+    if not ref:
+        return ""
+    m = _re.search(r"/modpack/([^/?#\s]+)", ref)
+    if m:
+        return m.group(1)
+    m = _re.search(r"modrinth\.com/[^/#?\s]+/([^/?#\s]+)", ref)
+    if m:
+        return m.group(1)
+    if ref.startswith("modpack/"):
+        return ref.split("/", 1)[1].split("/")[0].strip()
+    # 纯 slug:去掉可能的尾部斜杠 / 查询串
+    ref = ref.split("?")[0].strip().strip("/")
+    return ref
+
+
+def _is_mrpack(info: dict | None) -> bool:
+    return bool(info) and str(info.get("filename", "")).lower().endswith(".mrpack")
+
+
+def get_modpack_file(slug: str, game_version: str | None = None,
+                     loader: str | None = None,
+                     version_number: str | None = None) -> dict | None:
+    """找整合包(项目类型 modpack)的 .mrpack 文件信息。
+    复用 get_mod_version 的"逐级放宽"过滤(整合包常不标完整 loader/版本);
+    校验最终文件是 .mrpack(避免误拿某个 mod 的 jar)。"""
+    candidate = get_mod_version(slug, game_version, loader, version_number)
+    if _is_mrpack(candidate):
+        return candidate
+    # 兜底:直接列该项目的版本文件,挑一个 .mrpack
+    try:
+        resp = requests.get(BASE + f"/project/{slug}/version", timeout=20)
+        resp.raise_for_status()
+    except Exception:
+        return None
+    for v in resp.json():
+        for f in v.get("files", []) or []:
+            if f.get("filename", "").lower().endswith(".mrpack"):
+                return {
+                    "version_number": v.get("version_number", "?"),
+                    "filename": f.get("filename", "modpack.mrpack"),
+                    "url": f.get("url", ""),
+                    "size": f.get("size", 0),
+                    "sha1": (f.get("hashes") or {}).get("sha1"),
+                    "dependencies": v.get("dependencies", []),
+                }
+    return None
+
+
+def download_modpack(slug: str, dest_dir: str,
+                     game_version: str | None = None,
+                     loader: str | None = None,
+                     version_number: str | None = None,
+                     progress_callback=None) -> str | None:
+    """下载整合包的 .mrpack 到 dest_dir,返回保存路径;失败返回 None。"""
+    info = get_modpack_file(slug, game_version, loader, version_number)
+    if info is None or not info["url"]:
+        return None
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, info["filename"])
+    download_with_mirror(info["url"], dest, sha1=info.get("sha1"),
+                         progress_callback=progress_callback)
+    return dest
