@@ -159,6 +159,22 @@ class InstanceManagerDialog(QWidget):
             self._refresh_mods()
         return added
 
+    def _drop_to_pack(self, files: list, dir_name: str):
+        """拖到 数据包/光影包 列表区域:把文件拷进对应目录(datapacks/shaderpacks)并刷新。"""
+        target = os.path.join(self.inst_dir, dir_name)
+        os.makedirs(target, exist_ok=True)
+        added = []
+        for src in files or []:
+            try:
+                dest = os.path.join(target, os.path.basename(src))
+                shutil.copy2(src, dest)
+                added.append(os.path.basename(src))
+            except Exception:
+                pass
+        if hasattr(self, "pack_list") and added:
+            self._refresh_pack_list("datapack" if dir_name == "datapacks" else "shader")
+        return added
+
     def _dir_list_widget(self) -> QListWidget:
         w = DropListWidget()
         w.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -308,6 +324,8 @@ class InstanceManagerDialog(QWidget):
             self.pack_save_combo_label = QLabel("")
 
         self.pack_list = self._dir_list_widget()
+        # 拖文件到 数据包/光影包 列表 → 拷进对应目录
+        self.pack_list._on_drop = lambda files, d=dir_name: self._drop_to_pack(files, d)
         dl_btn = QPushButton(f"下载{title}…(Modrinth)")
         dl_btn.clicked.connect(lambda: self._download_pack(ptype))
         open_btn = QPushButton("打开目录")

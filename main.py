@@ -276,6 +276,7 @@ class MainWindow(QMainWindow):
         from ui_style import tab_style
         self.main_tabs.setStyleSheet(tab_style())   # 外层标签页:圆角+字体放大(14px)
         self.main_tabs.addTab(tab_a, t("我的实例", "My Instances"))
+        self._my_inst_tab_idx = 0   # 「我的实例」= 主标签第 0 页(拖入文件 → 当作整合包安装)
         # 实例详情:放在「我的版本」右边;未选择实例时隐藏,选择后出现(带滑入/淡入动画)
         from instance_manager import InstanceManagerDialog
         self.instance_details = InstanceManagerDialog()
@@ -879,8 +880,12 @@ class MainWindow(QMainWindow):
         ov.hide()
         self._drop_overlay = ov
 
+    def _on_my_instances_page(self) -> bool:
+        """当前是否在「我的实例」页(只有在这页,拖入文件才当作整合包安装)。"""
+        return getattr(self, "_my_inst_tab_idx", 0) == self.main_tabs.currentIndex()
+
     def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
+        if e.mimeData().hasUrls() and self._on_my_instances_page():
             e.acceptProposedAction()
             if hasattr(self, "_drop_overlay"):
                 self._drop_overlay.setGeometry(self.rect())
@@ -890,7 +895,7 @@ class MainWindow(QMainWindow):
             e.ignore()
 
     def dragMoveEvent(self, e):
-        if e.mimeData().hasUrls():
+        if e.mimeData().hasUrls() and self._on_my_instances_page():
             e.acceptProposedAction()
 
     def dragLeaveEvent(self, e):
@@ -900,12 +905,14 @@ class MainWindow(QMainWindow):
     def dropEvent(self, e):
         if hasattr(self, "_drop_overlay"):
             self._drop_overlay.hide()
-        if e.mimeData().hasUrls():
+        if e.mimeData().hasUrls() and self._on_my_instances_page():
             for u in e.mimeData().urls():
                 path = u.toLocalFile()
                 if path:
                     self.install_modpack_from_path(path)
             e.acceptProposedAction()
+        else:
+            e.ignore()   # 其它页面:不当作整合包,交由该页控件处理(如实例详情列表拷入文件夹)
 
     def install_modpack_from_path(self, path: str):
         """把本地的整合包文件导入成新实例(拖放入口;自动识别格式)。"""
