@@ -42,3 +42,5 @@ AMCL/
 DPH_Chat/
 # Agent 沟通区(本地协作,不进 GitHub)
 _agent_comms/
+# AgentTeams 插件状态目录(本地专用,不进 GitHub)
+.agent-teams/
