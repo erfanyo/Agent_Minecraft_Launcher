@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 
 import requests
@@ -493,10 +494,24 @@ class MainWindow(QMainWindow):
 
     def import_modpack(self):
         """导入整合包(自动识别格式:Modrinth .mrpack / CurseForge .zip / 扁平实例文件夹 zip),后台执行不卡界面"""
+        import traceback as _tb
+        DBG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                ".tmp", "import_debug.log")
+
+        def dbg(msg):
+            try:
+                os.makedirs(os.path.dirname(DBG_PATH), exist_ok=True)
+                with open(DBG_PATH, "a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
+            except Exception:
+                pass
+
         from PySide6.QtWidgets import QInputDialog
         path, _f = QFileDialog.getOpenFileName(
             self, "选择整合包", "", "整合包 (*.mrpack *.zip)")
+        dbg(f"file dialog returned: {path!r}")
         if not path:
+            dbg("empty path -> return")
             return
 
         # 识别格式;扁平整合包(无清单的实例文件夹 zip)需要用户提供 MC 版本(可选加载器)
@@ -505,8 +520,10 @@ class MainWindow(QMainWindow):
         loader = None
         try:
             fmt = detect_modpack_format(path)
-        except Exception:
+        except Exception as e:
             fmt = None
+            dbg(f"detect_modpack_format EXC: {e}")
+        dbg(f"fmt={fmt!r}")
         if fmt == "flat":
             mc_version, okv = QInputDialog.getText(self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
             if not okv or not mc_version.strip():
@@ -520,36 +537,45 @@ class MainWindow(QMainWindow):
         elif fmt is None:
             QMessageBox.warning(self, "导入整合包",
                                 "无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)")
+            dbg("fmt None -> warning, return")
             return
 
         # 同名预检:实例名已存在 → 让用户自己命名(不直接失败)
         instance_id = None
         try:
             default_id = suggested_instance_id(path)
+            dbg(f"default_id={default_id!r}")
             if default_id and os.path.isdir(os.path.join(paths.GAME_DIR, "versions", default_id)):
                 new_id, okn = QInputDialog.getText(
                     self, "实例名重复",
                     f"已存在实例「{default_id}」,请为新实例命名:", text=default_id + "-2")
                 if not okn or not new_id.strip():
+                    dbg("name conflict -> user cancelled")
                     return
                 instance_id = new_id.strip()
-        except Exception:
+        except Exception as e:
+            dbg(f"suggested_instance_id EXC: {e}")
             pass   # 预检失败也不拦导入(让 import_modpack 的"已存在"兜底)
 
         self.statusBar().showMessage("正在导入整合包...")
+        dbg(f"calling _run_download, instance_id={instance_id!r}, mc={mc_version!r}, loader={loader!r}")
 
         def worker(status_cb, progress_cb):
             try:
+                dbg("worker: import_modpack_file BEGIN")
                 instance_id = import_modpack_file(path, paths.GAME_DIR,
                                                  mc_version=mc_version, loader=loader,
                                                  instance_id=instance_id,
                                                  status_callback=status_cb,
                                                  progress_callback=progress_cb)
+                dbg(f"worker: import_modpack_file OK -> {instance_id}")
                 status_cb(f"整合包导入完成:{instance_id} ✅")
             except Exception as e:
+                dbg(f"worker: import_modpack_file EXC: {type(e).__name__}: {e}\n{_tb.format_exc()}")
                 status_cb(f"❌ 整合包导入失败:{type(e).__name__}: {e}")
 
         self._run_download(worker)
+        dbg("_run_download called, returning")
 
     # ---- 下载新实例:左侧菜单 → 分类面板 → 后台下载 ----
     def start_instance_download(self):
