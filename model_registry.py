@@ -40,7 +40,13 @@ HF_MIRROR = "https://hf-mirror.com/{repo}/resolve/main/{file}"
 
 
 def _hf_candidates(repo: str, file: str) -> list:
-    """按启动器"下载策略"生成模型下载候选地址(官方 = huggingface,镜像 = hf-mirror)"""
+    """按启动器"下载策略"生成模型下载候选地址(官方 = huggingface,镜像 = hf-mirror)。
+
+    特殊:环境变量 AML_MODEL_MIRROR(如 http://127.0.0.1:8765)设了 → **只用本地镜像**,
+    测试/开发时模型从本地服务器拉(见 dev_model_server.py),不走公网。"""
+    local = os.environ.get("AML_MODEL_MIRROR", "").strip().rstrip("/")
+    if local:
+        return [f"{local}/resolve/main/{file}", f"{local}/models/{file}"]
     try:
         from downloader import _active_strategy
         strat = _active_strategy()

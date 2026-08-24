@@ -121,6 +121,23 @@ python cli.py ai "终极感应供应器要多少材料"      # AI 会调配方�
 python cli.py log neoforge-21.1.248
 ```
 
+## 🧪 测试基建:本地模型镜像服务器(测试/开发用)
+
+模型文件(约 500MB)测试时走公网(hf-mirror)慢,可用本地服务器秒下:
+
+```bash
+# 1) 启动服务器(默认端口 8765,服务 AMCL/models/ 目录)
+.venv\Scripts\python.exe dev_model_server.py          # 或指定端口
+
+# 2) 另开终端,设置环境变量后跑启动器/测试 —— 模型下载自动走本地,不走公网
+$env:AML_MODEL_MIRROR = "http://127.0.0.1:8765"
+python main.py
+```
+
+> 更省事的替代(日常推荐):直接把开发机 `AMCL/models/`(模型 + manifest.json)拷到
+> 测试环境同路径,sha256 校验通过后 `download()` 直接跳过,零下载。服务器适合反复测
+> 下载链路(进度/校验/失败重试)或 Sandbox 里不方便拷大文件的场景。
+
 ## 📋 更新日志
 
 见 [CHANGELOG.md](CHANGELOG.md)。
