@@ -18,6 +18,7 @@ import os
 import queue
 import threading
 import urllib.parse
+import collections
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
@@ -195,6 +196,14 @@ class ResourceBrowser(QWidget):
 
         # 是否已加载过「默认浏览」(打开页即显示列表);已加载则不重复拉取
         self._auto_loaded = False
+        # 懒加载图标:只为"当前可见"的行拉图,按顺序串行,用户没看到的先不拉不存。
+        self._icon_loaded = {}          # id(row) -> slug(已请求过图标的行,避免重复拉)
+        self._icon_queue = collections.deque()   # 待拉图标的 (list_item, slug, url)
+        self._icon_loading = False      # 是否正在串行拉一张(避免并发burst)
+        self._icon_visibility_timer = QTimer(self)
+        self._icon_visibility_timer.setSingleShot(True)
+        self._icon_visibility_timer.timeout.connect(self._enqueue_visible_icons)
+        self._icon_visibility_timer.start(120)   # 列表填充/滚动后稍等,等布局稳定再算可见行
 
         self._build_ui()
 
@@ -267,6 +276,9 @@ class ResourceBrowser(QWidget):
         self.result_list.setWordWrap(True)
         set_style(self.result_list, list_style)
         self.result_list.currentItemChanged.connect(self._on_selected)
+        # 懒加载图标:滚动/改变大小时,只为当前可见的行拉图(并按顺序慢慢存)
+        self.result_list.verticalScrollBar().valueChanged.connect(self._on_icon_visibility)
+        self.result_list.verticalScrollBar().rangeChanged.connect(self._on_icon_visibility)
 
         self.panel = QWidget()
         set_style(self.panel, panel_style)
@@ -597,15 +609,12 @@ class ResourceBrowser(QWidget):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, h)
             self.result_list.addItem(item)
-            # 列表/图标视图图标:按 slug 从缓存拉,命中即显示图标
-            slug = h.get("slug", "")
-            icon_url = h.get("icon_url", "")
-            if slug and icon_url:
-                threading.Thread(target=self._set_item_icon, args=(item, slug, icon_url), daemon=True).start()
         if not hits and not self.result_list.count():
             QListWidgetItem(t("(没有找到结果)", "(no results)"), self.result_list)
         # 记录默认浏览是否已加载(空关键词的结果),供 maybe_auto_load 判断是否重复拉取
         self._auto_loaded = (getattr(self, "_last_query", "") == "")
+        # 只给当前可见的条目按顺序懒加载图标(用户没看到的先不拉不存)
+        self._icon_visibility_timer.start(80)
 
     # ---- 详情面板 ----
     def _mcmod_url(self, display_name: str) -> str:
@@ -780,21 +789,92 @@ class ResourceBrowser(QWidget):
         self.desc_label.setText(text)
         self.desc_note_label.setVisible(False)
 
-    def _set_item_icon(self, item, slug: str, url: str):
-        """给搜索结果条目设图标(从缓存拉,跨版本复用)。失败不阻塞(条目仍可点)。"""
+    # ---- 懒加载图标:只为"当前可见"的行按顺序拉,不并发burst、不后台埋大量下载 ----
+    def _on_icon_visibility(self, *_):
+        """滚动/范围改变/列表变化 → 稍等布局稳定后重新计算可见行入队。"""
+        if self._icon_visibility_timer.isActive():
+            self._icon_visibility_timer.stop()
+        self._icon_visibility_timer.start(120)
+
+    def _visible_rows(self) -> list:
+        """返回当前视口内可见的行索引(用 visualItemRect 与 viewport 相交判断)。"""
+        view = self.result_list.viewport()
+        vrect = view.rect()
+        rows = []
+        n = self.result_list.count()
+        if n == 0:
+            return rows
+        for i in range(n):
+            item = self.result_list.item(i)
+            try:
+                rect = self.result_list.visualItemRect(item)
+            except Exception:
+                continue
+            if rect.isValid() and rect.intersects(vrect):
+                rows.append(i)
+        return rows
+
+    def _enqueue_visible_icons(self):
+        """把当前可见、且还没请求过图标的行压入队列。队列按行序(从上到下),串行消费。"""
         try:
-            import image_cache
-            from PySide6.QtGui import QPixmap, QIcon
-            data = image_cache.load_icon(slug, url, size=48)
-            if data:
-                pix = QPixmap()
-                if pix.loadFromData(data):
-                    icon = QIcon(pix.scaled(
-                        48, 48, Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation))
-                    QTimer.singleShot(0, lambda i=item, ic=icon: i.setIcon(ic))
+            for i in self._visible_rows():
+                item = self.result_list.item(i)
+                if item is None:
+                    continue
+                if i in self._icon_loaded:
+                    continue
+                h = item.data(Qt.ItemDataRole.UserRole) or {}
+                slug = h.get("slug", "")
+                icon_url = h.get("icon_url", "")
+                if not slug or not icon_url:
+                    self._icon_loaded[i] = True   # 无图/无url:标"处理过",不再反复看
+                    continue
+                if any(q[1] == slug for q in self._icon_queue):   # 已在队列(同slug复用)
+                    continue
+                self._icon_loaded[i] = True
+                self._icon_queue.append((item, slug, icon_url))
+            self._pump_icon_queue()
         except Exception:
             pass
+
+    def _pump_icon_queue(self):
+        """串行消费图标队列:一次只拉一张,拉完再拉下一张(避免并发burst)。"""
+        if self._icon_loading:
+            return
+        if not self._icon_queue:
+            return
+        item, slug, url = self._icon_queue.popleft()
+        self._icon_loading = True
+
+        def worker():
+            try:
+                import image_cache
+                from PySide6.QtGui import QPixmap, QIcon
+                data = image_cache.load_icon(slug, url, size=48)
+                if data:
+                    pix = QPixmap()
+                    if pix.loadFromData(data):
+                        icon = QIcon(pix.scaled(
+                            48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation))
+                        QTimer.singleShot(0, lambda i=item, ic=icon: self._end_icon(i, ic))
+                        return
+                QTimer.singleShot(0, lambda: self._end_icon(None, None))   # 失败:只标处理过
+            except Exception:
+                QTimer.singleShot(0, lambda: self._end_icon(None, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _end_icon(self, item, icon):
+        """一张拉完后上图标/回调,继续下一张。"""
+        if icon is not None and item is not None:
+            try:
+                if item.listWidget() is not None:   # 条目可能已被清空/重建
+                    item.setIcon(icon)
+            except Exception:
+                pass
+        self._icon_loading = False
+        self._pump_icon_queue()
 
     def _load_icon(self, slug: str, url: str):
         """按 slug 拉/取图标(用缓存,跨版本复用)。成功在主线程 setPixmap;失败用占位。"""
