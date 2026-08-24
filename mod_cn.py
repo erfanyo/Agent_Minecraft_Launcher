@@ -6,9 +6,9 @@
 这里维护一份常用 Mod 的对照表(起步 60+ 个,以后随用随加)。
 搜索含中文的关键词时,先查这个库,把中文名映射成 slug,再去 Modrinth 取详情。
 
-扩展表(可选):库根 `mod_cn_ext.json`(可选存在)。
-- 数据源**尚未定稿**(2026-08-24 暂停 PCL 派生数据,原因:有 PCL 许可负担,t12 许可解读
-  不建议将 PCL WikiEntries 派生数据打进 exe 再分发)。数据源待定,最终由队长/用户定。
+扩展表(可选):库根 `mod_cn_ext.json`。
+- 数据源(2026-08-24 用户定稿):**Modrinth 官方 API + 人工社区通译**(方案①,无许可负担)。
+  取 `/v2/search?facets=[["project_type:mod"]]&index=downloads` Top-N 热点 mod,人工补通译中文名。
 - 若存在该文件,格式为 `{"_meta": {...来源/署名/许可...}, "entries": {slug: {"name": 中文名,
   "aliases": [...]}}}`;不存在/损坏则本模块自动降级为只用 `CN_NAMES`。
 - 合并规则:**人工 curated 的 `CN_NAMES` 优先级最高**,`mod_cn_ext.json` 只补充
