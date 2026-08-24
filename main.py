@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
         tab_a.open_instance_manager_requested.connect(self._home_open_instance_manager)
         tab_a.open_settings_requested.connect(self.open_settings)
         tab_a.login_changed.connect(self._on_login_changed)
+        tab_a.one_click_config_requested.connect(self._one_click_config_kind)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
         from resource_center import ResourceCenter
@@ -1185,6 +1186,19 @@ class MainWindow(QMainWindow):
         if item is None:
             return None
         return item.data(Qt.ItemDataRole.UserRole)
+
+    def _one_click_config_kind(self, kind: str):
+        """「我的版本」首页「一键配置 ▾」按钮 → 按用户选择执行 bridge-mod / RCON / 自动。"""
+        inst = self._current_instance()
+        if inst is None:
+            QMessageBox.information(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            return
+        if kind == "bridge":
+            self._one_click_bridge_for(inst)
+        elif kind == "rcon":
+            self._one_click_rcon_for(inst)
+        else:
+            self._one_click_config_for(inst)
 
     def _one_click_config_current(self):
         """「我的版本」顶部:一键配置下拉菜单(未来扩展更多配置项)"""

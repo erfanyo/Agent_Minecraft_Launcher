@@ -273,6 +273,7 @@ class VersionHome(QWidget):
     open_instance_manager_requested = Signal(object)  # inst dict 或 None
     open_settings_requested = Signal()
     login_changed = Signal()
+    one_click_config_requested = Signal(str)  # "bridge"/"rcon"/"auto" → 主窗口处理
     _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
     _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
 
@@ -350,6 +351,27 @@ class VersionHome(QWidget):
         menu.addAction(t("版本选择", "Choose version"), self._focus_version_tab)
         self.manage_btn.setMenu(menu)
         btn_row.addWidget(self.manage_btn, 1)
+
+        # 一键配置 ▾:集中管理运行配置(一键配置 RCON / 下载并配置 bridge-mod)
+        self.config_btn = QToolButton()
+        self.config_btn.setText(t("一键配置 ▾", "One-click ▾"))
+        self.config_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.config_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.config_btn.setMinimumHeight(44)
+        self.config_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.config_btn.setStyleSheet(card_btn_style())
+        cfg_menu = QMenu(self.config_btn)
+        bridge_item = cfg_menu.addAction(
+            t("一键配置 bridge-mod(本地指令口,推荐)",
+              "One-click bridge-mod (local command port, recommended)"),
+            lambda: self.one_click_config_requested.emit("bridge"))
+        bridge_item.setToolTip("下载并安装 bridge-mod(游戏内指令口 / 数据导出),需加载器")
+        rcon_item = cfg_menu.addAction(
+            t("一键配置 RCON(临时方案)", "One-click RCON (temporary)"),
+            lambda: self.one_click_config_requested.emit("rcon"))
+        rcon_item.setToolTip("临时方案:需要 Lan Server Properties,进世界后按 ESC → 对局域网开放")
+        self.config_btn.setMenu(cfg_menu)
+        btn_row.addWidget(self.config_btn, 1)
         lay.addLayout(btn_row)
 
         return left
