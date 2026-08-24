@@ -1921,6 +1921,18 @@ if __name__ == "__main__":
         from mcp_server import serve
         serve()
         raise SystemExit(0)
+    if "--mcp-http" in _sys.argv:
+        # MCP Streamable-HTTP 模式:POST /mcp → 供「http」连接。--mcp-http [port]
+        from mcp_server import serve_http
+        port = 8766
+        try:
+            i = _sys.argv.index("--mcp-http")
+            if i + 1 < len(_sys.argv) and _sys.argv[i + 1].isdigit():
+                port = int(_sys.argv[i + 1])
+        except Exception:
+            pass
+        serve_http(port=port)
+        raise SystemExit(0)
     print("正在获取版本列表(首次约几秒,请稍等)...")
     app = QApplication(sys.argv)
     from ui_style import apply_global_dark_palette

@@ -88,6 +88,30 @@ def _call(name, args):
         return f"错误:工具 {name} 调用失败:{type(e).__name__}: {e}"
 
 
+def handle_message(msg: dict) -> dict | None:
+    """处理一条 JSON-RPC 消息,返回完整响应(通知返回 None)。stdio 与 HTTP 共用。"""
+    m_id = msg.get("id")
+    method = msg.get("method")
+    if method == "initialize":
+        return {"jsonrpc": "2.0", "id": m_id, "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "AMCL", "version": "0.1"}}}
+    if method.startswith("notifications/"):
+        return None   # 通知无响应
+    if method == "ping":
+        return {"jsonrpc": "2.0", "id": m_id, "result": {}}
+    if method == "tools/list":
+        return {"jsonrpc": "2.0", "id": m_id, "result": {"tools": _tool_list()}}
+    if method == "tools/call":
+        p = msg.get("params") or {}
+        text = _call(p.get("name"), p.get("arguments"))
+        return {"jsonrpc": "2.0", "id": m_id, "result": {
+            "content": [{"type": "text", "text": text}]}}
+    return {"jsonrpc": "2.0", "id": m_id,
+            "error": {"code": -32601, "message": f"未知方法 {method}"}}
+
+
 def serve():
     """stdio MCP 主循环:一行一个 JSON-RPC 消息。"""
     for line in sys.stdin:
@@ -98,30 +122,49 @@ def serve():
             msg = json.loads(line)
         except Exception:
             continue
-        m_id = msg.get("id")
-        method = msg.get("method")
-        if method == "initialize":
-            resp = {"jsonrpc": "2.0", "id": m_id, "result": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "AMCL", "version": "0.1"}}}
-        elif method.startswith("notifications/"):
-            continue   # 通知无响应
-        elif method == "ping":
-            resp = {"jsonrpc": "2.0", "id": m_id, "result": {}}
-        elif method == "tools/list":
-            resp = {"jsonrpc": "2.0", "id": m_id, "result": {"tools": _tool_list()}}
-        elif method == "tools/call":
-            p = msg.get("params") or {}
-            name = p.get("name")
-            text = _call(name, p.get("arguments"))
-            resp = {"jsonrpc": "2.0", "id": m_id, "result": {
-                "content": [{"type": "text", "text": text}]}}
-        else:
-            resp = {"jsonrpc": "2.0", "id": m_id,
-                    "error": {"code": -32601, "message": f"未知方法 {method}"}}
+        resp = handle_message(msg)
+        if resp is None:
+            continue
         sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
         sys.stdout.flush()
+
+
+def serve_http(host: str = "127.0.0.1", port: int = 8766):
+    """Streamable-HTTP 模式:POST /mcp 接收 JSON-RPC,返回 application/json。
+    让 MCP 客户端能通过「http」选项连接(本地启动器跑这一端)。"""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path.rstrip("/") != "/mcp":
+                self.send_response(404)
+                self.end_headers()
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                msg = json.loads(body or b"{}")
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                return
+            resp = handle_message(msg)
+            if resp is None:      # 通知 → 202
+                self.send_response(202)
+                self.end_headers()
+                return
+            data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *_):
+            pass   # 静默访问日志
+
+    print(f"AMCL MCP 服务已启动 http://{host}:{port}/mcp")
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
 if __name__ == "__main__":
