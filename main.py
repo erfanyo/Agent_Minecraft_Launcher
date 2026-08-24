@@ -222,11 +222,12 @@ class MainWindow(QMainWindow):
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
         # ---- 无边框自定义标题栏(名称位置按平台,见 frameless_titlebar.py) ----
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowTitle("AMCL")   # 任务栏/系统标题
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         from frameless_titlebar import FramelessTitleBar
         self._running_instances = set()
         self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
-        self.title_bar = FramelessTitleBar(self, "Agent Minecraft Launcher",
+        self.title_bar = FramelessTitleBar(self, "AMCL",
                                            trailing_widget=self._running_label)
         # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
         # - 导入整合包 → 下载新资源 → 实例 →「导入整合包」按钮
@@ -295,8 +296,8 @@ class MainWindow(QMainWindow):
         self.settings_center.applied.connect(self._on_settings_applied)
         self.main_tabs.addTab(self.settings_center, t("设置", "Settings"))
 
-        # ---- 游戏日志:已挪进「实例详情」左菜单的「游戏日志」项(不再占右侧 dock) ----
-        self.log_view = self.instance_details.log_view   # 复用实例详情里的常驻日志 view(流持续追加)
+        # ---- 启动器日志:已作为「我的实例 → 启动器日志」子标签页(与 MC 动态同级) ----
+        self.log_view = tab_a.log_view   # 复用首页子标签页里的常驻日志 view(流持续追加)
 
         # ---- 组装整个窗口 ----
         central = QWidget()
@@ -356,7 +357,7 @@ class MainWindow(QMainWindow):
         self._dl_progress = (0, 1)
         self.dl_indicator = DownloadIndicator(self)
         self.dl_indicator.clicked.connect(self.open_download_detail)
-        self.statusBar().addWidget(self.dl_indicator, 0)   # 状态栏最左 = 窗口左下角
+        self.statusBar().addPermanentWidget(self.dl_indicator)   # 状态栏最右 = 窗口右下角(下载球)
         self.dl_indicator.hide()
 
         # 运行中的实例指示:已在标题栏显示"已有 x 个运行中的实例"(悬停看具体是哪个)
@@ -498,11 +499,14 @@ class MainWindow(QMainWindow):
         self.ai_strip_dock.hide()
 
     def _expand_ai(self):
-        """点边缘小条的「展开」:收起小条,恢复 AI 助手下旁边栏。"""
+        """点边缘小条的「展开」:收起小条,把 AI 助手恢复为【停靠】状态(不浮成子窗口;
+        想要独立窗口,直接拖 AI 标题栏 拖出即可)。"""
         if hasattr(self, "ai_strip_dock"):
             self.ai_strip_dock.hide()
-        self.ai_dock.raise_()
-        self.ai_dock.show()
+        if hasattr(self, "ai_dock"):
+            self.ai_dock.setFloating(False)   # 回到停靠,不再作为浮窗
+            self.ai_dock.raise_()
+            self.ai_dock.show()
 
     def ai_context(self) -> str:
         """给 AI 的上下文:启动器设置 + 当前选中的实例信息"""

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QMenu,
+    QPlainTextEdit,
     QPushButton,
     QTabWidget,
     QTextBrowser,
@@ -243,28 +244,20 @@ class InstanceSettingsCard(QWidget):
         self.inst_label = QLabel(t("未选择实例", "No instance selected"))
         self.inst_label.setWordWrap(True)
         self.inst_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {text_color()};")
-        self.inst_detail = QLabel("—")
-        self.inst_detail.setWordWrap(True)
-        self.inst_detail.setStyleSheet(f"color: {muted_color()};")
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
         lay.setSpacing(6)
         lay.addWidget(self.title)
         lay.addWidget(self.inst_label)
-        lay.addWidget(self.inst_detail)
 
     def set_instance(self, inst: dict | None):
-        """更新「当前实例」信息。inst 为 None 表示未选择。"""
+        """更新「当前选择」信息。inst 为 None 表示未选择。"""
         self._inst = inst
         if inst is None:
             self.inst_label.setText(t("未选择实例", "No instance selected"))
-            self.inst_detail.setText(t("在右侧「版本」里选一个,或去「下载新资源」创建",
-                                       "Pick one on the right, or create one in Resources"))
         else:
             self.inst_label.setText(inst.get("id", "?"))
-            loader = inst.get("loader") or t("原版", "Vanilla")
-            self.inst_detail.setText(f"{loader} ← {inst.get('base', '?')}")
 
 
 class VersionHome(QWidget):
@@ -370,6 +363,10 @@ class VersionHome(QWidget):
         self._version_tab_index = self.tabs.addTab(self._build_version_tab(), t("实例", "Instances"))
         self.tabs.addTab(self._build_changelog_tab(), t("更新日志", "Changelog"))
         self.tabs.addTab(self._build_community_tab(), t("MC 动态", "Community"))
+        # 启动器日志:作为「MC 动态」同级的子标签页(游戏运行输出/命令)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.tabs.addTab(self.log_view, t("启动器日志", "Launcher Log"))
         # 切回「实例」标签页时自动刷新(不再有刷新按钮)
         self.tabs.currentChanged.connect(self._on_home_tab_changed)
 
