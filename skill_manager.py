@@ -264,6 +264,28 @@ class CrossLoaderModGuide(Skill):
                 "不要凭印象断定。")
 
 
+class CrashDiagnosisGuide(Skill):
+    """崩溃诊断「修改意见清单」:让 AI 分析崩溃时输出结构化、可照着做的清单,而不是一段话"""
+    id = "crash_diagnosis_guide"
+    name = "崩溃诊断 · 修改意见清单"
+    description = ("游戏崩溃/异常时,AI 先读日志与崩溃报告,然后输出【修改意见清单】"
+                   "(每条 = 改什么 + 为什么/怎么做,按严重度排序 + 兜底步骤),方便你照着一步步做。")
+    category = "运行辅助"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【崩溃诊断·修改意见清单】用户遇到游戏崩溃/报错要你诊断时,按下面做:\n"
+                "① 先读日志(read_instance_log)与崩溃报告(read_crash_report),定位异常类型"
+                "(如 NullPointerException / ClassNotFound / OutOfMemoryError)和涉及的 Mod/加载器;\n"
+                "② 然后输出【修改意见清单】(编号 + 每条一行,按严重度排序,**别只给一大段话**):\n"
+                "   〔动作〕改什么(如 换/升/降 Java 版本、删冲突 Mod、关掉含中文/特殊字符的路径、加内存、"
+                "更新/移除某 Mod 或光影、重装整合包、清空配置)\n"
+                "   　说明:为什么(对应哪个错误特征)/ 具体怎么做(去哪改)。\n"
+                "③ 若不能确定具体原因,给 1~2 条「先试」的兜底步骤(如 单独重启 1 次、干净重装该整合包、"
+                "换回上一版);不要硬说成确定结论。\n"
+                "④ 用中文;专业术语(完整异常类名、Mod 名、文件路径、版本号)保留原样,方便定位。")
+
+
 class CloudAIConfigGuide(Skill):
     """云端 AI 配置指南:让 AI 教用户一步步配好云端模型(DeepSeek/OpenRouter/国内/自定义)"""
     id = "cloud_ai_config_guide"
@@ -314,7 +336,7 @@ class CloudAIConfigGuide(Skill):
 
 
 BUILTIN_SKILLS = [CrashWatchdog, AutoRestart, BackupReminder, CommandGuide, TaskSplit,
-                  BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide]
+                  BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide]
 
 
 # ================= 管理器 =================
