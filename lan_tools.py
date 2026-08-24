@@ -239,7 +239,8 @@ def _run_core(args: list, timeout: float = 15.0) -> subprocess.CompletedProcess:
 
 def setup_easytier(name: str, secret: str, ipv4: str = "",
                    dhcp: bool = True, progress_callback=None) -> dict:
-    """启动一个 EasyTier 节点(host)。返回 {ok, ip, room_key, message}。
+    """启动一个 EasyTier 节点(host)。返回 {ok, ip, virtual_ip, room_key, message}。
+       (虚拟 IP 同时以 `ip` 与 `virtual_ip` 两个键给出,兼容前后端约定。)
 
     - 用 `--network-name name --network-secret secret` 作为"房间钥匙";
     - 默认 `--no-tun`(免管理员/免虚拟网卡驱动,Windows 友好);
@@ -282,7 +283,7 @@ def setup_easytier(name: str, secret: str, ipv4: str = "",
     # 读取节点给自己分配的虚拟 IP(从 Web Console 接口或日志);这里先给合理默认
     ip = ipv4.strip() if ipv4.strip() else _probe_virtual_ip(proc, logf)
     room_key = f"{name}|{secret}"
-    return {"ok": True, "ip": ip, "room_key": room_key,
+    return {"ok": True, "ip": ip, "virtual_ip": ip, "room_key": room_key,
             "message": f"EasyTier 已启动(房间:{name}),虚拟 IP {ip or '(待分配)'};"
                        f"把房间钥匙 {room_key} 发给好友,好友填同一钥匙即入网。"}
 
@@ -309,18 +310,19 @@ def _probe_virtual_ip(proc, logf: str) -> str:
 
 
 def easytier_status() -> dict:
-    """查询本机 easytier-core 是否在跑、其虚拟 IP。返回 {running, ip, pid, message}。"""
-    if not is_easytier_installed():
-        return {"running": False, "ip": "", "pid": None,
+    """查询本机 easytier-core 是否在跑、其虚拟 IP。返回 {running, installed, ip, pid, message}。"""
+    installed = is_easytier_installed()
+    if not installed:
+        return {"running": False, "installed": False, "ip": "", "pid": None,
                 "message": "easytier-core 未安装(先 setup_easytier)。"}
     core = _core_path()
     procs = _find_easytier_procs(core)
     if not procs:
-        return {"running": False, "ip": "", "pid": None,
+        return {"running": False, "installed": True, "ip": "", "pid": None,
                 "message": "easytier-core 未在运行。"}
     pid = procs[0]
     ip = _probe_virtual_ip(None, os.path.join(_easytier_dir(), "logs", "easytier.log"))
-    return {"running": True, "ip": ip, "pid": pid,
+    return {"running": True, "installed": True, "ip": ip, "pid": pid,
             "message": f"easytier-core 正在运行(pid={pid})"}
 
 
