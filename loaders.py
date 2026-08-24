@@ -254,9 +254,9 @@ def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
             continue
         url = art.get("url")
         if url:
-            download_with_mirror(url, dest, sha1=art.get("sha1"))
+            download_with_mirror(url, dest, sha1=art.get("sha1"), progress_callback=progress_callback)
         else:
-            _download_maven_path(path, dest)
+            _download_maven_path(path, dest, progress_callback)
 
     # 2) 过滤 + 逐个跑处理器
     is_bundler = _jar_is_bundler(tokens["MINECRAFT_JAR"])
@@ -289,10 +289,10 @@ def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
             progress_callback(i + 1, len(processors))
 
 
-def _download_maven_path(path: str, dest: str) -> None:
+def _download_maven_path(path: str, dest: str, progress_callback=None) -> None:
     """下载一个只有 Maven 路径的库(轮流试几个仓库)"""
     from downloader import download_maven
-    download_maven(path, dest)
+    download_maven(path, dest, progress_callback=progress_callback)
 
 
 def install_loader(loader: str, mc: str, game_dir: str,
@@ -380,7 +380,9 @@ def install_loader(loader: str, mc: str, game_dir: str,
             java_exe = os.environ.get("FORGE_PROCESSOR_JAVA")
             if not java_exe:
                 from java_manager import ensure_java
-                java_exe = ensure_java(os.path.join(game_dir, "runtime"), 17)
+                java_exe = ensure_java(os.path.join(game_dir, "runtime"), 17,
+                                       progress_callback=progress_callback,
+                                       status_callback=status_callback)
             _forge_run_processors(installer_profile, forge_installer, game_dir, java_exe,
                                   maven_ver=loader_ver, status_callback=status_callback,
                                   progress_callback=progress_callback)
