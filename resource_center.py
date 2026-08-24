@@ -274,6 +274,9 @@ class ResourceBrowser(QWidget):
         # ---- 结果列表 + 详情面板 ----
         self.result_list = QListWidget()
         self.result_list.setWordWrap(True)
+        self.result_list.setIconSize(QSize(44, 44))     # 资源卡片左侧显示 Mod 图标(默认 16px 太小不显眼)
+        self.result_list.setSpacing(2)
+        self.result_list.setUniformItemSizes(False)
         set_style(self.result_list, list_style)
         self.result_list.currentItemChanged.connect(self._on_selected)
         # 懒加载图标:滚动/改变大小时,只为当前可见的行拉图(并按顺序慢慢存)
@@ -284,9 +287,7 @@ class ResourceBrowser(QWidget):
         set_style(self.panel, panel_style)
         self.panel.setMinimumWidth(260)
         self.panel.setMaximumWidth(500)
-        self.icon_label = QLabel()
-        self.icon_label.setFixedSize(56, 56)
-        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label = None   # 详情面板顶部不再放大图;Mod 图标改在左侧列表卡片显示
         self.title_label = QLabel("")
         self.title_label.setWordWrap(True)
         self.title_label.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
@@ -319,7 +320,6 @@ class ResourceBrowser(QWidget):
         p = QVBoxLayout(self.panel)
         p.setContentsMargins(14, 14, 14, 14)
         p.setSpacing(8)
-        p.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignCenter)
         p.addWidget(self.title_label)
         p.addWidget(self.meta_label)
         p.addWidget(self.desc_label)
@@ -339,7 +339,7 @@ class ResourceBrowser(QWidget):
         self.empty_label.setWordWrap(True)
         p.addWidget(self.empty_label)
         p.addStretch()
-        for w in (self.icon_label, self.title_label, self.meta_label, self.desc_label,
+        for w in (self.title_label, self.meta_label, self.desc_label,
                   self.gv_combo, self.loader_combo, self.ver_combo, self.dl_btn):
             w.setVisible(False)
         self.split = QSplitter(Qt.Orientation.Horizontal)
@@ -635,8 +635,7 @@ class ResourceBrowser(QWidget):
             self.mcmod_link.setVisible(False)
             return
         self._current = h
-        self._current_title = h.get("title", "") or h.get("slug", "")
-        for w in (self.icon_label, self.title_label, self.meta_label,
+        for w in (self.title_label, self.meta_label,
                   self.desc_label, self.gv_combo, self.loader_combo,
                   self.ver_combo, self.dl_btn):
             w.setVisible(True)
@@ -668,12 +667,6 @@ class ResourceBrowser(QWidget):
         self.desc_label.setText(h.get("description", ""))
         self.desc_note_label.setText("")
         self.desc_note_label.setVisible(False)
-        self.icon_label.setText("")
-        # 图标:按 slug 缓存(不同版本/加载器同一 Mod 复用),命中即秒回不重复拉。
-        slug = h.get("slug", "")
-        icon_url = h.get("icon_url")
-        if slug and icon_url:
-            threading.Thread(target=self._load_icon, args=(slug, icon_url), daemon=True).start()
         # 异步加载项目支持的版本/加载器,并刷新版本下拉
         self.gv_combo.clear()
         self.loader_combo.clear()
@@ -838,7 +831,8 @@ class ResourceBrowser(QWidget):
             pass
 
     def _pump_icon_queue(self):
-        """串行消费图标队列:一次只拉一张,拉完再拉下一张(避免并发burst)。"""
+        """串行消费图标队列:一次只拉一张,拉完再拉下一张(避免并发burst)。
+        结果经由 _async_q 排回主线程(与网络请求同一条可靠通道),避免跨线程 QTimer 丢失。"""
         if self._icon_loading:
             return
         if not self._icon_queue:
@@ -851,22 +845,23 @@ class ResourceBrowser(QWidget):
                 import image_cache
                 from PySide6.QtGui import QPixmap, QIcon
                 data = image_cache.load_icon(slug, url, size=48)
+                icon = None
                 if data:
                     pix = QPixmap()
                     if pix.loadFromData(data):
                         icon = QIcon(pix.scaled(
                             48, 48, Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation))
-                        QTimer.singleShot(0, lambda i=item, ic=icon: self._end_icon(i, ic))
-                        return
-                QTimer.singleShot(0, lambda: self._end_icon(None, None))   # 失败:只标处理过
+                # 排回主线程(_async_timer._drain_async 会调 self._end_icon)
+                self._async_q.put(("__icon__", (item, icon), self._end_icon, False))
             except Exception:
-                QTimer.singleShot(0, lambda: self._end_icon(None, None))
+                self._async_q.put(("__icon__", (item, None), self._end_icon, False))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _end_icon(self, item, icon):
-        """一张拉完后上图标/回调,继续下一张。"""
+    def _end_icon(self, payload):
+        """主线程:给条目设图标(成功才设),然后继续拉下一张。"""
+        item, icon = payload if isinstance(payload, tuple) else (None, None)
         if icon is not None and item is not None:
             try:
                 if item.listWidget() is not None:   # 条目可能已被清空/重建
@@ -875,53 +870,6 @@ class ResourceBrowser(QWidget):
                 pass
         self._icon_loading = False
         self._pump_icon_queue()
-
-    def _load_icon(self, slug: str, url: str):
-        """按 slug 拉/取图标(用缓存,跨版本复用)。成功在主线程 setPixmap;失败用占位。"""
-        try:
-            from PySide6.QtGui import QPixmap
-            from PySide6.QtCore import QSize
-            from PySide6.QtWidgets import QLabel
-            import image_cache
-            data = image_cache.load_icon(slug, url, size=56)
-            if data:
-                pix = QPixmap()
-                if pix.loadFromData(data):
-                    QTimer.singleShot(0, lambda: self._apply_icon(pix))
-                    return
-            # 失败/无图 → 占位(灰色方块 + 首字母),避免白屏
-            QTimer.singleShot(0, self._placeholder_icon)
-        except Exception:
-            QTimer.singleShot(0, self._placeholder_icon)
-
-    def _apply_icon(self, pix):
-        try:
-            self.icon_label.setPixmap(pix.scaled(
-                56, 56, Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation))
-        except Exception:
-            pass
-
-    def _placeholder_icon(self):
-        """无图/加载失败时:灰色圆角方块 + 项目标题首字,避免空白。"""
-        try:
-            from PySide6.QtGui import QColor, QPainter, QPixmap
-            from PySide6.QtCore import QStringConverter
-            title = getattr(self, "_current_title", "?") or "?"
-            pix = QPixmap(56, 56)
-            pix.fill(Qt.GlobalColor.transparent)
-            p = QPainter(pix)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            color = QColor("#3a4150")
-            p.setBrush(color); p.setPen(Qt.PenStyle.NoPen)
-            p.drawRoundedRect(0, 0, 56, 56, 10, 10)
-            p.setPen(QColor("#e7ecf5"))
-            f = p.font(); f.setPointSize(18); f.setBold(True); p.setFont(f)
-            p.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, title[:1])
-            p.end()
-            self.icon_label.setPixmap(pix)
-        except Exception:
-            pass
 
     def _load_project(self, h):
         """异步拉项目详情,填充 游戏版本/加载器 两个下拉。"""
