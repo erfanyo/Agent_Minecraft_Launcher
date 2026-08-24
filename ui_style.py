@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-深色模式兼容:根据系统主题返回合适的卡片/箭头/提示文字样式。
+深色/浅色 + 未来自定义配色方案(主题)统一入口。
 
-之前用写死的浅色背景(#f5f5f5),系统是深色主题时文字是白的 → 白底白字。
-现在所有"卡片"样式统一从这里取,深浅色各一套。
+**为什么要把颜色集中在这里**:所有"卡片/列表/标签/按钮/文字"的样式都从这里取,
+这样:
+- 深浅色自适应(按系统主题);
+- **未来自定义配色方案(主题)**:只需要 `set_custom_colors({name: color})` 覆盖某些颜色槽,
+  所有样式自动跟着变,不用改各页面代码(预留的变量见 COLOR_SLOTS / current_color)。
 
-这里还集中放了「我的版本」首页与「下载新资源」共用的一套圆角/卡片/列表/标签页样式,
-做成主题自适应,并在 version_home 与 resource_center 之间保持一致。
+用法(页面里):`from ui_style import card_btn_style, text_color, ...` —— 和以前一样。
+新增配色方案:读设置 → `load_theme_from_settings(settings)`(预留设置键 ui_custom_colors)。
 """
 from PySide6.QtWidgets import QApplication
 
@@ -26,7 +29,64 @@ def is_dark_mode() -> bool:
     return win.lightness() < 128
 
 
-# ---------------- 基础配色 ----------------
+# ---------------- 自定义配色方案(预留) ----------------
+# 所有颜色槽 = (深色默认, 浅色默认)。自定义主题只覆盖需要的槽。
+COLOR_SLOTS = {
+    "text": ("#e7ecf5", "#1f2430"),
+    "muted": ("#8b96a8", "#6b7280"),
+    "hover": ("rgba(255,255,255,0.08)", "rgba(0,0,0,0.05)"),
+    "panel_bg": ("rgba(255,255,255,0.045)", "rgba(0,0,0,0.035)"),
+    "panel_border": ("rgba(255,255,255,0.11)", "rgba(20,30,60,0.12)"),
+    "btn_bg": ("#2b2f3a", "#f4f6fa"),
+    "btn_bg_pressed": ("#242833", "#e6ebf3"),
+    "btn_border": ("#3a4150", "#cfd5e0"),
+    "accent": ("#5B8DEF", "#3B8EEA"),
+    "accent_bright": ("#4A8CF0", "#3D8BF2"),
+    "accent_bg": ("#2E6FD8", "#1E6FD9"),
+    "accent_bg_hover": ("#3D80E8", "#2F7FE8"),
+    "accent_bg_pressed": ("#265FB8", "#175CB5"),
+    "btn_disabled_bg": ("#44506A", "#B9C4D6"),
+    "btn_disabled_text": ("#9AA4B8", "#EEF1F6"),
+    "sel_bg": ("rgba(91,141,239,0.30)", "rgba(59,142,234,0.20)"),
+    "list_hover": ("rgba(255,255,255,0.08)", "rgba(59,142,234,0.08)"),
+    "menu_sel": ("rgba(91,141,239,0.20)", "rgba(59,142,234,0.16)"),
+    "menu_hover": ("rgba(255,255,255,0.07)", "rgba(59,142,234,0.08)"),
+    "tab_pane_border": ("rgba(255,255,255,0.10)", "rgba(20,30,60,0.14)"),
+    "tab_sel_bg": ("rgba(91,141,239,0.16)", "rgba(59,142,234,0.14)"),
+}
+
+_CUSTOM_COLORS = {}   # name -> color(自定义主题覆盖)
+
+
+def set_custom_colors(mapping: dict) -> None:
+    """设置自定义配色主题(只认 COLOR_SLOTS 里的名字;空/不认识的忽略)。"""
+    global _CUSTOM_COLORS
+    _CUSTOM_COLORS = {k: v for k, v in (mapping or {}).items() if k in COLOR_SLOTS and v}
+
+
+def clear_custom_colors() -> None:
+    global _CUSTOM_COLORS
+    _CUSTOM_COLORS = {}
+
+
+def get_custom_colors() -> dict:
+    return dict(_CUSTOM_COLORS)
+
+
+def current_color(name: str) -> str:
+    """取某颜色槽的当前值:自定义主题优先,否则按深浅色默认。"""
+    if name in _CUSTOM_COLORS:
+        return _CUSTOM_COLORS[name]
+    dark, light = COLOR_SLOTS.get(name, ("#000000", "#000000"))
+    return dark if is_dark_mode() else light
+
+
+def load_theme_from_settings(settings: dict) -> None:
+    """(预留)从设置读自定义配色主题并应用。设置键: ui_custom_colors(dict), ui_theme(str)。"""
+    set_custom_colors((settings or {}).get("ui_custom_colors"))
+
+
+# ---------------- 基础配色 ---------------- 
 def _tz(dark: str, light: str) -> str:
     """按当前主题返回 dark 或 light 值"""
     return dark if is_dark_mode() else light
@@ -34,44 +94,44 @@ def _tz(dark: str, light: str) -> str:
 
 def text_color() -> str:
     """正文文字颜色"""
-    return _tz("#e7ecf5", "#1f2430")
+    return current_color("text")
 
 
 def muted_color() -> str:
     """次要/提示文字颜色"""
-    return _tz("#8b96a8", "#6b7280")
+    return current_color("muted")
 
 
 def hover_bg() -> str:
     """通用悬停底色(用于透明按钮/条目的 hover 背景)"""
-    return _tz("rgba(255,255,255,0.08)", "rgba(0,0,0,0.05)")
+    return current_color("hover")
 
 
 def panel_style() -> str:
     """卡片/面板:圆角 + 细边框 + 柔和背景,自适应深色。"""
-    bg = _tz("rgba(255,255,255,0.045)", "rgba(0,0,0,0.035)")
-    border = _tz("rgba(255,255,255,0.11)", "rgba(20,30,60,0.12)")
+    bg = current_color("panel_bg")
+    border = current_color("panel_border")
     return f"border: 1px solid {border}; border-radius: 12px; background: {bg};"
 
 
 def card_btn_style() -> str:
     """卡片感按钮(启动器设置/管理/刷新/实例卡片等):圆角 + 悬停蓝框。"""
-    bg = _tz("#2b2f3a", "#f4f6fa")
-    border = _tz("#3a4150", "#cfd5e0")
+    bg = current_color("btn_bg")
+    border = current_color("btn_border")
     text = text_color()
-    pressed = _tz("#242833", "#e6ebf3")
+    pressed = current_color("btn_bg_pressed")
     return (
         f"QPushButton {{ background: {bg}; color: {text}; border: 1px solid {border};"
         f" border-radius: 9px; padding: 8px 12px; }}"
-        f"QPushButton:hover {{ border-color: #5B8DEF; }}"
+        f"QPushButton:hover {{ border-color: {current_color('accent')}; }}"
         f"QPushButton:pressed {{ background: {pressed}; }}"
     )
 
 
 def list_style() -> str:
     """列表(实例列表/结果列表):圆角条目 + 选中/悬停高亮,自适应主题。"""
-    sel = _tz("rgba(91,141,239,0.30)", "rgba(59,142,234,0.20)")
-    hover = _tz("rgba(255,255,255,0.08)", "rgba(59,142,234,0.08)")
+    sel = current_color("sel_bg")
+    hover = current_color("list_hover")
     text = text_color()
     return (
         f"QListWidget {{ background: transparent; border: none; outline: none; }}"
@@ -84,8 +144,8 @@ def list_style() -> str:
 
 def tab_style() -> str:
     """标签页:圆角 + 选中高亮,自适应主题。"""
-    pane_border = _tz("rgba(255,255,255,0.10)", "rgba(20,30,60,0.14)")
-    sel_bg = _tz("rgba(91,141,239,0.16)", "rgba(59,142,234,0.14)")
+    pane_border = current_color("tab_pane_border")
+    sel_bg = current_color("tab_sel_bg")
     text = text_color()
     muted = muted_color()
     return (
@@ -99,24 +159,33 @@ def tab_style() -> str:
 
 def launch_btn_style() -> str:
     """主操作大按钮(启动游戏):蓝色渐变 + 大圆角,自适应主题的蓝。"""
-    if is_dark_mode():
-        return (
-            "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            " stop:0 #3D80E8, stop:1 #2E6FD8); color: #ffffff; border: none;"
-            " border-radius: 12px; font-size: 17px; font-weight: bold; padding: 12px 14px; }"
-            "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            " stop:0 #4A8CF0, stop:1 #3D80E8); }"
-            "QPushButton:pressed { background: #265FB8; }"
-            "QPushButton:disabled { background: #44506A; color: #9AA4B8; }"
-        )
     return (
         "QPushButton { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-        " stop:0 #2F7FE8, stop:1 #1E6FD9); color: #ffffff; border: none;"
-        " border-radius: 12px; font-size: 17px; font-weight: bold; padding: 12px 14px; }"
+        f" stop:0 {current_color('accent_bright')}, stop:1 {current_color('accent_bg')});"
+        " color: #ffffff; border: none; border-radius: 12px; font-size: 17px;"
+        " font-weight: bold; padding: 12px 14px; }"
         "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-        " stop:0 #3D8BF2, stop:1 #2F7FE8); }"
-        "QPushButton:pressed { background: #175CB5; }"
-        "QPushButton:disabled { background: #B9C4D6; color: #EEF1F6; }"
+        f" stop:0 {current_color('accent_bright')}, stop:1 {current_color('accent_bg_hover')}); }}"
+        f"QPushButton:pressed {{ background: {current_color('accent_bg_pressed')}; }}"
+        f"QPushButton:disabled {{ background: {current_color('btn_disabled_bg')};"
+        f" color: {current_color('btn_disabled_text')}; }}"
+    )
+
+
+def menu_btn_style() -> str:
+    """左侧菜单按钮(左菜单独立模块用):
+    未选中半透明+灰字,悬停提亮,选中=高亮底色+蓝左条+加粗。自适应深色。"""
+    sel = current_color("menu_sel")
+    hover = current_color("menu_hover")
+    text = text_color()
+    muted = muted_color()
+    return (
+        f"QPushButton {{ background: transparent; color: {muted}; border: none;"
+        f" border-left: 3px solid transparent; border-radius: 8px;"
+        f" padding: 9px 12px; text-align: left; font-size: 13px; }}"
+        f"QPushButton:hover {{ background: {hover}; color: {text}; }}"
+        f"QPushButton:checked {{ background: {sel}; color: {text}; font-weight: bold;"
+        f" border-left: 3px solid {current_color('accent')}; }}"
     )
 
 
@@ -145,37 +214,13 @@ def arrow_style() -> str:
 
 def primary_btn_style() -> str:
     """主操作按钮(蓝底白字):深浅色模式用不同蓝色适配,可读性更好"""
-    if is_dark_mode():
-        return (
-            "QPushButton { background: #2E6FD8; color: #FFFFFF; border: none;"
-            " border-radius: 6px; padding: 6px 14px; font-weight: bold; }"
-            "QPushButton:hover { background: #3D80E8; }"
-            "QPushButton:pressed { background: #265FB8; }"
-            "QPushButton:disabled { background: #44506A; color: #9AA4B8; }"
-        )
     return (
-        "QPushButton { background: #1E6FD9; color: #FFFFFF; border: none;"
-        " border-radius: 6px; padding: 6px 14px; font-weight: bold; }"
-        "QPushButton:hover { background: #2F7FE8; }"
-        "QPushButton:pressed { background: #175CB5; }"
-        "QPushButton:disabled { background: #B9C4D6; color: #EEF1F6; }"
-    )
-
-
-def menu_btn_style() -> str:
-    """左侧菜单按钮(左菜单独立模块用):
-    未选中半透明+灰字,悬停提亮,选中=高亮底色+蓝左条+加粗。自适应深色。"""
-    sel = _tz("rgba(91,141,239,0.20)", "rgba(59,142,234,0.16)")
-    hover = _tz("rgba(255,255,255,0.07)", "rgba(59,142,234,0.08)")
-    text = text_color()
-    muted = muted_color()
-    return (
-        f"QPushButton {{ background: transparent; color: {muted}; border: none;"
-        f" border-left: 3px solid transparent; border-radius: 8px;"
-        f" padding: 9px 12px; text-align: left; font-size: 13px; }}"
-        f"QPushButton:hover {{ background: {hover}; color: {text}; }}"
-        f"QPushButton:checked {{ background: {sel}; color: {text}; font-weight: bold;"
-        f" border-left: 3px solid #5B8DEF; }}"
+        f"QPushButton {{ background: {current_color('accent_bg')}; color: #FFFFFF; border: none;"
+        f" border-radius: 6px; padding: 6px 14px; font-weight: bold; }}"
+        f"QPushButton:hover {{ background: {current_color('accent_bg_hover')}; }}"
+        f"QPushButton:pressed {{ background: {current_color('accent_bg_pressed')}; }}"
+        f"QPushButton:disabled {{ background: {current_color('btn_disabled_bg')};"
+        f" color: {current_color('btn_disabled_text')}; }}"
     )
 
 
@@ -184,16 +229,19 @@ def hint_style() -> str:
     return f"color: {muted_color()};"
 
 
+def inner_style() -> str:
+    """卡片内部的标签(透明底,跟卡片背景一致)"""
+    return "background: transparent;"
+
+
 def apply_global_dark_palette(app) -> None:
     """系统是深色主题时,给整个应用设一套深色 QPalette。
 
     让那些"没写死色"的默认控件(对话框 / QMenu / QTabWidget / QComboBox 下拉 /
-    QMessageBox 等)也变深色,与启动器整体风格一致(此前在 实例详情 等对话框里
-    默认控件是系统浅色 → 不搭)。已用样式表写死色的不受影响。"""
+    QMessageBox 等)也变深色,与启动器整体风格一致。已用样式表写死色的不受影响。"""
     if not is_dark_mode():
         return
     from PySide6.QtGui import QColor, QPalette
-    from PySide6.QtWidgets import QApplication
     p = QPalette()
     bg = QColor("#23272f")
     base = QColor("#1a1d23")
@@ -247,8 +295,3 @@ def dialog_dark_style() -> str:
         f"QTextEdit, QPlainTextEdit {{ background: {base}; color: {text}; border: 1px solid {border}; }}"
         f"QToolTip {{ background: {bg}; color: {text}; border: 1px solid {border}; }}"
     )
-
-
-def inner_style() -> str:
-    """卡片内部的标签(透明底,跟卡片背景一致)"""
-    return "background: transparent;"

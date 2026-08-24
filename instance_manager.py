@@ -66,28 +66,29 @@ class InstanceManagerDialog(QDialog):
         self.game_dir = game_dir
         self.inst_dir = os.path.join(game_dir, "versions", instance["id"])
         self.setWindowTitle(f"实例详情: {self.inst_id}")
-        self.setMinimumSize(560, 460)
+        self.setMinimumSize(620, 480)
         from ui_style import dialog_dark_style
         self.setStyleSheet(dialog_dark_style())   # 深色兼容:默认控件(菜单/按钮/列表/下拉)统一深色圆角
 
-        self.tabs = QTabWidget()
-        from ui_style import tab_style
-        self.tabs.setStyleSheet(tab_style())   # 深色兼容:圆角 + 选中高亮,和「我的版本」标签页一致
-        self.tabs.addTab(self._build_mods_tab(), "Mod")
-        self.tabs.addTab(self._build_pack_tab("datapack"), "数据包")
-        self.tabs.addTab(self._build_pack_tab("shader"), "光影包")
+        # 实例详情改为「左菜单 + 右面板」(复用 CenterShell,和 下载新资源/设置 同一套布局)
+        from center_shell import CenterShell
+        self.shell = CenterShell(self, menu_width=150)
+        self.shell.add_section("Mod", self._build_mods_tab)
+        self.shell.add_section("数据包", lambda: self._build_pack_tab("datapack"))
+        self.shell.add_section("光影包", lambda: self._build_pack_tab("shader"))
         if self._has_mod("ysm", "yes_steve_model", "yesstevemodel", "yes-steve-model"):
-            self.tabs.addTab(self._build_ysm_tab(), "皮肤(YSM)")
+            self.shell.add_section("皮肤(YSM)", self._build_ysm_tab)
         if self._has_mod("tacz", "timeless_and_classics", "timeless", "tac_z"):
-            self.tabs.addTab(self._build_tacz_tab(), "枪包(TACZ)")
+            self.shell.add_section("枪包(TACZ)", self._build_tacz_tab)
         if self._has_mod("kubejs"):
-            self.tabs.addTab(self._build_kubejs_tab(), "KubeJS")
-        self.tabs.addTab(self._build_command_tab(), "指令库")
-        self.tabs.addTab(self._build_config_tab(), "运行配置")
-        self.tabs.addTab(self._build_backup_tab(), "备份·存档")
+            self.shell.add_section("KubeJS", self._build_kubejs_tab)
+        self.shell.add_section("指令库", self._build_command_tab)
+        self.shell.add_section("运行配置", self._build_config_tab)
+        self.shell.add_section("备份·存档", self._build_backup_tab)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.tabs)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.shell)
 
     # ---------- 工具 ----------
     def _mod_files(self) -> list:

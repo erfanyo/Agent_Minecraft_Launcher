@@ -69,7 +69,8 @@
 - **设置改为顶部标签卡 + 统一布局(模块化)**:设置入口不再弹**模态**对话框,改为主窗口「设置」标签页(和「我的版本 / 下载新资源」平级)。新建 **`CenterShell`**(左菜单纵向 + 右面板,和下载新资源同款操作逻辑)+ **`SettingsCenter`**(左菜单:游戏/界面/AI 助手/镜像源 → 右面板;底部「保存设置」)。这解决了引导遮罩被模态设置框挡住的问题(设置变非模态)。`open_settings` 改为切换到「设置」标签卡(镜像源… 会切到镜像源小节)。
 - **🧭 引导式教程方案已记录**:`引导式教程-方案.md`(技术方案 + 不确定清单,防上下文丢失;不确定处标 ⚠️,做对应部分时再问)。`ui_route`(route→控件)+ `guide_overlay`(spotlight 遮罩+气泡+上一步/下一步)框架 + 演示先落地。
 - **左菜单独立模块 + 统一布局(模块化,为动画预留)**:新增 **`left_menu.py`(LeftMenu 独立模块)**——"左菜单"抽成独立小模块,样式统一、可选中高亮(蓝条+圆角),去掉折叠功能,内部可后续加动画。`CenterShell`(设置/实例详情/下载新资源共用)与 **ResourceCenter** 都改用它;删除原 ResourceCenter 的"◀ 收起/▶ 展开"折叠按钮。
-- **深色模式统一(实例详情等对话框)**:新增全局深色调色板 `apply_global_dark_palette`(系统深色时应用,默认控件 QMenu/QComboBox/QTabWidget/QMessageBox 等不再露浅色)+ 对话框深色样式 `dialog_dark_style`;实例详情标签页改用 `tab_style`(和「我的版本」一致),恢复其内部大量"没兼容深色"的菜单/按钮/列表。
+- **深色模式统一(实例详情等对话框)**:新增全局深色调色板 `apply_global_dark_palette`(系统深色时应用,默认控件 QMenu/QComboBox/QTabWidget/QMessageBox 等不再露浅色)+ 对话框深色样式 `dialog_dark_style`;实例详情标签页改用 `tab_style`(和「我的版本」一致),恢复其内部大量"没兼容深色"的菜单/按钮/列表。**实例详情改为"左菜单 + 右面板"布局**(复用 CenterShell,和下载新资源/设置同一套)。
+- **配色主题架构预留(未来自定义配色方案)**:所有颜色集中到 `ui_style.COLOR_SLOTS`(颜色槽),样式函数经 `current_color(name)` 读取;自定义主题 = `set_custom_colors({name: color})` 覆盖某颜色槽即全局生效。预留设置键 `ui_theme`(auto/dark/light/custom)与 `ui_custom_colors`(dict),启动时 `load_theme_from_settings` 接入(设置界面暂未做入口)。
 
 ### 🧩 Mod 依赖网络(灵感 #5,简单版)
 - 实例管理 → Mod 页新增「**Mod 依赖网络**」:离线解析该实例各 mod jar 的依赖/冲突,画成一张"谁依赖谁"的网

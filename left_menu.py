@@ -25,8 +25,9 @@ class LeftMenu(QWidget):
         self._buttons = []       # [QPushButton]
         self._current = -1       # 当前选中索引(-1=无)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(4)        # 固定行距
+        lay.addStretch(1)        # 底部撑开 → 菜单项靠上排列(顶部对齐、行距固定)
         self._lay = lay
 
     def add_item(self, label: str, icon: str = "") -> int:
@@ -34,11 +35,13 @@ class LeftMenu(QWidget):
         text = (icon + " " + label) if icon else label
         b = QPushButton(text)
         b.setCheckable(True)
+        b.setFixedHeight(40)     # 固定行高 → 行距均匀、靠上排列
         b.setStyleSheet(menu_btn_style())
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         idx = len(self._buttons)
         b.clicked.connect(lambda _c=False, i=idx: self._select(i))
-        self._lay.addWidget(b)
+        # 插到末尾 stretch 之前,保证始终靠上、底部留白
+        self._lay.insertWidget(self._lay.count() - 1, b)
         self._buttons.append(b)
         return idx
 

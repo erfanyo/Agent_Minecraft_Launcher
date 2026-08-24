@@ -215,6 +215,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(700, 560)
         self.selected_version = None  # 记住当前选中的版本,供"下载"按钮使用
         self.settings = load_settings()  # 启动器配置(用户名/内存/版本隔离)
+        # 预留:自定义配色主题(以后 UI 可能出自定义配色方案)。从设置读 ui_custom_colors 应用。
+        from ui_style import load_theme_from_settings
+        load_theme_from_settings(self.settings)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
         # ---- 顶部(已精简,设置移入菜单栏) ----
