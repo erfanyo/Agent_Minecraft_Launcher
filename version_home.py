@@ -274,6 +274,7 @@ class VersionHome(QWidget):
     open_settings_requested = Signal()
     login_changed = Signal()
     one_click_config_requested = Signal(str)  # "bridge"/"rcon"/"auto" → 主窗口处理
+    import_modpack_requested = Signal()       # 导入整合包
     tutorial_requested = Signal()            # 打开新手教程
     instance_selected = Signal(object)       # 选中实例(或 None)→ 主窗口 显示/隐藏「实例详情」标签页
     refresh_requested = Signal()             # 切回「实例」标签页请求刷新(无刷新按钮,自动刷)
@@ -313,7 +314,18 @@ class VersionHome(QWidget):
         self.inst_card = InstanceSettingsCard()
         lay.addWidget(self.inst_card)
 
-        # 一键配置 ▾(移到启动游戏上方;设置/实例详情已改标签页,这里只留运行配置)
+        lay.addStretch(1)
+
+        # 「导入整合包」(左)+「一键配置」(右)并排,放在「启动游戏」上方
+        tool_row = QHBoxLayout()
+        tool_row.setSpacing(10)
+        self.import_btn = QPushButton(t("导入整合包", "Import Modpack"))
+        self.import_btn.setMinimumHeight(44)
+        self.import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.import_btn.setStyleSheet(card_btn_style())
+        self.import_btn.clicked.connect(self.import_modpack_requested.emit)
+        tool_row.addWidget(self.import_btn, 1)
+
         self.config_btn = QToolButton()
         self.config_btn.setText(t("一键配置 ▾", "One-click ▾"))
         self.config_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -332,11 +344,10 @@ class VersionHome(QWidget):
             lambda: self.one_click_config_requested.emit("rcon"))
         rcon_item.setToolTip("临时方案:需要 Lan Server Properties,进世界后按 ESC → 对局域网开放")
         self.config_btn.setMenu(cfg_menu)
-        lay.addWidget(self.config_btn)
+        tool_row.addWidget(self.config_btn, 1)
+        lay.addLayout(tool_row)
 
-        lay.addStretch(1)
-
-        # 启动游戏大按钮(启动按钮下方不再显示"选中实例"小字——左侧卡片已展示)
+        # 启动游戏大按钮
         self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
         self.launch_btn.setMinimumHeight(56)
         self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)

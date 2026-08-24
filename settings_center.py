@@ -137,8 +137,61 @@ class SettingsCenter(QWidget):
         tut_btn.clicked.connect(self._open_guide)
         more_row = QHBoxLayout(); more_row.addWidget(upd_btn); more_row.addWidget(tut_btn); more_row.addStretch()
         l.addLayout(more_row)
+
+        # 配色(自定义主题):改 强调色/文字色/背景色
+        l.addSpacing(12)
+        theme_title = QLabel("🎨 配色(自定义主题,文字颜色也可以改):")
+        theme_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+        l.addWidget(theme_title)
+        self._color_btns = {}
+        cbtn_row = QHBoxLayout(); cbtn_row.setSpacing(8)
+        for slot, label in [("accent", "强调色"), ("text", "文字色"), ("panel_bg", "背景色")]:
+            b = QPushButton(label)
+            b.setStyleSheet(card_btn_style())
+            b.clicked.connect(lambda _c, s=slot, lb=label: self._pick_color(s, lb))
+            cbtn_row.addWidget(b, 1)
+            self._color_btns[slot] = b
+        reset_btn = QPushButton("重置默认"); reset_btn.setStyleSheet(card_btn_style())
+        reset_btn.clicked.connect(self._reset_colors)
+        cbtn_row.addWidget(reset_btn)
+        l.addLayout(cbtn_row)
+        color_hint = QLabel("配色改完保存后,**整个启动器**在下次启动/重建时生效;当前设置页立即预览强调色。")
+        color_hint.setWordWrap(True); color_hint.setStyleSheet("color:#8a93a0;")
+        l.addWidget(color_hint)
+        self._refresh_color_btn_text()
         l.addStretch()
         return w
+
+    # ---- 配色(自定义主题) ----
+    def _refresh_color_btn_text(self):
+        from ui_style import get_custom_colors
+        cur = get_custom_colors()
+        labels = {"accent": "强调色", "text": "文字色", "panel_bg": "背景色"}
+        for slot, b in getattr(self, "_color_btns", {}).items():
+            v = cur.get(slot)
+            b.setText(f"{labels.get(slot, slot)}:" + (v if v else "默认"))
+
+    def _pick_color(self, slot: str, label: str):
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+        from ui_style import get_custom_colors, set_custom_colors
+        cur = get_custom_colors()
+        start = QColor(cur.get(slot)) if cur.get(slot) else QColor("#5B8DEF")
+        c = QColorDialog.getColor(start, self, f"选择{label}")
+        if not c.isValid():
+            return
+        cols = dict(cur); cols[slot] = c.name()
+        set_custom_colors(cols)
+        self.settings["ui_custom_colors"] = cols
+        save_settings(self.settings)
+        self._refresh_color_btn_text()
+
+    def _reset_colors(self):
+        from ui_style import clear_custom_colors
+        clear_custom_colors()
+        self.settings["ui_custom_colors"] = {}
+        save_settings(self.settings)
+        self._refresh_color_btn_text()
 
     def _open_update(self):
         p = self.window()

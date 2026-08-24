@@ -151,7 +151,8 @@ def tab_style() -> str:
     return (
         f"QTabWidget::pane {{ border: 1px solid {pane_border}; border-radius: 10px; }}"
         f"QTabBar::tab {{ background: transparent; padding: 7px 16px; margin-right: 4px;"
-        f" color: {muted}; border-top-left-radius: 7px; border-top-right-radius: 7px; }}"
+        f" color: {muted}; font-size: 14px; border-top-left-radius: 7px;"
+        f" border-top-right-radius: 7px; }}"
         f"QTabBar::tab:selected {{ background: {sel_bg}; color: {text}; font-weight: bold; }}"
         f"QTabBar::tab:hover {{ color: {text}; }}"
     )

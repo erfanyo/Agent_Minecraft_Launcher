@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
         tab_a.open_settings_requested.connect(self.open_settings)
         tab_a.login_changed.connect(self._on_login_changed)
         tab_a.one_click_config_requested.connect(self._one_click_config_kind)
+        tab_a.import_modpack_requested.connect(self.import_modpack)
         tab_a.tutorial_requested.connect(self.open_tutorial)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
@@ -265,8 +266,10 @@ class MainWindow(QMainWindow):
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu)
 
-        # ---- 主选项卡(我的版本 / 实例详情 / 下载新资源 / 设置) ----
+        # ---- 主选项卡(我的实例 / 实例详情 / 下载新资源 / 联机 / 设置) ----
         self.main_tabs = QTabWidget()
+        from ui_style import tab_style
+        self.main_tabs.setStyleSheet(tab_style())   # 外层标签页:圆角+字体放大(14px)
         self.main_tabs.addTab(tab_a, t("我的实例", "My Instances"))
         # 实例详情:放在「我的版本」右边;未选择实例时隐藏,选择后出现(带滑入/淡入动画)
         from instance_manager import InstanceManagerDialog
