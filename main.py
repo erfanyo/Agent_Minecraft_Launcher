@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
         menubar = self.menuBar()
         file_menu = menubar.addMenu(t("文件", "File"))
         file_menu.addAction(t("刷新版本列表", "Refresh Version List"), self.load_versions)
-        file_menu.addAction(t("导入整合包(Modrinth .mrpack)…", "Import Modpack (.mrpack)…"), self.import_modpack)
+        file_menu.addAction(t("导入整合包(.mrpack / .zip)…", "Import Modpack (.mrpack/.zip)…"), self.import_modpack)
         file_menu.addAction(t("打开游戏目录", "Open Game Directory"), self.open_game_dir)
         file_menu.addAction(t("清空所有实例…", "Clear All Instances…"), self.clear_instances)
         file_menu.addSeparator()
@@ -492,15 +492,42 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("所有实例已清空")
 
     def import_modpack(self):
-        """导入整合包(Modrinth .mrpack),后台执行不卡界面"""
+        """导入整合包(自动识别格式:Modrinth .mrpack / CurseForge .zip / 扁平实例文件夹 zip),后台执行不卡界面"""
+        from PySide6.QtWidgets import QInputDialog
         path, _f = QFileDialog.getOpenFileName(
             self, "选择整合包", "", "整合包 (*.mrpack *.zip)")
         if not path:
             return
+
+        # 识别格式;扁平整合包(无清单的实例文件夹 zip)需要用户提供 MC 版本(可选加载器)
+        from modpack import detect_modpack_format
+        mc_version = None
+        loader = None
+        try:
+            fmt = detect_modpack_format(path)
+        except Exception:
+            fmt = None
+        if fmt == "flat":
+            mc_version, okv = QInputDialog.getText(self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
+            if not okv or not mc_version.strip():
+                return
+            mc_version = mc_version.strip()
+            loader, okl = QInputDialog.getItem(
+                self, "导入扁平整合包", "加载器(可选,跳过=原版):",
+                ["(原版)", "fabric", "forge", "neoforge"], 0, False)
+            if okl:
+                loader = None if loader == "(原版)" else loader
+        elif fmt is None:
+            QMessageBox.warning(self, "导入整合包",
+                                "无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)")
+            return
+
         self.statusBar().showMessage("正在导入整合包...")
 
         def worker(status_cb, _progress_cb):
-            instance_id = import_modpack_file(path, paths.GAME_DIR, status_callback=status_cb)
+            instance_id = import_modpack_file(path, paths.GAME_DIR,
+                                             mc_version=mc_version, loader=loader,
+                                             status_callback=status_cb)
             status_cb(f"整合包导入完成:{instance_id} ✅")
 
         self._run_download(worker)
@@ -1070,8 +1097,42 @@ class MainWindow(QMainWindow):
         # Mod 按加载器过滤;光影/数据包/资源包一般不区分加载器
         use_loader = loader if sub_dir == "mods" else None
 
+        # 正向依赖提示(灵感 #4):下载 Mod 前,解析该版本依赖,提示"需要什么/冲突";
+        # 用户可一并安装缺少的必需依赖。仅 Mod 下载时提示,光影/数据包等跳过。
+        extra_deps = []
+        if sub_dir == "mods":
+            try:
+                from modrinth import resolve_dependencies
+                deps = resolve_dependencies(slug, gv, use_loader, version)
+            except Exception:
+                deps = None
+            if deps:
+                lines = [hit.get("title", slug) + " 的依赖提示:"]
+                if deps["required"]:
+                    lines.append("需要(必装):\n" + "\n".join(f" · {d['title']}" for d in deps["required"]))
+                if deps["optional"]:
+                    lines.append("可选(选装):\n" + "\n".join(f" · {d['title']}" for d in deps["optional"]))
+                if deps["incompatible"]:
+                    lines.append("⚠ 冲突(不建议同装):\n" + "\n".join(f" · {d['title']}" for d in deps["incompatible"]))
+                if len(lines) > 1:
+                    cont = QMessageBox.question(
+                        self, "依赖提示",
+                        "\n".join(lines) +
+                        "\n\n是否继续下载该 Mod?(缺少的必需依赖会尝试一并安装到该实例)",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                    if cont != QMessageBox.StandardButton.Yes:
+                        return
+                    extra_deps = [d["slug"] for d in deps["required"]]
+
         def worker(status, progress):
             from modrinth import download_mod
+            for dep_slug in extra_deps:
+                try:
+                    dn = download_mod(dep_slug, gv, use_loader, target_dir, progress_callback=progress)
+                    if dn:
+                        status(f"依赖已装:{dn}")
+                except Exception as e:
+                    status(f"依赖 {dep_slug} 装入失败(跳过): {e}")
             try:
                 filename = download_mod(slug, gv, use_loader, target_dir,
                                         version_number=version,

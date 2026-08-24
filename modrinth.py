@@ -210,6 +210,48 @@ def get_mod_version(slug: str, game_version: str, loader: str | None,
     return None
 
 
+# Modrinth 版本 dependencies 的依赖类型 → 分类
+_DEP_REQUIRED = {"required"}
+_DEP_OPTIONAL = {"optional"}
+_DEP_INCOMPAT = {"incompatible"}
+_DEP_EMBEDDED = {"embedded"}   # 内嵌依赖,通常随包发布,无需提示
+
+
+def resolve_dependencies(slug: str, game_version: str, loader: str | None,
+                         version_number: str | None = None) -> dict:
+    """解析某版本的正向依赖(灵感 #4):把 dependencies 的 project_id 解析成标题。
+    返回 {"required": [...], "optional": [...], "incompatible": [...]},每项含 title/slug/project_id。
+    解析失败(网络/非 mod)时各列为空——不阻塞下载,只作为提示。"""
+    out = {"required": [], "optional": [], "incompatible": []}
+    try:
+        info = get_mod_version(slug, game_version, loader, version_number)
+    except Exception:
+        return out
+    if not info:
+        return out
+    for dep in info.get("dependencies", []):
+        t = (dep.get("dependency_type") or "").lower()
+        if t in _DEP_EMBEDDED:
+            continue
+        pid = dep.get("project_id")
+        if not pid:
+            continue
+        entry = {"project_id": pid, "slug": pid, "title": pid}
+        try:
+            p = get_project(pid)
+            entry["title"] = p.get("title") or pid
+            entry["slug"] = p.get("slug") or pid
+        except Exception:
+            pass
+        if t in _DEP_REQUIRED:
+            out["required"].append(entry)
+        elif t in _DEP_OPTIONAL:
+            out["optional"].append(entry)
+        elif t in _DEP_INCOMPAT:
+            out["incompatible"].append(entry)
+    return out
+
+
 def download_mod(slug: str, game_version: str, loader: str, mods_dir: str,
                  version_number: str | None = None,
                  progress_callback=None) -> str | None:

@@ -63,6 +63,16 @@
 - 渲染:`mod_graph.py`(QGraphicsView 力导向布局 + 拖拽平移 + 滚轮缩放;蓝=已装 / 灰=已禁用 / 红=缺失;
   实线=必须依赖 / 虚线=可选 / 红虚线=不兼容),带图例+概览
 - 入口点击先出"正在分析依赖关系…"进度条(后台解析,不卡界面)
+- **下载 Mod 时正向依赖提示(灵感 #4 剩余)**:资源中心下载 Mod 时,按 Modrinth 版本 `dependencies` 提示
+  "需要(必装)/可选/冲突",可一键一并安装缺少的必需依赖(`modrinth.resolve_dependencies`)
+
+### 📦 整合包导入(多格式,自动识别)
+- 导入整合包不再只认 Modrinth `.mrpack`:**自动识别** `.zip` 内部是哪种整合包
+- 支持:① **Modrinth .mrpack**(清单式,下载清单文件+解压 overrides)② **CurseForge .zip**(读 manifest 拿 MC 版本+加载器,
+  自动装基础+加载器+解压 overrides;清单列的文件需 CurseForge API,已明确提示跳过)
+  ③ **扁平 .zip**(无清单的实例文件夹:含 mods/config/shaderpacks/saves 等,如 FTB/手工包——导入时填 MC 版本可选项加载器,
+  自动解压成新实例;单一顶层包装文件夹会自动剥离)
+- 入口:文件菜单「导入整合包(.mrpack / .zip)…」;识别为扁平且缺版本时,会先询问游戏版本/加载器
 
 ### ⚡ 性能策略(AI 规划 §5,LLM 运行时的游戏影响)
 - **量化提示**:本地推理时后台每秒采样 llama-server CPU 占用,状态栏显示「推理中… CPU≈X%」,给用户判断依据
