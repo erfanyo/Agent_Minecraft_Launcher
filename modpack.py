@@ -122,12 +122,15 @@ def _flat_single_prefix(names: list) -> str | None:
 
 
 def _extract_zip_to(path: str, inst_dir: str, prefix: str, status_callback=None):
-    """把 zip 内容解压进实例目录(去掉 prefix);跳过目录项。"""
+    """把 zip 内容解压进实例目录(去掉 prefix);跳过目录项与路径穿越。
+    prefix 非空时只解压该前缀下的成员(如 overrides/),其余(manifest.json 等)忽略。"""
     with zipfile.ZipFile(path) as z:
         for member in z.namelist():
             if not member or member.endswith("/"):
                 continue
-            if prefix and member.startswith(prefix):
+            if prefix:   # 只在某前缀下解压,其它文件忽略
+                if not member.startswith(prefix):
+                    continue
                 rel = member[len(prefix):]
             else:
                 rel = member
@@ -174,10 +177,31 @@ def detect_modpack_format(path: str) -> str | None:
     return None
 
 
+def suggested_instance_id(path: str) -> str:
+    """按格式给出默认实例 id(名字来自 manifest/包名;识别失败用文件名)。供导入前预检同名。"""
+    try:
+        fmt = detect_modpack_format(path)
+        with zipfile.ZipFile(path) as z:
+            if fmt == "modrinth":
+                idx = json.loads(z.read("modrinth.index.json"))
+                name = idx.get("name")
+            elif fmt == "curseforge":
+                mf = json.loads(z.read("manifest.json"))
+                name = mf.get("name")
+            else:
+                name = None
+            if name:
+                return _safe_name(name)
+    except Exception:
+        pass
+    return _safe_name(os.path.splitext(os.path.basename(path))[0])
+
+
 def import_modpack(path: str, game_dir: str,
                    mc_version: str | None = None,
                    loader: str | None = None,
                    loader_version: str | None = None,
+                   instance_id: str | None = None,
                    status_callback=None, progress_callback=None) -> str:
     """导入整合包(自动识别格式),返回实例 ID。
 
@@ -186,6 +210,8 @@ def import_modpack(path: str, game_dir: str,
       清单里的文件列表需 CurseForge API(跳过),会附加提示。
     - 扁平 .zip(实例文件夹):需 mc_version(否则报错);可选 loader/loader_version;
       直接把 zip 内容解压成新实例。
+    - instance_id:指定实例 ID(默认按包名生成);已存在且未指定 → 抛错,让调用方改用自定义名。
+    - 若包声明了加载器(CurseForge/Modrinth/用户指定)但安装失败 → 抛错回滚,不静默生成"原版半成品"。
     """
     if not os.path.isfile(path):
         raise ValueError("文件不存在")
@@ -228,10 +254,10 @@ def import_modpack(path: str, game_dir: str,
 
     if not mc:
         raise ValueError("整合包缺少 minecraft 版本")
-    instance_id = _safe_name(name)
+    instance_id = instance_id or _safe_name(name)
     inst_dir = os.path.join(game_dir, "versions", instance_id)
     if os.path.exists(inst_dir):
-        raise ValueError(f"已存在同名实例:{instance_id}")
+        raise ValueError(f"已存在同名实例:{instance_id}(可在导入时自定义实例名)")
     if status_callback:
         status_callback(f"开始导入整合包:{name}(mc {mc})...")
 
@@ -251,9 +277,12 @@ def import_modpack(path: str, game_dir: str,
                                            progress_callback=progress_callback,
                                            status_callback=status_callback)
         except Exception as e:
+            # 包需要这个加载器(CurseForge/Modrinth 声明,或用户手动选了非原版)却装不上
+            # → 不能静默生成一个"原版半成品"(否则 mods 跑不了,基础版本也不会被收进 _versions)。
+            msg = f"加载器 {loader} 安装失败,已取消导入:{e}"
             if status_callback:
-                status_callback(f"加载器安装失败(跳过,仅原版):{e}")
-            base_instance = None
+                status_callback(msg)
+            raise RuntimeError(msg) from e
 
     # 3) 创建实例目录,放好版本 JSON 和客户端 jar
     os.makedirs(inst_dir, exist_ok=True)

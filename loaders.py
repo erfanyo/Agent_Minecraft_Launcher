@@ -314,6 +314,12 @@ def install_loader(loader: str, mc: str, game_dir: str,
             profile = _fabric_profile(mc, loader_ver)
         elif loader == "forge":
             loader_ver = loader_version or _latest_forge_version(mc)
+            # Forge 的 maven 版本号是 "mc-forge版本"(如 1.20.1-47.4.0);
+            # CurseForge/Modrinth 常给裸 forge 版本(如 47.4.0),直接拼 URL 会 404,这里归一化。
+            if loader_ver and mc and not loader_ver.startswith(mc + "-"):
+                loader_ver = f"{mc}-{loader_ver}"
+            if status_callback:
+                status_callback(f"安装加载器 forge {loader_ver}...")
             profile, installer_profile, forge_installer, forge_tmp = _forge_installer(loader_ver, game_dir)
         elif loader == "neoforge":
             loader_ver = loader_version or _latest_neoforge_version(mc)

@@ -500,7 +500,7 @@ class MainWindow(QMainWindow):
             return
 
         # 识别格式;扁平整合包(无清单的实例文件夹 zip)需要用户提供 MC 版本(可选加载器)
-        from modpack import detect_modpack_format
+        from modpack import detect_modpack_format, suggested_instance_id
         mc_version = None
         loader = None
         try:
@@ -522,13 +522,31 @@ class MainWindow(QMainWindow):
                                 "无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)")
             return
 
+        # 同名预检:实例名已存在 → 让用户自己命名(不直接失败)
+        instance_id = None
+        try:
+            default_id = suggested_instance_id(path)
+            if default_id and os.path.isdir(os.path.join(paths.GAME_DIR, "versions", default_id)):
+                new_id, okn = QInputDialog.getText(
+                    self, "实例名重复",
+                    f"已存在实例「{default_id}」,请为新实例命名:", text=default_id + "-2")
+                if not okn or not new_id.strip():
+                    return
+                instance_id = new_id.strip()
+        except Exception:
+            pass   # 预检失败也不拦导入(让 import_modpack 的"已存在"兜底)
+
         self.statusBar().showMessage("正在导入整合包...")
 
         def worker(status_cb, _progress_cb):
-            instance_id = import_modpack_file(path, paths.GAME_DIR,
-                                             mc_version=mc_version, loader=loader,
-                                             status_callback=status_cb)
-            status_cb(f"整合包导入完成:{instance_id} ✅")
+            try:
+                instance_id = import_modpack_file(path, paths.GAME_DIR,
+                                                 mc_version=mc_version, loader=loader,
+                                                 instance_id=instance_id,
+                                                 status_callback=status_cb)
+                status_cb(f"整合包导入完成:{instance_id} ✅")
+            except Exception as e:
+                status_cb(f"❌ 整合包导入失败:{type(e).__name__}: {e}")
 
         self._run_download(worker)
 
