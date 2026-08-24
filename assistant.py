@@ -376,6 +376,157 @@ def _friendly_cloud_error(e: Exception) -> str:
     return str(e) or f"{type(e).__name__}"
 
 
+# ================= 性能策略(§5)OS 级小工具 =================
+# 量化提示 / 主动避让 / 温控意识 都依赖下面这几个进程/温度采样,统一放这里,
+# 全部 best-effort:失败返回 None/静默,绝不抛异常影响主流程(t13 防御)。
+# 目标平台是 Windows(exe),但保留非 Windows 的优雅降级。
+
+# 优先级常量(Windows):NORMAL / BELOW_NORMAL / IDLE
+_PRIORITY_NORMAL = 0x00000020
+_PRIORITY_BELOW_NORMAL = 0x00004000
+_PRIORITY_IDLE = 0x00000040
+
+# 高温阈值(°C):超过则劝退重任务(温控意识)
+_CPU_HOT_C = 85.0
+
+# 可用内存阈值(MB):低于则提示「游戏+本地模型共存」可能吃紧(§5.1 local 通道内存监控)
+_MEM_LOW_MB = 1024.0
+
+
+def _set_process_priority_class(pid: int, priority_class: int) -> bool:
+    """设置进程优先级(仅 Windows;非 Windows 忽略)。返回是否成功。"""
+    if os.name != "nt" or not pid:
+        return False
+    try:
+        import ctypes
+        PROCESS_SET_INFORMATION = 0x0200
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_SET_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            ctypes.windll.kernel32.SetPriorityClass(handle, priority_class)
+            return True
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        return False
+
+
+def _process_cpu_percent(pid: int, last: dict) -> float | None:
+    """估算 pid 进程的 CPU 占用率(≈%,可>100 表示多核并行占用)。
+    last 为字典,存上一次采样的 (cpu 累计 100ns, 时间戳),跨样本求增量;
+    首次采样/间隔过短/非 Windows → 返回 None。失败静默。"""
+    if os.name != "nt" or not pid:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class FILETIME(ctypes.Structure):
+            _fields_ = [("dwLowDateTime", wintypes.DWORD),
+                        ("dwHighDateTime", wintypes.DWORD)]
+
+        def _u64(ft: FILETIME) -> int:
+            return (ft.dwHighDateTime << 32) + ft.dwLowDateTime
+
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            ct_, et_, kt_, ut_ = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+            ok = ctypes.windll.kernel32.GetProcessTimes(
+                handle, ctypes.byref(ct_), ctypes.byref(et_),
+                ctypes.byref(kt_), ctypes.byref(ut_))
+            if not ok:
+                return None
+            cpu = _u64(kt_) + _u64(ut_)          # 累计 CPU 时间,单位 100ns
+            now = time.time()
+            if last.get("cpu") is not None:
+                dcpu = cpu - last["cpu"]
+                dt = now - last["t"]
+                if dt > 0.2 and dcpu >= 0:
+                    # FILETIME=100ns;每核每秒钟 1e7 个 tick
+                    pct = (dcpu / dt) / 1e7 * 100.0
+                    last["cpu"] = cpu
+                    last["t"] = now
+                    n = os.cpu_count() or 1
+                    return max(0.0, min(pct, 100.0 * n))
+            last["cpu"] = cpu
+            last["t"] = now
+            return None
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def _cpu_temperature() -> float | None:
+    """采样 CPU/主板温度(°C)。psutil(若装了)优先;Windows 走 WMI 兜底。
+    若无 WMI 传感器 / 非 Windows / 取不到 → None(不干扰,宁可不提示)。"""
+    try:
+        import psutil
+        temps = psutil.sensors_temperatures()
+        if temps:
+            for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz",
+                        "soc_thermal", "k8temp", "zenpower"):
+                for rec in temps.get(key, []):
+                    if rec.current is not None:
+                        return float(rec.current)
+        return None
+    except Exception:
+        pass
+    if os.name == "nt":
+        # WMI 热区:部分笔记本/台式才有,读取失败会静默
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "(Get-CimInstance MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue "
+                 "| ForEach-Object { ($_.CurrentTemperature / 10.0) - 273.15 }) "
+                 "| Sort-Object -Descending | Select-Object -First 1"],
+                capture_output=True, text=True, timeout=2)
+            for line in (out.stdout or "").splitlines():
+                line = line.strip()
+                try:
+                    v = float(line)
+                except ValueError:
+                    continue
+                if 0.0 < v < 120.0:
+                    return v
+        except Exception:
+            pass
+    return None
+
+
+def _system_available_memory_mb() -> float | None:
+    """可用物理内存(MB)。Windows 用 GlobalMemoryStatusEx;失败 → None(不干扰)。"""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        m = MEMORYSTATUSEX()
+        m.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+            return m.ullAvailPhys / (1024.0 * 1024.0)
+        return None
+    except Exception:
+        return None
+
+
 class _Signals(QObject):
     reply = Signal(str)
     error = Signal(str)
@@ -392,6 +543,7 @@ class _Signals(QObject):
     ring_update = Signal()                 # worker → 主线程:刷新上下文占用环(_update_ctx_ring)
     dl_progress = Signal(str, str, int, int)   # worker → 主线程:(title, status, done, total) 下载进度
     dl_done = Signal(str, bool, str)           # worker → 主线程:(title, ok, msg) 下载结束
+    local_idle = Signal()                      # worker → 主线程:本地推理结束(用于「用完即卸」闲置卸载)
 
 
 def _esc(text: str) -> str:
@@ -1215,6 +1367,8 @@ class AIChatDock(QDockWidget):
         # 下载进度/结束:worker 线程报告 → 主线程写到主窗口下载日志 + 左下角圆环(详情可点开看)
         self.signals.dl_progress.connect(self._on_dl_progress)
         self.signals.dl_done.connect(self._on_dl_done)
+        # 用完即卸:本地推理结束 → 主线程安排闲置卸载(§5)
+        self.signals.local_idle.connect(self._schedule_idle_unload)
 
         self.history = QTextBrowser()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
@@ -1319,12 +1473,22 @@ class AIChatDock(QDockWidget):
         self._local_downloading = False   # 本地模型下载中标志
         self._local_preloading = False    # 本地模型预热中标志(§8.2 冷启动预加载)
         self._local_dlg = None            # 下载进度弹窗
+        # ---- 性能策略(§5)状态:量化提示 / 主动避让 / 用完即卸 / 温控意识 ----
+        self._inferring = False           # 本地推理进行中(CPU 采样/闲置卸载据此判断)
+        self._game_running = False        # 是否有游戏进程在跑(主动避让:降推理优先级/暂停)
+        self._game_proc = None            # 运行中的游戏进程(用于判断存活)
+        self._cpu_sample = {}             # 量化提示:CPU 采样状态 {cpu, t}
+        self._idle_timer = None           # 用完即卸:闲置卸载 QTimer
+        self._hot_warned_at = 0.0         # 温控意识:上次高温提醒时间(避免刷屏)
+        self._infer_monitor_stop = threading.Event()   # CPU 采样监控线程停止标志
         self._append_system("AI 助手就绪。选中实例后提问,我会带上实例上下文;"
                             "我还能调用工具(列实例/搜 Mod/读日志等),写操作需要\"工作区可写\"权限。")
         self.update_vision_ui()        # 按模型是否支持多模态显示/隐藏图片按钮
         self.update_local_status()     # 本地模型状态(未下载/已就绪)
         # §8.2 冷启动预加载:若默认就是内置本地模型,开机空闲期就预热 server
         QTimer.singleShot(2000, self.maybe_preload_local)
+        # §5 性能策略:CPU 采样监控线程(量化提示);daemon,不阻塞退出。见 shutdown() 置停。
+        threading.Thread(target=self._infer_monitor_loop, daemon=True).start()
 
     def update_vision_ui(self):
         """按所选模型是否支持看图(多模态)显示/隐藏图片相关按钮。
@@ -1728,7 +1892,13 @@ class AIChatDock(QDockWidget):
     def _local_tool_call(self, text: str, executor, on_tool):
         """本地路径:grammar 工具调用 → 复用 executor 执行。
         返回 (reply 文本, 是否成功);失败时上层落云端(§1.4)。"""
+        # 主动避让(§5):游戏运行中且「游戏内 AI」不用本地模型 → 暂停本地推理(资源让给游戏)
+        blocked = self._local_infer_blocked()
+        if blocked:
+            return (blocked, True)   # 视为已处理,直接展示提示,不再落云端
         self.signals.local_status.emit("本地模型:推理中…")
+        self._start_infer_monitor()
+        self._warn_if_hot()          # 温控意识(§5):过热则劝退重任务
         try:
             engine = self._get_local_engine()
             engine.start()   # 幂等:已启动则直接返回
@@ -1755,12 +1925,19 @@ class AIChatDock(QDockWidget):
         except Exception as e:
             return (f"(本地推理失败:{type(e).__name__}: {e})", False)
         finally:
+            self._stop_infer_monitor()
+            self.signals.local_idle.emit()   # 用完即卸:主线程安排闲置卸载
             self.signals.local_status.emit(self._local_status_text())
 
     def _local_chat(self, text: str):
         """本地简单对话(寒暄/基础介绍/功能简介):引擎 chat() 自由回答,不走工具。
         返回 (reply 文本, 是否成功);失败时上层落云端(§1.4)。"""
+        blocked = self._local_infer_blocked()
+        if blocked:
+            return (blocked, True)   # 主动避让:游戏运行中且非本地通道 → 提示,不落云端
         self.signals.local_status.emit("本地模型:推理中…")
+        self._start_infer_monitor()
+        self._warn_if_hot()          # 温控意识(§5)
         try:
             engine = self._get_local_engine()
             engine.start()
@@ -1776,6 +1953,8 @@ class AIChatDock(QDockWidget):
         except Exception as e:
             return (f"(本地对话失败:{type(e).__name__}: {e})", False)
         finally:
+            self._stop_infer_monitor()
+            self.signals.local_idle.emit()   # 用完即卸
             self.signals.local_status.emit(self._local_status_text())
 
     # ---- 本地模型下载(懒加载 §2):首次用到且未下载 → 后台下载带进度,期间走云端 ----
@@ -1912,6 +2091,9 @@ class AIChatDock(QDockWidget):
                     return
             except Exception:
                 return
+            # 主动避让(§5):游戏运行中且「游戏内 AI」非本地 → 不预热(避免跟 off/cloud 的卸载打架,抢内存)
+            if self._game_running and self._game_ai_mode() != "local":
+                return
             if getattr(self, "_local_preloading", False):
                 return
             eng = getattr(self, "_local_engine", None)
@@ -1937,6 +2119,7 @@ class AIChatDock(QDockWidget):
     # ---- 本地引擎生命周期:游戏启动/窗口关闭时卸载(省内存/无残留进程) ----
     def stop_local_engine(self):
         """卸载本地模型引擎(llama-server 进程)。off/cloud 时游戏启动会调用;窗口关闭也会调用。"""
+        self._cpu_sample = {}   # 量化提示:引擎重启后重新采样
         eng = getattr(self, "_local_engine", None)
         if eng is not None:
             try:
@@ -1947,6 +2130,128 @@ class AIChatDock(QDockWidget):
 
     def shutdown(self):
         """窗口关闭时调用:卸载本地模型,确保无残留进程。"""
+        self._infer_monitor_stop.set()   # 停 CPU 采样监控线程(§5)
+        self.stop_local_engine()
+
+    # ---- 性能策略(§5):量化提示 / 主动避让 / 用完即卸 / 温控意识 ----
+    def _game_ai_mode(self) -> str:
+        """游戏内 AI 通道:off / cloud / local(见 settings.ai_in_game)。"""
+        return str(self.settings.get("ai_in_game", "off") or "off")
+
+    def set_game_running(self, proc):
+        """主动避让(§5):游戏进程启动 → 标记运行中,并把本地推理优先级降到游戏之下。"""
+        self._game_running = True
+        self._game_proc = proc
+        self._apply_engine_priority()
+        # 内存监控(§5.1 local 通道):游戏+本地模型共存,可用内存不足先提示用户(不崩游戏)
+        if self._game_ai_mode() == "local":
+            self._warn_if_mem_low()
+
+    def _warn_if_mem_low(self):
+        """§5.1 local 通道内存监控:可用内存低于阈值 → 提醒用户(游戏+本地模型共存可能吃紧)。"""
+        try:
+            free = _system_available_memory_mb()
+            if free is None or free >= _MEM_LOW_MB:
+                return
+            self.signals.system_msg.emit(
+                f"⚠️ 当前可用内存仅剩约 {free:.0f}MB,游戏内又常驻本地模型,可能影响流畅度。"
+                "建议到 设置→AI 助手 把「游戏内 AI」改为关闭/云端,或加内存。")
+        except Exception:
+            pass
+
+    def set_game_stopped(self):
+        """主动避让(§5):游戏退出 → 恢复本地推理正常优先级,并按冷启动策略预热下次要用。"""
+        self._game_running = False
+        self._game_proc = None
+        self._apply_engine_priority()
+        # 游戏退出后,若选的是内置本地模型且已下载 → 后台预热(下次本地提问秒开;§8.2)
+        try:
+            if self._game_ai_mode() != "local":
+                QTimer.singleShot(1500, self.maybe_preload_local)
+        except Exception:
+            pass
+
+    def _apply_engine_priority(self):
+        """把 llama-server 优先级调到与游戏运行状态匹配(游戏进程优先级始终高于推理)。"""
+        eng = getattr(self, "_local_engine", None)
+        proc = getattr(eng, "proc", None) if eng else None
+        if proc is None or proc.poll() is not None:
+            return
+        pid = getattr(proc, "pid", None)
+        if not pid:
+            return
+        cls = _PRIORITY_BELOW_NORMAL if self._game_running else _PRIORITY_NORMAL
+        _set_process_priority_class(pid, cls)
+
+    def _local_infer_blocked(self) -> str | None:
+        """主动避让(§5):游戏运行中且「游戏内 AI」不用本地模型 → 暂停本地推理(资源让给游戏)。
+        返回阻止文案;不阻止则返回 None。"""
+        if not self._game_running:
+            return None
+        if self._game_ai_mode() == "local":
+            return None   # 游戏内 AI 用本地模型 → 保持加载,仅优先级避让(_apply_engine_priority)
+        return ("游戏运行中,已暂停本地推理(把资源让给游戏)。"
+                "你可以稍后再试,或到 设置→AI 助手 把「游戏内 AI」设为本地模型后,"
+                "游戏期间也能用本地模型。")
+
+    # ---- 量化提示(§5):推理时显示 CPU 占用(约) ----
+    def _start_infer_monitor(self):
+        self._inferring = True
+
+    def _stop_infer_monitor(self):
+        self._inferring = False
+
+    def _infer_monitor_loop(self):
+        """后台守护线程:推理期间每秒采样一次 llama-server CPU%,经信号回主线程显示。
+        不触碰任何 Qt 部件(t13 规则),只读状态 + 发信号;daemon,不阻塞退出。"""
+        while not self._infer_monitor_stop.is_set():
+            time.sleep(1.0)
+            if not self._inferring:
+                continue
+            eng = getattr(self, "_local_engine", None)
+            proc = getattr(eng, "proc", None) if eng else None
+            if proc is None or proc.poll() is not None:
+                continue
+            pct = _process_cpu_percent(getattr(proc, "pid", 0) or 0, self._cpu_sample)
+            if pct is not None:
+                self.signals.local_status.emit(f"本地模型:推理中… CPU≈{pct:.0f}%")
+
+    def _warn_if_hot(self):
+        """温控意识(§5):推理前查一次 CPU 温度,过高则劝退重任务(每 5 分钟最多提醒一次)。"""
+        try:
+            now = time.time()
+            if now - self._hot_warned_at < 300:
+                return
+            temp = _cpu_temperature()
+            if temp is None:
+                return
+            if temp >= _CPU_HOT_C:
+                self._hot_warned_at = now
+                self.signals.system_msg.emit(
+                    f"⚠️ 检测到 CPU 温度较高(约 {temp:.0f}℃),本地推理可能让笔记本过热降频。"
+                    "这个任务建议改用云端(更稳),或等降温后再试。")
+        except Exception:
+            pass
+
+    # ---- 用完即卸(§5):任务结束后闲置卸载模型,回到几百 KB 空闲态 ----
+    def _schedule_idle_unload(self):
+        """吃完即卸:本地推理结束后安排闲置卸载(主线程);ai_in_game=local 则常驻不卸。"""
+        if self._game_ai_mode() == "local":
+            return   # 游戏内 AI 用本地模型 → 常驻(游戏内要用),不卸
+        if self._idle_timer is None:
+            self._idle_timer = QTimer(self)
+            self._idle_timer.setSingleShot(True)
+            self._idle_timer.timeout.connect(self._idle_unload_now)
+        self._idle_timer.start(60_000)   # 闲置 60 秒后卸载
+
+    def _idle_unload_now(self):
+        """闲置卸载执行:没在推理且引擎还在跑 → 停掉,回到空闲态(§5 用完即卸)。"""
+        if self._inferring:
+            return
+        if self._game_ai_mode() == "local":
+            return
+        if getattr(self, "_local_engine", None) is None:
+            return
         self.stop_local_engine()
 
     # ---- 发送(后台线程,带工具调用,过程实时显示) ----

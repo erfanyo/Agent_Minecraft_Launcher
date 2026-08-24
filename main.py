@@ -864,6 +864,12 @@ class MainWindow(QMainWindow):
         # 通知技能系统:游戏已启动(崩溃守护等技能开始工作)
         self.skill_mgr.on_game_start(self.game_process, self._running_instance_id)
 
+        # 主动避让(§5):告诉 AI 面板游戏在跑,本地推理降为低于游戏优先级/暂停(ai_in_game=local 时保持)
+        try:
+            self.ai_dock.set_game_running(self.game_process)
+        except Exception:
+            pass
+
         # 4) 后台线程读游戏输出 → 队列 → 定时器搬到日志页(生产-消费模式)
         self.log_queue = queue.Queue()
         threading.Thread(target=self._read_process, daemon=True).start()
@@ -896,6 +902,11 @@ class MainWindow(QMainWindow):
                 self._update_running_label()
                 # 通知技能系统:游戏退出(自动重启/备份提醒等技能在这里触发)
                 self.skill_mgr.on_game_stop(code)
+                # 主动避让(§5):游戏退出 → 恢复本地推理正常优先级,并按策略预热下次要用
+                try:
+                    self.ai_dock.set_game_stopped()
+                except Exception:
+                    pass
                 if code not in (0, None):
                     self._auto_debug(code)   # 异常退出 → 自动收集日志给 AI 分析
                 return
