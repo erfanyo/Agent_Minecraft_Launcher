@@ -131,13 +131,15 @@ class ResourceBrowser(QWidget):
     目标实例(可折叠,全局共享) + 筛选 + 搜索(异步) + 结果列表 + 详情面板(版本/加载器/下载)。"""
 
     def __init__(self, project_type: str, label: str, sub_dir: str,
-                 on_download, get_instance_loader, parent=None):
+                 on_download, get_instance_loader, parent=None, is_modpack: bool = False):
         super().__init__(parent)
         self.project_type = project_type
         self.label = label
         self.sub_dir = sub_dir            # mods / shaderpacks / ...
         self.on_download = on_download    # (slug, version, inst, custom_dir) -> 结果
         self.get_instance_loader = get_instance_loader
+        self.is_modpack = is_modpack      # 整合包:下载 .mrpack 并导入成"新实例",不装进已有实例
+        self.on_modpack_download = None   # 整合包下载回调(hit, version) -> 由外层注入
 
         # 目标实例:镜像全局共享的(inst, custom_dir);真正的单一来源在 ResourceCenter
         self.selected_inst = None
@@ -293,9 +295,24 @@ class ResourceBrowser(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        layout.addWidget(self.inst_cards_toggle)
-        layout.addWidget(self.cards_scroll)
-        layout.addWidget(self.custom_label)
+        if self.is_modpack:
+            # 整合包=一键全集:下载后作为「新实例」导入,无需选目标实例/目录
+            self.modpack_hint = QLabel(
+                t("📦 整合包=Mod+配置(+可选存档)的一键合集。选好版本点「下载」,"
+                  "会自动下载 .mrpack 并作为【新实例】导入(自动装基础+加载器+全部 mod),"
+                  "不用先选目标实例。",
+                  "Modpack = mods+config(+optional saves) in one. Pick a version and Download: "
+                  "it auto-downloads the .mrpack and imports as a NEW instance."))
+            self.modpack_hint.setStyleSheet(hint_style())
+            self.modpack_hint.setWordWrap(True)
+            layout.addWidget(self.modpack_hint)
+            self.inst_cards_toggle.setVisible(False)
+            self.cards_scroll.setVisible(False)
+            self.custom_label.setVisible(False)
+        else:
+            layout.addWidget(self.inst_cards_toggle)
+            layout.addWidget(self.cards_scroll)
+            layout.addWidget(self.custom_label)
         layout.addLayout(self._row(self.filter_version, self.filter_loader))
         layout.addLayout(self._row(self.sort_combo, self.tag_edit))
         layout.addLayout(self._row(self.search_edit, search_btn))
@@ -714,6 +731,15 @@ class ResourceBrowser(QWidget):
     def _download(self):
         if not getattr(self, "_current", None):
             return
+        if self.is_modpack:
+            # 整合包:下载 .mrpack → 导入成新实例(无需目标实例)
+            if self.on_modpack_download:
+                self.on_modpack_download(self._current, self.ver_combo.currentData())
+            else:
+                self.inst_cards_toggle.setChecked(True)
+                self._toggle_cards()
+                self.inst_cards_toggle.setText("▾ 整合包下载未接好(请联系开发者)")
+            return
         inst = self.selected_inst
         if inst is None and not self.custom_dir:
             self.inst_cards_toggle.setChecked(True)
@@ -763,6 +789,7 @@ class ResourceCenter(QWidget):
         for idx, (label, icon) in enumerate([
                 (t("首页", "Home"), "🏠"),
                 (t("实例", "Instances"), "📦"),
+                ("🎁 " + t("整合包", "Modpacks"), None),
                 ("🧩 " + t("Mod", "Mods"), None),
                 ("🌄 " + t("光影包", "Shaders"), None),
                 ("🗂 " + t("数据包", "Datapacks"), None),
@@ -786,15 +813,26 @@ class ResourceCenter(QWidget):
         self.download_tab.bind_start(self._on_start_instance)
         self.stack.addWidget(self.download_tab)             # 1 实例
 
+        # 整合包:像 Mod 一样浏览 Modrinth 整合包,点「下载」自动导入成新实例
+        mp = ResourceBrowser("modpack", t("整合包", "Modpacks"), "",
+                             on_download=self._browser_download,
+                             get_instance_loader=self._get_inst_loader,
+                             is_modpack=True)
+        mp.on_modpack_download = self._on_modpack_download
+        mp.set_instance_dir_fn(self._instance_dir)
+        mp._set_target_hooks(self._get_shared_target, self._set_shared_target)
+        self.browsers["modpack"] = mp
+        self.stack.addWidget(mp)                            # 2 整合包
+
         # 资源浏览器:Mod / 光影 / 数据包 / 资源包
-        for idx, (ptype, label, sub) in enumerate(RESOURCE_CATEGORIES, start=2):
+        for idx, (ptype, label, sub) in enumerate(RESOURCE_CATEGORIES, start=3):
             br = ResourceBrowser(ptype, label, sub,
                                  on_download=self._browser_download,
                                  get_instance_loader=self._get_inst_loader)
             br.set_instance_dir_fn(self._instance_dir)
             br._set_target_hooks(self._get_shared_target, self._set_shared_target)
             self.browsers[ptype] = br
-            self.stack.addWidget(br)                        # 2..5
+            self.stack.addWidget(br)                        # 3..6
 
         # ---- 布局 ----
         layout = QHBoxLayout(self)
@@ -853,10 +891,11 @@ class ResourceCenter(QWidget):
         cards = FlowLayout(hspacing=12, vspacing=12)
         entries = [
             (t("📦 创建实例", "Instances"), 1),
-            ("🧩 " + t("Mod", "Mods"), 2),
-            ("🌄 " + t("光影包", "Shaders"), 3),
-            ("🗂 " + t("数据包", "Datapacks"), 4),
-            ("🎨 " + t("资源包", "Resourcepacks"), 5),
+            ("🎁 " + t("整合包", "Modpacks"), 2),
+            ("🧩 " + t("Mod", "Mods"), 3),
+            ("🌄 " + t("光影包", "Shaders"), 4),
+            ("🗂 " + t("数据包", "Datapacks"), 5),
+            ("🎨 " + t("资源包", "Resourcepacks"), 6),
         ]
         for text, idx in entries:
             b = QPushButton(text)
@@ -901,16 +940,20 @@ class ResourceCenter(QWidget):
         return getattr(self, "_ui_mode", "beginner") != "expert"
 
     # ---- 对外接口 ----
-    def set_hooks(self, instance_dir, on_download, on_start_instance, on_import_modpack=None):
-        """注入:实例目录函数 / 下载回调 / 开始下载实例回调 / 导入整合包回调"""
+    def set_hooks(self, instance_dir, on_download, on_start_instance,
+                  on_import_modpack=None, on_modpack_download=None):
+        """注入:实例目录函数 / 下载回调 / 开始下载实例回调 / 导入整合包回调 / 整合包下载回调"""
         self._instance_dir = instance_dir
         self._on_download_cb = on_download
         self._on_start_cb = on_start_instance
         self._on_import_cb = on_import_modpack
+        self._on_modpack_cb = on_modpack_download
         for br in self.browsers.values():
             br.set_instance_dir_fn(instance_dir)
         if self.download_tab is not None and on_import_modpack:
             self.download_tab.bind_import(on_import_modpack)
+        if on_modpack_download and "modpack" in self.browsers:
+            self.browsers["modpack"].on_modpack_download = on_modpack_download
 
     def set_latest_versions(self, release: str, snapshot: str):
         self.home_latest.setText(
@@ -925,6 +968,11 @@ class ResourceCenter(QWidget):
     def _browser_download(self, hit, version, inst, target_dir, sub_dir):
         if self._on_download_cb:
             self._on_download_cb(hit, version, inst, target_dir, sub_dir)
+
+    def _on_modpack_download(self, hit, version):
+        """整合包下载:转发给主窗口(下载 .mrpack 并导入成新实例)"""
+        if getattr(self, "_on_modpack_cb", None):
+            self._on_modpack_cb(hit, version)
 
     def _on_start_instance(self):
         if hasattr(self, "_on_start_cb") and self._on_start_cb:

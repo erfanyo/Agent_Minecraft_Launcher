@@ -289,7 +289,8 @@ class MainWindow(QMainWindow):
             instance_dir=self.game_dir_for,
             on_download=self._resource_download,
             on_start_instance=self.start_instance_download,
-            on_import_modpack=self.import_modpack)
+            on_import_modpack=self.import_modpack,
+            on_modpack_download=self._resource_download_modpack)
 
 
         # 右键菜单:实例(启动/打开目录/删除)
@@ -1217,6 +1218,50 @@ class MainWindow(QMainWindow):
                     status(f"⚠️ {slug} 没有 {gv}{'+' + use_loader if use_loader else ''} 的可用版本")
             except Exception as e:
                 status(f"❌ 下载失败: {e}")
+
+        self._run_download(worker)
+
+    def _resource_download_modpack(self, hit, version):
+        """资源中心-整合包下载:下载 Modrinth 的 .mrpack 并导入成【新实例】。
+        (整合包是一键全集,不装进已有实例,而是创建一个新实例。)"""
+        import shutil as _sh
+        slug = hit["slug"]
+        title = hit.get("title", slug)
+
+        def worker(status, progress):
+            from modpack import import_modpack
+            from modrinth import download_modpack
+            tmp = os.path.join(paths.GAME_DIR, "downloads", "modpack_tmp")
+            try:
+                os.makedirs(tmp, exist_ok=True)
+            except Exception:
+                pass
+            # 1) 下载 .mrpack
+            try:
+                status(f"下载整合包 {title}...")
+                local = download_modpack(slug, tmp, version_number=version,
+                                         progress_callback=progress)
+                if not local:
+                    status("❌ 该整合包没有可下载的 .mrpack 文件")
+                    return
+            except Exception as e:
+                status(f"❌ 下载整合包失败:{type(e).__name__}: {e}")
+                return
+            # 2) 导入成新实例(.mrpack 清单自带 MC 版本/加载器/文件,无需手动填)
+            try:
+                status("导入整合包(自动装基础+加载器+全部 mod,可能要几分钟)...")
+                inst = import_modpack(local, paths.GAME_DIR,
+                                      status_callback=status,
+                                      progress_callback=progress)
+                status(f"✅ 整合包导入完成:{inst}")
+            except Exception as e:
+                status(f"❌ 整合包导入失败:{type(e).__name__}: {e}"
+                       "(同名实例可先在「我的版本」删除或改名后重试)")
+            finally:
+                try:
+                    _sh.rmtree(tmp, ignore_errors=True)
+                except Exception:
+                    pass
 
         self._run_download(worker)
 
