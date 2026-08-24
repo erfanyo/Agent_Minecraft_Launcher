@@ -347,6 +347,9 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self.ai_dock, self.log_dock)   # 并成一个 tab:点击标签切换 AI/日志
         self.log_dock.hide()
 
+        # ---- AI 助手被 × / 隐藏时:收窄成贴在右边缘的小条(留「展开」) ----
+        self._build_ai_strip()
+
         # ---- 技能管理器(游戏运行时辅助功能,可插拔) ----
         self.skill_mgr = SkillManager(self, self.settings)
 
@@ -478,7 +481,43 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(result)
 
     def _on_ai_visibility(self, visible: bool):
-        """AI 对话栏可见性变化(点 ×/拖出成子窗口等)——保留占位,便于以后联动。"""
+        """AI 对话栏可见性变化:X 掉/隐藏 → 收窄成贴右边缘小条(留「展开」);显示 → 收起小条。"""
+        if hasattr(self, "ai_strip_dock"):
+            self.ai_strip_dock.setVisible(not visible)
+
+    def _build_ai_strip(self):
+        """AI 被收起时贴在主窗口右边缘的窄条:竖排「AI ▸」按钮,点它展开。"""
+        self.ai_strip = QWidget()
+        self.ai_strip.setFixedWidth(46)
+        sv = QVBoxLayout(self.ai_strip)
+        sv.setContentsMargins(0, 8, 0, 8)
+        sv.setSpacing(8)
+        lbl = QLabel("AI")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        from ui_style import text_color
+        lbl.setStyleSheet(f"font-weight: bold; color: {text_color()};")
+        expand_btn = QPushButton("▶\n展开")
+        expand_btn.setFixedHeight(68)
+        expand_btn.setStyleSheet(
+            "QPushButton{background:#2b2f3a;color:#e8ecf2;border:1px solid #3a4150;"
+            "border-radius:8px;font-weight:bold;} QPushButton:hover{border-color:#5B8DEF;}")
+        expand_btn.clicked.connect(self._expand_ai)
+        sv.addWidget(lbl)
+        sv.addWidget(expand_btn)
+        sv.addStretch()
+        self.ai_strip_dock = QDockWidget(t("AI 助手", "AI Assistant"), self)
+        self.ai_strip_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.ai_strip_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self.ai_strip_dock.setWidget(self.ai_strip)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_strip_dock)
+        self.ai_strip_dock.hide()
+
+    def _expand_ai(self):
+        """点边缘小条的「展开」:收起小条,恢复 AI 助手下旁边栏。"""
+        if hasattr(self, "ai_strip_dock"):
+            self.ai_strip_dock.hide()
+        self.ai_dock.raise_()
+        self.ai_dock.show()
 
     def ai_context(self) -> str:
         """给 AI 的上下文:启动器设置 + 当前选中的实例信息"""
