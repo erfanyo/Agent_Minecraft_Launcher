@@ -37,10 +37,9 @@ class FramelessTitleBar(QWidget):
         self.title_label.setStyleSheet("font-weight: bold; color: #e7ecf5; font-size: 13px;")
 
         if _is_mac():
-            # 三个点(红/黄/绿)在左,启动器名称靠右,trailing 控件也靠右
+            # 两个点(红=关闭,黄=最小化)在左;启动器名称放右上角
             lay.addWidget(self._dot("#FF5F57", self._close))
             lay.addWidget(self._dot("#FEBC2E", self._minimize))
-            lay.addWidget(self._dot("#28C840", self._maximize))
             lay.addStretch(1)
             if trailing_widget is not None:
                 lay.addWidget(trailing_widget)
@@ -48,14 +47,13 @@ class FramelessTitleBar(QWidget):
             lay.addWidget(self.title_label)
             lay.addSpacing(8)
         else:
-            # 左上角名称,右侧 trailing 控件 + 最小化/最大化/关闭
+            # 左上角名称,右侧 trailing 控件 + 最小化/关闭
             lay.addWidget(self.title_label)
             lay.addStretch(1)
             if trailing_widget is not None:
                 lay.addWidget(trailing_widget)
                 lay.addSpacing(6)
             lay.addWidget(self._btn("—", self._minimize, "最小化"))
-            lay.addWidget(self._btn("□", self._maximize, "最大化/还原"))
             lay.addWidget(self._btn("✕", self._close, "关闭"))
 
         # 双击标题栏 → 最大化/还原

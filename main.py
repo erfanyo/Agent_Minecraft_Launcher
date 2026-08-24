@@ -302,9 +302,17 @@ class MainWindow(QMainWindow):
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.title_bar)
         layout.addWidget(self.main_tabs)
         self.setCentralWidget(central)
+
+        # 标题栏作为顶部 dock(全宽),让右侧 AI dock 从标题栏下方开始,
+        # 右上角留给 最小化/关闭(标题栏不顶住 dock 的上边缘)
+        self.title_dock = QDockWidget(self)
+        self.title_dock.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea)
+        self.title_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self.title_dock.setTitleBarWidget(QWidget())   # 隐藏 dock 自带标题栏
+        self.title_dock.setWidget(self.title_bar)
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.title_dock)
         # 修复 dock"放不回去":允许嵌套/标签 + 动画(拖出后能顺利拖回边缘复原)
         self.setDockOptions(QMainWindow.DockOption.AllowNestedDocks
                             | QMainWindow.DockOption.AllowTabbedDocks
