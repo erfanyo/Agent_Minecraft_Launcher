@@ -221,12 +221,13 @@ class MainWindow(QMainWindow):
         load_theme_from_settings(self.settings)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
-        # ---- 顶部(精简:菜单栏已移除,入口都进了标签页/设置) ----
-        top_bar = QHBoxLayout()
-        top_bar.addStretch()
-        # 顶部右侧(最小化按钮下方一带):显示"已有 x 个运行中的实例"(悬停看具体实例)
-        self._running_label = QLabel("")
-        top_bar.addWidget(self._running_label)
+        # ---- 无边框自定义标题栏(名称位置按平台,见 frameless_titlebar.py) ----
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        from frameless_titlebar import FramelessTitleBar
+        self._running_instances = set()
+        self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
+        self.title_bar = FramelessTitleBar(self, "Agent Minecraft Launcher",
+                                           trailing_widget=self._running_label)
         # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
         # - 导入整合包 → 下载新资源 → 实例 →「导入整合包」按钮
         # - 检查更新 / 引导教程(重播) → 放到 设置 → 界面
@@ -300,7 +301,8 @@ class MainWindow(QMainWindow):
         # ---- 组装整个窗口 ----
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.addLayout(top_bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.title_bar)
         layout.addWidget(self.main_tabs)
         self.setCentralWidget(central)
         # 修复 dock"放不回去":允许嵌套/标签 + 动画(拖出后能顺利拖回边缘复原)
@@ -349,9 +351,12 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self.dl_indicator, 0)   # 状态栏最左 = 窗口左下角
         self.dl_indicator.hide()
 
-        # 运行中的实例指示:已在顶部右侧显示"已有 x 个运行中的实例"(悬停看具体是哪个)
-        self._running_instances = set()
+        # 运行中的实例指示:已在标题栏显示"已有 x 个运行中的实例"(悬停看具体是哪个)
+        # (self._running_instances / _running_label 已在创建标题栏时初始化)
         self._update_running_label()
+
+        # 无边框窗口:启用状态栏右下角的尺寸拖拽手柄(resize)
+        self.statusBar().setSizeGripEnabled(True)
 
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
