@@ -188,6 +188,15 @@ class SettingsCenter(QWidget):
             self.game_dir_edit.setText(d)
 
     # ================= 界面 =================
+    @staticmethod
+    def _wrap_scroll(w) -> QScrollArea:
+        """把页面内容包进滚动区(纵向内容多时可用滚动条,不拥挤)。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(w)
+        return scroll
+
     def _build_ui(self) -> QWidget:
         self.language_combo = QComboBox()
         for label, value in (("自动(跟随系统)", "auto"), ("中文", "zh"), ("English", "en")):
@@ -298,7 +307,7 @@ class SettingsCenter(QWidget):
         cache_row.addWidget(clear_desc_btn)
         l.addLayout(cache_row)
         l.addStretch()
-        return w
+        return self._wrap_scroll(w)
 
     def _build_mcp(self) -> QWidget:
         """MCP(独立设置章节):MCP Server 链接/配置文件 + MCP 客户端(外部服务器)。
@@ -506,7 +515,7 @@ class SettingsCenter(QWidget):
         l.addWidget(self.model_dl_status); l.addWidget(hint); l.addStretch()
         # 复用 settings_dialog 的模型下载逻辑(三态按钮)
         self._init_model_dl_button()
-        return w
+        return self._wrap_scroll(w)
 
     def _is_model_downloaded(self) -> bool:
         try:
