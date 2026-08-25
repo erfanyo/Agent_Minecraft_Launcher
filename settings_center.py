@@ -123,6 +123,7 @@ class SettingsCenter(QWidget):
         self.shell.add_section(t("AI 助手", "AI"), self._build_ai)
         self.shell.add_section(t("镜像源", "Mirror"), self._build_mirror)
         self.shell.add_section(t("插件", "Plugins"), self._build_plugins)
+        self.shell.add_section(t("MCP", "MCP"), self._build_mcp)
         # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)
         self._plugin_settings_rows = []
         try:
@@ -280,10 +281,31 @@ class SettingsCenter(QWidget):
         self._readability_label.setWordWrap(True)
         l.addWidget(self._readability_label)
         self._refresh_color_btn_text()
-
-        # MCP 集成:自动生成 连接链接 / 客户端配置文件(存 AMCL 文件夹)
+        # 缓存管理:清除 Mod 图片/描述缓存(换新图/翻译更新时用)
         l.addSpacing(12)
-        mcp_title = QLabel("🔌 MCP 集成(外部 AI 调用启动器):")
+        cache_title = QLabel("🗂 缓存(Mod 图片 & 描述翻译):")
+        cache_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+        l.addWidget(cache_title)
+        cache_hint = QLabel("图片/描述按 Mod 名缓存(不同版本同一 Mod 复用)。若某 Mod 更新了图标或想重翻描述,清除后重新打开该 Mod 即可。")
+        cache_hint.setWordWrap(True); cache_hint.setStyleSheet("color:#8a93a0;")
+        l.addWidget(cache_hint)
+        cache_row = QHBoxLayout(); cache_row.setSpacing(8)
+        clear_icon_btn = QPushButton("清除图片缓存"); set_style(clear_icon_btn, card_btn_style); clear_icon_btn.setMinimumHeight(32)
+        clear_icon_btn.clicked.connect(lambda: self._clear_cache("icons"))
+        clear_desc_btn = QPushButton("清除描述翻译缓存"); set_style(clear_desc_btn, card_btn_style); clear_desc_btn.setMinimumHeight(32)
+        clear_desc_btn.clicked.connect(lambda: self._clear_cache("desc"))
+        cache_row.addWidget(clear_icon_btn)
+        cache_row.addWidget(clear_desc_btn)
+        l.addLayout(cache_row)
+        l.addStretch()
+        return w
+
+    def _build_mcp(self) -> QWidget:
+        """MCP(独立设置章节):MCP Server 链接/配置文件 + MCP 客户端(外部服务器)。
+        之前塞在「界面」页,现独立出来(界面页不再拥挤)。"""
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(8)
+        # MCP Server(外部 AI 客户端调用启动器)
+        mcp_title = QLabel("🔌 MCP Server(给外部 AI 调用启动器):")
         mcp_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
         l.addWidget(mcp_title)
         import os as _os, sys as _sys
@@ -304,10 +326,17 @@ class SettingsCenter(QWidget):
         self._mcp_status = QLabel("")
         self._mcp_status.setWordWrap(True); self._mcp_status.setStyleSheet("color:#8a93a0;")
         l.addWidget(self._mcp_status)
+        server_hint = QLabel("MCP Server 是个默认关闭的插件:到 设置→插件 打开它的开关(无需用时零端口占用)。")
+        server_hint.setWordWrap(True); server_hint.setStyleSheet("color:#8a93a0; font-size:11px;")
+        l.addWidget(server_hint)
         # MCP 客户端(启动器 AI 去调用的【外部】MCP 服务器)。
-        # 每条用 ; 分隔,两种写法:
-        #   HTTP:  http://127.0.0.1:9000/mcp
-        #   stdio: amcl>=uvx mc-wiki-mcp   (名字>=可执行命令,整条=本地子进程)
+        l.addSpacing(12)
+        c_title = QLabel("🔌 MCP 客户端(启动器 AI 去调用的外部服务器):")
+        c_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+        l.addWidget(c_title)
+        c_hint = QLabel("每条用 ; 分隔;HTTP 写 url,本地 stdio 写 名字>=命令(如 mcwiki>=uvx mc-wiki-mcp)。")
+        c_hint.setWordWrap(True); c_hint.setStyleSheet("color:#8a93a0;")
+        l.addWidget(c_hint)
         self.mcp_clients_edit = QLineEdit()
         self.mcp_clients_edit.setPlaceholderText(
             "MCP 客户端(外部服务器→启动器AI调用),用 ; 分隔。\n"
@@ -315,26 +344,7 @@ class SettingsCenter(QWidget):
             "本地 stdio 写 名字>=命令,如 mcwiki>=uvx mc-wiki-mcp")
         self.mcp_clients_edit.setText(
             ";".join(_fmt_mcp_entry(c) for c in self.settings.get("mcp_clients", [])))
-        mcpc_row = QHBoxLayout(); mcpc_row.setSpacing(8)
-        mcpc_row.addWidget(QLabel("MCP 客户端:"))
-        mcpc_row.addWidget(self.mcp_clients_edit, 1)
-        l.addLayout(mcpc_row)
-        # 缓存管理:清除 Mod 图片/描述缓存(换新图/翻译更新时用)
-        l.addSpacing(12)
-        cache_title = QLabel("🗂 缓存(Mod 图片 & 描述翻译):")
-        cache_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
-        l.addWidget(cache_title)
-        cache_hint = QLabel("图片/描述按 Mod 名缓存(不同版本同一 Mod 复用)。若某 Mod 更新了图标或想重翻描述,清除后重新打开该 Mod 即可。")
-        cache_hint.setWordWrap(True); cache_hint.setStyleSheet("color:#8a93a0;")
-        l.addWidget(cache_hint)
-        cache_row = QHBoxLayout(); cache_row.setSpacing(8)
-        clear_icon_btn = QPushButton("清除图片缓存"); set_style(clear_icon_btn, card_btn_style); clear_icon_btn.setMinimumHeight(32)
-        clear_icon_btn.clicked.connect(lambda: self._clear_cache("icons"))
-        clear_desc_btn = QPushButton("清除描述翻译缓存"); set_style(clear_desc_btn, card_btn_style); clear_desc_btn.setMinimumHeight(32)
-        clear_desc_btn.clicked.connect(lambda: self._clear_cache("desc"))
-        cache_row.addWidget(clear_icon_btn)
-        cache_row.addWidget(clear_desc_btn)
-        l.addLayout(cache_row)
+        l.addWidget(self.mcp_clients_edit)
         l.addStretch()
         return w
 
