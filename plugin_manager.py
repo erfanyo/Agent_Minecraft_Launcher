@@ -188,6 +188,43 @@ def _load_plugin_module(path: str):
     return m
 
 
+def validate_plugin_code(code: str) -> tuple:
+    """校验 AI 生成的插件代码:语法是否正确 + 是否含 register(api)。
+    返回 (ok, {error 或 name})。仅静态检查(AST),不执行。"""
+    import ast
+    if not code or not code.strip():
+        return False, {"error": "代码为空"}
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return False, {"error": f"语法错误:{e.msg}(第 {e.lineno} 行)"}
+    has_register = any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "register"
+                       for n in ast.walk(tree))
+    if not has_register:
+        return False, {"error": "缺少 register(api) 函数(插件入口)"}
+    return True, {"name": None}
+
+
+def save_plugin(name: str, code: str) -> dict:
+    """把 AI 生成的插件代码落盘到 plugins/<name>.py。
+    - 校验语法 + register 存在;
+    - 文件名安全化(name 只留字母数字下划线);
+    - 写文件,返回 {ok, path, name, restart_needed:True}。"""
+    import re
+    safe = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip()) or "plugin"
+    ok, info = validate_plugin_code(code)
+    if not ok:
+        return {"ok": False, "error": info.get("error", "校验失败")}
+    os.makedirs(PLUGIN_DIR, exist_ok=True)
+    path = os.path.join(PLUGIN_DIR, safe + ".py")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(code)
+    except Exception as e:
+        return {"ok": False, "error": f"写入失败:{type(e).__name__}: {e}"}
+    return {"ok": True, "path": path, "name": safe, "restart_needed": True}
+
+
 def load_plugin(name: str, path: str, disabled: set) -> bool:
     """装载一个插件:调用其 register(api) 登记内容。
     disabled:插件 id 集合(被禁用则跳过)。返回是否装载成功。"""

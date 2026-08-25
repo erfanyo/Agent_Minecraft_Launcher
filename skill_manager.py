@@ -264,6 +264,25 @@ class McNameNormalize(Skill):
                 "④ 支持物品/方块/生物/效果/附魔,读实例 lang 文件 + 内置常见词表(离线也准)。")
 
 
+class PluginCreationGuide(Skill):
+    """插件生成指南:引导 AI 超出现成工具能力时生成新插件,而非硬编码"""
+    id = "plugin_creation_guide"
+    name = "插件生成指南"
+    description = ("当用户需求超出现成工具/页面能力时,提示 AI 生成一个新插件(plugins/<名字>.py),"
+                   "而不是硬编码;生成后落盘并提示重启生效。")
+    category = "AI 助手"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return ("【插件生成指南】启动器支持插件 = plugins/<名字>.py,提供 register(api),可注册 "
+                "AI 工具 / GUI页面 / 设置项 / 技能 / 语言包(见 plugins_templates/插件模板.md)。\n"
+                "当用户需求**超出现成工具/页面能力**(要一个新动作/新页面/新设置)时:\n"
+                "① 判断:是不是现有工具能覆盖?能就先用现成工具;不能才生成插件。\n"
+                "② 生成:写一段符合模板的 Python 源码(必须含 register(api) 函数),用 **create_plugin(name, code)** 落盘。\n"
+                "③ 写完告诉用户【重启启动器生效】(静态加载;生成后不立即生效)。\n"
+                "④ 安全:插件是本地代码,加载前提醒用户看一眼;别让 AI 生成会删文件/改系统的危险插件。")
+
+
 class CloudAIConfigGuide(Skill):
     """云端 AI 配置指南:让 AI 教用户一步步配好云端模型(DeepSeek/OpenRouter/国内/自定义)"""
     id = "cloud_ai_config_guide"
@@ -315,7 +334,7 @@ class CloudAIConfigGuide(Skill):
 
 BUILTIN_SKILLS = [AutoRestart, BackupReminder, CommandGuide, TaskSplit,
                   BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide,
-                  McNameNormalize]
+                  McNameNormalize, PluginCreationGuide]
 
 
 # ================= 管理器 =================

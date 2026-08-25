@@ -596,7 +596,15 @@ class SettingsCenter(QWidget):
         l = QVBoxLayout(page); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(8)
         head = QLabel("插件 = 启动器的可选功能模块。\n核心组件(启动/实例/下载/设置/AI)不在插件列表里,保证稳定。")
         head.setWordWrap(True); head.setStyleSheet(f"color: {muted_color()};")
-        l.addWidget(head)
+        head_row = QHBoxLayout()
+        head_row.addWidget(head, 1)
+        # 右上角:重启启动器(生成/禁用插件后手动重启生效)
+        restart_btn = QPushButton(t("重启启动器生效", "Restart to apply"))
+        set_style(restart_btn, card_btn_style); restart_btn.setMinimumHeight(32)
+        restart_btn.setToolTip("插件启停/新增后需重启启动器才生效。")
+        restart_btn.clicked.connect(self._restart_launcher)
+        head_row.addWidget(restart_btn)
+        l.addLayout(head_row)
 
         disabled = set(self.settings.get("plugins_disabled", []) or [])
         enabled_override = set(self.settings.get("plugins_enabled", []) or [])
@@ -698,6 +706,23 @@ class SettingsCenter(QWidget):
         # 插件设置的 build_fn 内容
         lay.addWidget(build_fn())
         return outer
+
+    def _restart_launcher(self):
+        """重启启动器(插件新增/启停后生效)。"""
+        try:
+            import os, sys
+            if getattr(sys, "frozen", False):   # PyInstaller exe
+                import shutil
+                exe = sys.executable
+                os.spawnv(os.P_NOWAIT, exe, [exe])
+            else:
+                import subprocess
+                subprocess.Popen([sys.executable, os.path.abspath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "main.py"))],
+                                 cwd=os.path.dirname(os.path.abspath(__file__)))
+            QApplication.closeAllWindows()
+        except Exception as e:
+            QMessageBox.warning(self, "重启", f"重启失败:{type(e).__name__}: {e}")
 
     def _goto_plugin_setting(self, name: str):
         """跳到某插件的独立设置页(在设置左菜单单开一行,标签为 插件:<显示名>)。

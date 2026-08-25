@@ -198,6 +198,13 @@ TOOLS = [
           {"query": {"type": "string", "description": "叫法,如 苦力怕 / creeper / 会爆炸的怪 / 锋利"},
            "instance": {"type": "string", "description": "可选,实例 id(有实例时能读更多 Mod 专属名)"}},
           ["query"]),
+    _tool("create_plugin", "【生成启动器插件】当用户需求超出现成工具/页面能力时,生成一个新插件落盘。"
+          "插件 = plugins/<名字>.py,提供 register(api),可注册 AI 工具 / GUI页面 / 设置项 / 技能 / 语言包。"
+          "用法:先给出一段符合插件模板的 Python 代码(含 register(api) 函数),再用本工具保存。"
+          "生成后需重启启动器生效(静态加载)。写操作,需要工作区写权限。",
+          {"name": {"type": "string", "description": "插件名(字母数字下划线,文件名)"},
+           "code": {"type": "string", "description": "插件的完整 Python 源码,必须含 register(api)"}},
+          ["name", "code"]),
 ]
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
@@ -324,6 +331,14 @@ def build_executor(settings: dict, progress_cb=None):
         if name in _mcp_callers:
             from mcp_client import mcp_tool_call
             return mcp_tool_call(_mcp_callers, name, args)
+        # create_plugin:生成启动器插件(语法校验 + 落盘 plugins/<name>.py)
+        if name == "create_plugin":
+            import plugin_manager
+            r = plugin_manager.save_plugin(str(args.get("name", "")), str(args.get("code", "")))
+            if r.get("ok"):
+                return (f"✅ 已生成插件 {r['name']} → {r['path']}\n"
+                        "已在 plugins/ 落盘,【重启启动器】后生效。可在 设置→插件 里启用/停用。")
+            return f"❌ 插件生成失败:{r.get('error', '未知错误')}"
         # 插件注册的工具(plugin_manager.TOOLS)优先于内置 getattr 兜底
         try:
             import plugin_manager
