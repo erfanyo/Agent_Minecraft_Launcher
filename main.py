@@ -221,18 +221,22 @@ class MainWindow(QMainWindow):
         load_theme_from_settings(self.settings)
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
-        # ---- 语言包(第三方/玩梗语言):从 AMCL/languages/ 加载 *.json + 插件注册的包 ----
+        # ---- 语言包(第三方/玩梗语言):加载 内置语言包 + AMCL/languages/*.json + 插件注册的包 ----
         # 语言包 = 用 {"原文": "替换文本"} 覆盖启动器所有文本;可选,切换后重启生效。
         try:
             import i18n as _i18n
             import os as _os
-            _pack_dir = _os.path.join(paths.CONFIG_DIR, "languages")
-            _n = _i18n.load_packs_from_dir(_pack_dir)
+            _n = 0
+            # ① 内置产品数据语言包(仓库根 languages/,如机翻生成的 en/fr/es...json)
+            _bundle_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "languages")
+            _n += _i18n.load_packs_from_dir(_bundle_dir)
+            # ② 用户第三方语言包(AMCL/languages/)
+            _user_dir = _os.path.join(paths.CONFIG_DIR, "languages")
+            _n += _i18n.load_packs_from_dir(_user_dir)
             _lang = self.settings.get("language", "auto")
-            # 若选中语言是语言包 id → 加载后再激活(否则用 zh/en/auto)
             if _lang in _i18n.list_packs():
                 _i18n.set_language(_lang)
-            print(f"[语言包] 从 {_pack_dir} 加载 {_n} 个;当前语言 {_i18n.get_language()}")
+            print(f"[语言包] 内置+用户共加载 {_n} 个(内置:{_bundle_dir}, 用户:{_user_dir});当前语言 {_i18n.get_language()}")
         except Exception as e:
             print(f"[语言包] 加载异常:{type(e).__name__}: {e}")
 

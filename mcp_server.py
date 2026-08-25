@@ -167,5 +167,67 @@ def serve_http(host: str = "127.0.0.1", port: int = 8766):
     ThreadingHTTPServer((host, port), Handler).serve_forever()
 
 
+# ---- 可启停的 HTTP 服务(供插件/设置页在 GUI 内启停)----
+_MCP_HTTP_SERVER = None       # ThreadingHTTPServer 实例
+
+
+class MCPHttpServer:
+    """把 serve_http 封成可 start()/stop() 的对象:后台线程跑,不阻塞 GUI。"""
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 8766):
+        self.host, self.port = host, port
+        self._server = None
+        self._thread = None
+
+    def is_running(self) -> bool:
+        return self._server is not None
+
+    def start(self) -> bool:
+        if self._server is not None:
+            return True
+        try:
+            import threading
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+            class Handler(BaseHTTPRequestHandler):
+                def do_POST(self):
+                    if self.path.rstrip("/") != "/mcp":
+                        self.send_response(404); self.end_headers(); return
+                    try:
+                        length = int(self.headers.get("Content-Length", 0))
+                        msg = json.loads(self.rfile.read(length) or b"{}")
+                    except Exception:
+                        self.send_response(400); self.end_headers(); return
+                    resp = handle_message(msg)
+                    if resp is None:
+                        self.send_response(202); self.end_headers(); return
+                    data = json.dumps(resp, ensure_ascii=False).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers(); self.wfile.write(data)
+
+                def log_message(self, *_):
+                    pass
+
+            self._server = ThreadingHTTPServer((self.host, self.port), Handler)
+            self._thread = threading.Thread(target=self._server.serve_forever,
+                                            daemon=True)
+            self._thread.start()
+            return True
+        except Exception:
+            self._server = None
+            return False
+
+    def stop(self):
+        if self._server is not None:
+            try:
+                self._server.shutdown()
+                self._server.server_close()
+            except Exception:
+                pass
+            self._server = None
+
+
 if __name__ == "__main__":
     serve()
