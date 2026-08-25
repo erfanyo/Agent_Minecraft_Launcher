@@ -1410,6 +1410,8 @@ class _ChatInput(QPlainTextEdit):
 
     def _layout_corner_buttons(self):
         """把右下角圆形按钮从右到左依次摆放,只排可见的按钮"""
+        if self.width() <= 0 or self.height() <= 0:
+            return   # 尺寸未就绪(启动时)不摆,等 showEvent/resizeEvent
         m = 6
         x = self.width() - m
         for b in reversed(self._corner_btns):
@@ -1417,6 +1419,11 @@ class _ChatInput(QPlainTextEdit):
                 continue
             x -= b.width() + m
             b.move(x, self.height() - b.height() - m)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # 启动时控件尺寸可能为 0 导致按钮错位到左上角;显示后重摆一次
+        self._layout_corner_buttons()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
