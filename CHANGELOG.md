@@ -116,6 +116,9 @@
 - **插件可注册主标签页**:插件协议新增 `api.register_main_tab(label, build_fn)`——插件能注册一个**与「下载新资源/联机/设置」平级的全新主标签页**(不只是挂某页里的章节)。`MainWindow` 构建时把启用的插件标签页 `addTab` 进主标签栏。示例插件加「示例标签」演示。修复 `discover_plugins_meta` 探测时向 `MAIN_TABS` 泄漏(导致重复 tab)。插件模板补 `register_main_tab` 示例。
 - **启动器插件商店(两步走)**:① `plugin_manager` 加**仓库能力**(`load_registry`/`list_remote_plugins`/`install_remote_plugin`)——从仓库源(plugins.json 清单)拉插件列表,下载单文件 `.py` 落盘(复用 `save_plugin` 校验+写盘;支持 http(s)/file)。② 「下载新资源」插件页升级成**商店**:手动**添加/删除仓库源**(存 `settings["plugin_registries"]`,你的官方仓库 URL 可作默认),列出仓库里的插件(名/版本/描述/来源),**一键安装**单文件 + 提示重启生效。参考 DSH「仓库即商店」:你的官方插件放你项目仓库,别人加你仓库 URL 就能装。
 - **「我的实例」页 · MC 存储路径下拉 + AI 权限默认只读**:①「我的实例」页加「存储路径」下拉——列出当前游戏目录 + 历史路径 + 「＋ 添加新路径…」(弹目录选择),选任一即 `set_game_dir` + 存设置 + 记录历史(`game_dirs_history`)+ 刷新实例列表。② **AI 文件权限默认只读**(settings 默认 `readonly`,重置 config);在 AI 面板把权限从「只读」切到「**工作区可写**」时,弹出**二级确认 + 免责声明**(说明 AI 将能改 工作区/AMCL/游戏目录 内文件、写操作前备份、可随时切回只读),点「否」保持只读。
+- **全局键盘导航框架(遥控器式)**:新增 `keyboard_nav.py`——顶部**分类标签 ←/→ 切换**、页内**左菜单 ↑/↓ 切换**、**Enter 进入当前菜单分项**。**防抢键**:焦点在实例列表/按钮/输入框等「自己会消费按键的控件」上时不导航(不干扰 列表上下选+回车启动、输入框打字);焦点在空白背景时才导航。`MainWindow` 装 `install_global_nav`(带 page_menu_fn 取当前页左菜单)。
+
+
 - **名称解析·深挖(口语/别名/模糊 + 接进配方)**:`mc_names.py` 加 **440 条口语/别名/近义表**(如 会爆炸的怪/爆爆怪/绿皮怪→creeper、小黑→enderman、时运→Fortune)+(拼音/前缀/中文子串)**模糊匹配**(`cree`→creeper、`苦力`→苦力怕);新增 `resolve_for_wiki(query, wiki_lang)`——按目标 wiki 语言返回该用的检索名(英文 wiki 用 `Creeper`、中文 wiki 用 `苦力怕`)。并把别名表**并进 `recipe_graph.build_zh_index`**,让 `get_recipe_path`/`compare_items`/`resolve_item` 也吃口语叫法(`会爆炸的怪`→`minecraft:creeper`);`resolve_item` 复用下划线 compact 兜底。
 
 ### 🧩 Mod 依赖网络(灵感 #5,简单版)

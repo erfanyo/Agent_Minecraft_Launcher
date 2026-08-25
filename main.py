@@ -351,6 +351,30 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.main_tabs)
         self.setCentralWidget(central)
 
+        # ---- 全局键盘导航(遥控器式):顶部分类标签 左右切换;当前页左菜单 上下切换;Enter 进入分项 ----
+        # 焦点在实例列表/按钮/输入框等"自己会消费按键"的控件上时不抢键(防回归)。
+        try:
+            from keyboard_nav import install_global_nav
+
+            def _current_page_menu(win):
+                """返回当前主标签页内的左菜单(QWidget)或 None。"""
+                idx = win.main_tabs.currentIndex()
+                page = win.main_tabs.widget(idx) if idx >= 0 else None
+                if page is None:
+                    return None
+                # 各页左菜单属性名
+                for attr in ("menu", "shell"):
+                    m = getattr(page, attr, None)
+                    if m is not None:
+                        return m
+                # 兜底:递归找一个 LeftMenu
+                from left_menu import LeftMenu
+                return page.findChild(LeftMenu)
+
+            install_global_nav(self, _current_page_menu)
+        except Exception:
+            pass
+
         # 标题栏作为顶部 dock(全宽),让右侧 AI dock 从标题栏下方开始,
         # 右上角留给 最小化/关闭(标题栏不顶住 dock 的上边缘)
         self.title_dock = QDockWidget(self)
