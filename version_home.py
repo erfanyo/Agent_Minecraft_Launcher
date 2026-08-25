@@ -343,20 +343,6 @@ class VersionHome(QWidget):
         tool_row.addWidget(self.config_btn, 1)
         lay.addLayout(tool_row)
 
-        # 「MC 存储路径」下拉:切换不同游戏目录/添加新路径(启动器工作区可写时可改)
-        gdir_row = QHBoxLayout(); gdir_row.setSpacing(8)
-        gdir_lbl = QLabel("存储路径:")
-        gdir_lbl.setStyleSheet(f"color: {muted_color()};")
-        self.game_dir_combo = QComboBox()
-        self.game_dir_combo.setObjectName("game_dir_combo")
-        self.game_dir_combo.setMinimumHeight(34)
-        self.game_dir_combo.setToolTip("游戏数据(.minecraft)存储目录。选一个或「添加新路径」。")
-        self._fill_game_dir_combo()
-        self.game_dir_combo.currentIndexChanged.connect(self._on_game_dir_changed)
-        gdir_row.addWidget(gdir_lbl)
-        gdir_row.addWidget(self.game_dir_combo, 1)
-        lay.addLayout(gdir_row)
-
         # 启动游戏大按钮
         self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
         self.launch_btn.setMinimumHeight(56)
@@ -474,6 +460,20 @@ class VersionHome(QWidget):
         lay.setSpacing(10)
 
         # 「我的实例」标题与「刷新」按钮已移除:标签页文本显示实例数,切回本页自动刷新
+
+        # 「MC 存储路径」下拉:切换不同游戏目录/添加新路径(在「实例(共x个)」标签下方)
+        gdir_row = QHBoxLayout(); gdir_row.setSpacing(8)
+        gdir_lbl = QLabel("存储路径:")
+        gdir_lbl.setStyleSheet(f"color: {muted_color()};")
+        self.game_dir_combo = QComboBox()
+        self.game_dir_combo.setObjectName("game_dir_combo")
+        self.game_dir_combo.setMinimumHeight(34)
+        self.game_dir_combo.setToolTip("游戏数据(.minecraft)存储目录。选一个或「添加新路径」。")
+        self._fill_game_dir_combo()
+        self.game_dir_combo.currentIndexChanged.connect(self._on_game_dir_changed)
+        gdir_row.addWidget(gdir_lbl)
+        gdir_row.addWidget(self.game_dir_combo, 1)
+        lay.addLayout(gdir_row)
 
         self.instance_list = QListWidget()
         set_style(self.instance_list, list_style)
