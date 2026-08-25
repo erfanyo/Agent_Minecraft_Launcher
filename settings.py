@@ -54,6 +54,7 @@ DEFAULTS = {
     # 是否用官方由 mirror_strategy 决定,这里不再出现 "official"
     "mirror_source": "bmclapi",
     "custom_mirrors": [],          # 自定义镜像源列表:[{"id","name","url"}]
+    "plugin_registries": [],       # 插件仓库源:[{"url","name"}] 手动添加(你的官方仓库默认在此)
 }
 
 

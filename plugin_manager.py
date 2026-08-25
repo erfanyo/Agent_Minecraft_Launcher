@@ -231,6 +231,89 @@ def save_plugin(name: str, code: str) -> dict:
     return {"ok": True, "path": path, "name": safe, "restart_needed": True}
 
 
+# ---------------- 插件商店(仓库注册 / 远程插件清单 / 安装) ----------------
+# 仓库清单格式(仓库根 plugins.json,或某仓库 URL 直接返回 JSON):
+#   [ {"name": "lan_bridge", "version": "0.1.0", "title": "联机 CLI 桥接",
+#      "description": "…", "download_url": "https://…/lan_bridge.py",
+#      "repo": "官方", "author": "…"}, ... ]
+# 安装 = 下载 download_url 的单文件 .py → 校验 → 落盘 plugins/<name>.py(复用 save_plugin)。
+
+def load_registry(url: str) -> list:
+    """从插件仓库源拉取插件清单,返回 [{name, version, title, description, download_url, repo}]。
+    支持:http(s) URL(GitHub raw 等)返回清单,或本地 file://(调试/测试)。失败返回 []。"""
+    try:
+        if url.startswith("file://"):
+            from urllib.parse import unquote
+            p = unquote(url[len("file://"):])
+            if p.startswith("/") and ":" in p:   # Windows: file:///C:/... -> C:/...
+                p = p.lstrip("/")
+            with open(p, encoding="utf-8") as f:
+                import json as _json
+                data = _json.load(f)
+        else:
+            import requests
+            r = requests.get(url, timeout=12)
+            r.raise_for_status()
+            data = r.json()
+        rows = data if isinstance(data, list) else data.get("plugins", [])
+    except Exception:
+        return []
+    out = []
+    for it in rows or []:
+        if not isinstance(it, dict):
+            continue
+        name = (it.get("name") or "").strip()
+        if not name:
+            continue
+        out.append({
+            "name": name,
+            "title": it.get("title") or it.get("name") or name,
+            "version": it.get("version", ""),
+            "description": it.get("description", ""),
+            "download_url": it.get("download_url", it.get("url", "")),
+            "repo": it.get("repo", url),
+            "author": it.get("author", ""),
+        })
+    return out
+
+
+def list_remote_plugins(registries: list) -> dict:
+    """拉取多个仓库源的插件清单,按 name 去重(后加的覆盖)。返回 {name: entry}。"""
+    merged = {}
+    for r in registries or []:
+        url = (r.get("url") or "").strip()
+        if not url:
+            continue
+        for e in load_registry(url):
+            merged[e["name"]] = e   # 后注册的仓库覆盖同名
+    return merged
+
+
+def install_remote_plugin(entry: dict) -> dict:
+    """从仓库安装一个插件:下载单文件 → 校验 → 落盘 plugins/<name>.py。
+    返回 {ok, name, path} 或 {ok:False, error}。"""
+    name = (entry.get("name") or "").strip()
+    dl = (entry.get("download_url") or "").strip()
+    if not name or not dl:
+        return {"ok": False, "error": "插件缺少 name 或 download_url"}
+    try:
+        if dl.startswith("file://"):
+            from urllib.parse import unquote
+            p = unquote(dl[len("file://"):])
+            if p.startswith("/") and ":" in p:
+                p = p.lstrip("/")
+            with open(p, encoding="utf-8") as f:
+                code = f.read()
+        else:
+            import requests
+            r = requests.get(dl, timeout=30)
+            r.raise_for_status()
+            code = r.text
+    except Exception as e:
+        return {"ok": False, "error": f"下载失败:{type(e).__name__}: {e}"}
+    return save_plugin(name, code)
+
+
 def load_plugin(name: str, path: str, disabled: set) -> bool:
     """装载一个插件:调用其 register(api) 登记内容。
     disabled:插件 id 集合(被禁用则跳过)。返回是否装载成功。"""
