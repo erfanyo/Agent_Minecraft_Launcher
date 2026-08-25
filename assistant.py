@@ -238,7 +238,7 @@ CLOUD_MAX_TOKENS = 1024
 CLOUD_MAX_TOOLS = 10
 
 # 任何请求都带的通用工具(交互确认 / 通用查询 / 实例查询——模型经常先查实例再执行)
-GENERAL_TOOLS = ["ask_user", "get_settings", "list_instances"]
+GENERAL_TOOLS = ["ask_user", "get_settings", "list_instances", "create_plugin"]
 
 # 工具分组(请求意图 → 相关工具)
 TOOL_GROUPS = {
@@ -334,8 +334,9 @@ def build_executor(settings: dict, progress_cb=None):
         if name in _mcp_callers:
             from mcp_client import mcp_tool_call
             return mcp_tool_call(_mcp_callers, name, args)
-        # create_plugin:生成启动器插件(语法校验 + 落盘 plugins/<name>.py)
+        # create_plugin:生成启动器插件(语法校验 + 落盘 plugins/<name>.py)——写操作,需工作区写权限
         if name == "create_plugin":
+            require_workspace_write(settings)   # 只读权限 → 拒绝
             import plugin_manager
             r = plugin_manager.save_plugin(str(args.get("name", "")), str(args.get("code", "")))
             if r.get("ok"):
