@@ -31,24 +31,32 @@ def register(api):
         handler=hello_action,
     )
 
-    # 2) GUI 页面(章节)——挂到一个主 tab 里,这里演示为在「设置」中加一个章节
+    # 2) GUI 页面(章节)——挂到主 tab 里,这里演示为「示例页面」
     def build_page():
         from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.addWidget(QLabel("这是「示例:打招呼」插件注册的页面。"))
-        lay.addWidget(QLabel("页面里可以放任何 QWidget / 控件。"))
+        lay.addWidget(QLabel("示例页面:插件注册的一个 GUI 页面。"))
         return w
 
     api.register_gui_page(label="示例页面", build_fn=build_page)
 
     # 2b) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
+    #     插件相关说明(能注册什么/能放什么)放这里讲,页面本身保持干净。
     def build_settings_page():
         from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.addWidget(QLabel("这是「示例:打招呼」插件的独立设置页。"))
-        lay.addWidget(QLabel("设置→左菜单 会为它单独开一行;可放插件自己的选项。"))
+        lay.addWidget(QLabel("示例插件设置"))
+        desc = QLabel("插件 = 启动器的可选功能模块。注册时会拿到一个 api,可以注册:\n"
+                      "· AI 工具(供 AI 调用)\n"
+                      "· GUI 页面/章节(build_fn 返回任意 QWidget,页面里可放任何控件)\n"
+                      "· 设置项 / 独立设置页\n"
+                      "· 技能(游戏生命周期钩子 + ai_hint)\n"
+                      "照这个文件改,就是你的 AI 生成新插件的最小模板。")
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#8a93a0; font-size:11px;")
+        lay.addWidget(desc)
         return w
 
     api.register_settings_page(build_settings_page)
@@ -62,7 +70,7 @@ def register(api):
 
     class HelloSkill(Skill):
         id = "hello_skill"
-        name = "示例技能·打招呼"
+        name = "示例技能"
         description = "插件注册的示例技能。"
         category = "运行辅助"
         default_enabled = True

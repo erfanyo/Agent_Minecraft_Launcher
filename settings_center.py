@@ -141,7 +141,8 @@ class SettingsCenter(QWidget):
                     continue   # 未启用 → 不显示设置行
                 build_fn = plugin_manager.plugin_settings_page(pid)
                 if build_fn:
-                    self.shell.add_section(t(f"插件:{pm_meta[pid].get('name') or pid}"), build_fn)
+                    self.shell.add_section(t(f"插件:{pm_meta[pid].get('name') or pid}"),
+                                           lambda p=pid, b=build_fn: self._plugin_page_with_toggle(p, b))
                     self._plugin_settings_rows.append(pid)
         except Exception:
             pass
@@ -722,6 +723,30 @@ class SettingsCenter(QWidget):
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setWidget(page)
         return scroll
+
+    def _plugin_page_with_toggle(self, pid: str, build_fn) -> QWidget:
+        """给插件的独立设置页加一个顶部开关条(启用/禁用本插件)。
+        这样在「插件:xxx」设置页里也能直接开关,不用回插件管理页。"""
+        import plugin_manager
+        outer = QWidget()
+        lay = QVBoxLayout(outer); lay.setContentsMargins(10, 8, 10, 6); lay.setSpacing(6)
+        # 顶部:插件名 + 开关
+        top = QWidget(); set_style(top, panel_style)
+        tl = QHBoxLayout(top); tl.setContentsMargins(12, 6, 12, 6)
+        name = plugin_manager.discover_plugins_meta().get(pid, {}).get("name") or pid
+        lbl = QLabel(name)
+        lbl.setStyleSheet(f"font-weight:bold; font-size:14px; color:{text_color()};")
+        disabled = set(self.settings.get("plugins_disabled", []) or [])
+        enabled_override = set(self.settings.get("plugins_enabled", []) or [])
+        default_on = plugin_manager.discover_plugins_meta().get(pid, {}).get("default_enabled", True)
+        is_on = (pid not in disabled) and (default_on or pid in enabled_override)
+        tsw = ToggleSwitch(is_on)
+        tsw.toggled.connect(lambda ch, n=pid: self._toggle_plugin(n, ch))
+        tl.addWidget(lbl, 1); tl.addWidget(QLabel("启用")); tl.addWidget(tsw)
+        lay.addWidget(top)
+        # 插件设置的 build_fn 内容
+        lay.addWidget(build_fn())
+        return outer
 
     def _goto_plugin_setting(self, name: str):
         """跳到某插件的独立设置页(在设置左菜单单开一行,标签为 插件:<显示名>)。
