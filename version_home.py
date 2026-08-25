@@ -273,6 +273,7 @@ class VersionHome(QWidget):
     tutorial_requested = Signal()            # 打开新手教程
     instance_selected = Signal(object)       # 选中实例(或 None)→ 主窗口 显示/隐藏「实例详情」标签页
     refresh_requested = Signal()             # 切回「实例」标签页请求刷新(无刷新按钮,自动刷)
+    launch_requested = Signal(object)        # 键盘回车启动选中实例(遥控器式导航)
     _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
     _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
 
@@ -478,6 +479,8 @@ class VersionHome(QWidget):
         set_style(self.instance_list, list_style)
         self.instance_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.instance_list.currentItemChanged.connect(self._on_selection_changed)
+        # 键盘导航:上下方向键已在选择实例;回车(itemActivated)= 启动选中实例(遥控器式)
+        self.instance_list.itemActivated.connect(self._launch_current_via_key)
         lay.addWidget(self.instance_list, 1)
         return w
 
@@ -589,6 +592,13 @@ class VersionHome(QWidget):
         self.launch_btn.setToolTip(
             inst.get("id", "") if inst is not None else t("先选择实例", "Select an instance first"))
         self.instance_selected.emit(inst)
+
+    def _launch_current_via_key(self, item):
+        """键盘导航:实例列表里按 Enter → 启动选中实例(遥控器式)。
+        itemActivated 在回车/双击时触发。"""
+        inst = self.current_instance()
+        if inst is not None:
+            self.launch_requested.emit(inst)
 
     def _manage_current(self):
         """「管理 ▾」→ 实例管理:打开当前选中实例的管理对话框。"""

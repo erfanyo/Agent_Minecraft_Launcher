@@ -273,6 +273,8 @@ class MainWindow(QMainWindow):
         # 旧行为保留:双击启动 + 启动按钮;刷新按钮已移除,切回「实例」标签页自动刷新
         self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)
         self.launch_btn.clicked.connect(self.launch_selected_instance)
+        # 键盘导航(遥控器式):实例列表按回车 → 启动选中实例(itemActivated)
+        tab_a.launch_requested.connect(lambda _inst: self.launch_selected_instance())
         tab_a.refresh_requested.connect(self.refresh_instances)
         # 新首页抛出的信号 → 启动器处理
         tab_a.open_instance_manager_requested.connect(self._home_open_instance_manager)

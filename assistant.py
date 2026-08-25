@@ -1030,6 +1030,8 @@ class AISettingsForm(QWidget):
         cur = s.get("ai_permission", "readonly")
         idx = self.permission.findData(cur)
         self.permission.setCurrentIndex(idx if idx >= 0 else 0)
+        # 权限下拉:从只读切到"工作区可写"弹二级确认+免责声明;取消则回只读
+        self.permission.currentIndexChanged.connect(self._on_permission_combo_changed)
         self.context_window.setValue(int(s.get("context_window", 65536) or 65536))
         self.vision_check.setChecked(bool(s.get("ai_multimodal", False)))
         ig = s.get("ai_in_game", "off")
@@ -1135,6 +1137,29 @@ class AISettingsForm(QWidget):
         elif vis is False:
             self.vision_check.setChecked(False)
             self.vision_check.setToolTip("该模型不支持看图(多模态),图片功能已自动关闭。")
+
+    def _on_permission_combo_changed(self, idx: int):
+        """权限下拉从「只读」切到「工作区可写」→ 弹二级确认+免责声明;取消则回只读。"""
+        data = self.permission.itemData(idx)
+        if data != "workspace_write":
+            return
+        from PySide6.QtWidgets import QMessageBox
+        cap = "🛡️ 确认给 AI「工作区可写」权限?"
+        disc = ("【免责声明】\n"
+                "一旦开启,AI 就能在【启动器工作区 + AMCL 私有数据 + 游戏目录】内\n"
+                "创建/修改/删除文件(如 装 Mod、改配置、写插件、动存档)。\n\n"
+                "· AI 是自动运行的,可能改到你不想动的东西;写操作前会先备份(装 Mod 等);\n"
+                "· 涉及游戏存档/私密数据请自行留意;\n"
+                "· 需要「稳妥」时随时切回「只读」。\n\n"
+                "确定要把 AI 权限改为「工作区可写」吗?")
+        ret = QMessageBox.question(self, cap, disc,
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        if ret != QMessageBox.StandardButton.Yes:
+            # 取消 → 回只读
+            self.permission.blockSignals(True)
+            self.permission.setCurrentIndex(self.permission.findData("readonly"))
+            self.permission.blockSignals(False)
 
     def values(self) -> dict:
         """收集表单内容为设置字段,并据当前策略推导「生效」的一组 ai_provider/... 给后端。"""
@@ -1331,6 +1356,7 @@ class _ChatInput(QPlainTextEdit):
     testClicked = Signal()
     imageClicked = Signal()
     recentClicked = Signal()
+    voiceClicked = Signal()          # 🎤 语音输入(现为占位,ASR 接入后可用)
     imagePasted = Signal(QImage)   # 从剪贴板粘贴了图片
 
     def __init__(self, parent=None):
@@ -1371,9 +1397,19 @@ class _ChatInput(QPlainTextEdit):
             " font-size:14px; border:none;}"
             "QPushButton:hover{background:rgba(128,128,128,160);}")
         self.recent_btn.clicked.connect(self.recentClicked.emit)
-        # 右下角按钮顺序(从右到左):发送环 → 🛠 → 📷 → 🖼
+        # 语音输入:微信式(接管光标,把识别文字插到光标处)。现为占位,ASR 接入后可用。
+        self.voice_btn = QPushButton("🎤", self)
+        self.voice_btn.setFixedSize(30, 30)
+        self.voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.voice_btn.setToolTip("语音输入(微信式·接管光标;识别待接入,先占位)")
+        self.voice_btn.setStyleSheet(
+            "QPushButton{border-radius:15px; background:rgba(128,128,128,90);"
+            " font-size:14px; border:none;}"
+            "QPushButton:hover{background:rgba(128,128,128,160);}")
+        self.voice_btn.clicked.connect(self.voiceClicked.emit)
+        # 右下角按钮顺序(从右到左):发送环 → 🛠 → 📷 → 🖼 → 🎤
         # 📷/🖼 是图片相关按钮,模型不支持多模态时隐藏(见 set_vision_enabled)
-        self._corner_btns = [self.send_btn, self.test_btn, self.img_btn, self.recent_btn]
+        self._corner_btns = [self.send_btn, self.test_btn, self.img_btn, self.recent_btn, self.voice_btn]
         self._vision = True
         self._has_model = True            # 是否已选择模型(未选择时隐藏发送/自测按钮)
 
