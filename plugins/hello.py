@@ -41,6 +41,16 @@ def register(api):
 
     api.register_gui_page(label="示例页面", build_fn=build_page)
 
+    # 2b) 主标签页:与 下载新资源/联机/设置 平级(演示插件能注册全新的主 tab)
+    def build_main_tab():
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(QLabel("示例标签页:插件注册的一个【主标签页】(和「下载新资源」「设置」平级)。"))
+        return w
+
+    api.register_main_tab(label="示例标签", build_fn=build_main_tab)
+
     # 2b) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
     #     插件相关说明(能注册什么/能放什么)放这里讲,页面本身保持干净。
     def build_settings_page():

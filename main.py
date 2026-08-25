@@ -326,6 +326,17 @@ class MainWindow(QMainWindow):
         self.settings_center.applied.connect(self._on_settings_applied)
         self.main_tabs.addTab(self.settings_center, t("设置", "Settings"))
 
+        # ---- 插件注册的主标签页(与 下载新资源/联机/设置 平级)----
+        try:
+            import plugin_manager
+            for _label, _build in plugin_manager.MAIN_TABS:
+                try:
+                    self.main_tabs.addTab(_build(), _label)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # ---- 启动器日志:已作为「我的实例 → 启动器日志」子标签页(与 MC 动态同级) ----
         self.log_view = tab_a.log_view   # 复用首页子标签页里的常驻日志 view(流持续追加)
         # 启动器尽可能把所有反馈(状态/异常/操作)记进日志,方便 AI 定位问题

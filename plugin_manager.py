@@ -39,6 +39,7 @@ GUI_PAGES = {}        # label -> build_fn(返回 QWidget)        (GUI 章节,挂
 SETTINGS = {}         # key -> {description, ...}              (设置项,占位登记)
 SKILLS = []           # [Skill子类]                            (技能)
 LANGUAGE_PACKS = {}   # pack_id -> {"name", "pack"}            (语言包:文本覆盖)
+MAIN_TABS = []        # [(label, build_fn)]                    (主标签页,与 下载新资源/联机/设置 平级)
 
 # ---- 插件元数据(从插件模块读取):默认启禁 / 独立设置页 ----
 # discover_plugins 返回 [(name, path, meta)];meta 含 default_enabled / has_settings / settings_page
@@ -85,6 +86,11 @@ class PluginAPI:
         except Exception:
             pass
 
+    def register_main_tab(self, label: str, build_fn):
+        """注册一个【主标签页】(与 下载新资源/联机/设置 平级)。build_fn() 返回 QWidget。
+        MainWindow 构建时会把启用的插件标签页 addTab 到主标签栏。"""
+        MAIN_TABS.append((label, build_fn))
+
 
 def build_api(plugin_id: str) -> PluginAPI:
     return PluginAPI(plugin_id)
@@ -129,10 +135,10 @@ def discover_plugins_meta() -> dict:
             # 避免 register 的副作用(工具/页面/技能/语言包)泄漏到真实 registry。
             import plugin_manager as _pm
             saved = (_pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS, _pm.SKILLS,
-                     _pm.LANGUAGE_PACKS, _pm._PLUGIN_META)
+                     _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META)
             try:
                 _pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS = {}, {}, {}
-                _pm.SKILLS, _pm.LANGUAGE_PACKS, _pm._PLUGIN_META = [], {}, {}
+                _pm.SKILLS, _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META = [], {}, [], {}
                 # 也隔离 i18n 语言包注册(register_language_pack 会写 i18n)
                 try:
                     import i18n as _i18n
@@ -145,7 +151,7 @@ def discover_plugins_meta() -> dict:
                 m["has_settings"] = bool(_pm._PLUGIN_META.get(name, {}).get("settings_build_fn"))
             finally:
                 (_pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS, _pm.SKILLS,
-                 _pm.LANGUAGE_PACKS, _pm._PLUGIN_META) = saved
+                 _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META) = saved
                 try:
                     if _saved_i18n is not None:
                         import i18n as _i18n
@@ -244,8 +250,8 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
     """启动时装载所有插件。disabled = 被禁用的插件 id 集合(显式禁用)。
     额外考虑"默认关闭"插件:PLUGIN_DEFAULT_ENABLED=False 且未被显式启用(settings['plugins_enabled'])
     的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
-    global TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, _PLUGIN_META
-    TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, _PLUGIN_META = {}, {}, {}, [], {}, {}
+    global TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META
+    TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, {}, {}, [], {}, [], {}
     disabled = set(disabled or [])
     # 显式启用的白名单(用于"默认关闭"插件)
     enabled_list = (settings or {}).get("plugins_enabled", []) or []
