@@ -123,7 +123,6 @@ class SettingsCenter(QWidget):
         self.shell.add_section(t("AI 助手", "AI"), self._build_ai)
         self.shell.add_section(t("镜像源", "Mirror"), self._build_mirror)
         self.shell.add_section(t("插件", "Plugins"), self._build_plugins)
-        self.shell.add_section(t("MCP", "MCP"), self._build_mcp)
         # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)。
         # 只在插件【启用】时才加(关闭/默认关未启用的插件不占菜单);可用齿轮从插件页进入,或启用后出现。
         self._plugin_settings_rows = []
@@ -317,54 +316,6 @@ class SettingsCenter(QWidget):
         l.addLayout(cache_row)
         l.addStretch()
         return self._wrap_scroll(w)
-
-    def _build_mcp(self) -> QWidget:
-        """MCP(独立设置章节):MCP Server 链接/配置文件 + MCP 客户端(外部服务器)。
-        之前塞在「界面」页,现独立出来(界面页不再拥挤)。"""
-        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(8)
-        # MCP Server(外部 AI 客户端调用启动器)
-        mcp_title = QLabel("🔌 MCP Server(给外部 AI 调用启动器):")
-        mcp_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
-        l.addWidget(mcp_title)
-        import os as _os, sys as _sys
-        _proj = _os.path.dirname(_os.path.abspath(__file__))
-        _main_py = _os.path.join(_proj, "main.py")
-        self._mcp_pyexe = _sys.executable
-        self._mcp_main_py = _main_py
-        self._mcp_url = "http://127.0.0.1:8766/mcp"
-        mcp_row = QHBoxLayout(); mcp_row.setSpacing(8)
-        mcp_lbl = QLabel(f"HTTP 链接: {self._mcp_url}")
-        mcp_lbl.setStyleSheet("color:#8a93a0;")
-        mcp_row.addWidget(mcp_lbl, 1)
-        copy_btn = QPushButton("复制链接"); set_style(copy_btn, card_btn_style)
-        copy_btn.clicked.connect(self._copy_mcp_link); mcp_row.addWidget(copy_btn)
-        gen_btn = QPushButton("生成配置文件"); set_style(gen_btn, card_btn_style)
-        gen_btn.clicked.connect(self._gen_mcp_files); mcp_row.addWidget(gen_btn)
-        l.addLayout(mcp_row)
-        self._mcp_status = QLabel("")
-        self._mcp_status.setWordWrap(True); self._mcp_status.setStyleSheet("color:#8a93a0;")
-        l.addWidget(self._mcp_status)
-        server_hint = QLabel("MCP Server 是个默认关闭的插件:到 设置→插件 打开它的开关(无需用时零端口占用)。")
-        server_hint.setWordWrap(True); server_hint.setStyleSheet("color:#8a93a0; font-size:11px;")
-        l.addWidget(server_hint)
-        # MCP 客户端(启动器 AI 去调用的【外部】MCP 服务器)。
-        l.addSpacing(12)
-        c_title = QLabel("🔌 MCP 客户端(启动器 AI 去调用的外部服务器):")
-        c_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
-        l.addWidget(c_title)
-        c_hint = QLabel("每条用 ; 分隔;HTTP 写 url,本地 stdio 写 名字>=命令(如 mcwiki>=uvx mc-wiki-mcp)。")
-        c_hint.setWordWrap(True); c_hint.setStyleSheet("color:#8a93a0;")
-        l.addWidget(c_hint)
-        self.mcp_clients_edit = QLineEdit()
-        self.mcp_clients_edit.setPlaceholderText(
-            "MCP 客户端(外部服务器→启动器AI调用),用 ; 分隔。\n"
-            "HTTP 写 url,如 http://127.0.0.1:9000/mcp;"
-            "本地 stdio 写 名字>=命令,如 mcwiki>=uvx mc-wiki-mcp")
-        self.mcp_clients_edit.setText(
-            ";".join(_fmt_mcp_entry(c) for c in self.settings.get("mcp_clients", [])))
-        l.addWidget(self.mcp_clients_edit)
-        l.addStretch()
-        return w
 
     def _copy_mcp_link(self):
         from PySide6.QtWidgets import QApplication
@@ -866,7 +817,20 @@ class SettingsCenter(QWidget):
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors
-        # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):每条用 ; 分隔,支持两种写法
-        self.settings["mcp_clients"] = _parse_mcp_entries(self.mcp_clients_edit.text())
+        # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):配置在 MCP 插件设置页(w._mcp_clients_edit)。
+        # 从 shell 里找该编辑框(插件未启用/未构建时保留原值)。
+        mcp_edit = getattr(self, "mcp_clients_edit", None)
+        if mcp_edit is None:
+            try:
+                # 深度找 shell 里挂着 _mcp_clients_edit 的插件设置页
+                for pw in self.shell.stack.findChildren(QWidget):
+                    e = getattr(pw, "_mcp_clients_edit", None)
+                    if e is not None:
+                        mcp_edit = e
+                        break
+            except Exception:
+                mcp_edit = None
+        if mcp_edit is not None:
+            self.settings["mcp_clients"] = _parse_mcp_entries(mcp_edit.text())
         save_settings(self.settings)
         self.applied.emit()

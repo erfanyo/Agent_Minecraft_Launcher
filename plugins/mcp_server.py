@@ -123,6 +123,38 @@ def register(api):
         start_btn.clicked.connect(do_start)
         stop_btn.clicked.connect(do_stop)
         port_spin.valueChanged.connect(lambda _v: refresh())
+
+        # ---- MCP 客户端(启动器 AI 去调用的外部 MCP 服务器)----
+        c_title = QLabel("🔌 MCP 客户端(启动器 AI 去调用的外部服务器):")
+        c_title.setStyleSheet("font-weight:bold; color:#8a93a0;")
+        lay.addWidget(c_title)
+        c_hint = QLabel("每条用 ; 分隔;HTTP 写 url,本地 stdio 写 名字>=命令(如 mcwiki>=uvx mc-wiki-mcp)。")
+        c_hint.setWordWrap(True); c_hint.setStyleSheet("color:#8a93a0; font-size:11px;")
+        lay.addWidget(c_hint)
+        mcp_clients_edit = QLineEdit()
+        mcp_clients_edit.setPlaceholderText(
+            "MCP 客户端(外部服务器→启动器AI调用),用 ; 分隔。\n"
+            "HTTP 写 url,如 http://127.0.0.1:9000/mcp;本地 stdio 写 名字>=命令,如 mcwiki>=uvx mc-wiki-mcp")
+        try:
+            from settings import load_settings
+            _mcps = load_settings().get("mcp_clients", [])
+            import shlex
+            _txt = []
+            for _c in _mcps:
+                if (_c.get("transport") or "http") in ("stdio", "local", "command", "process"):
+                    _cmd = _c.get("command")
+                    if isinstance(_cmd, list):
+                        _cmd = shlex.join([str(x) for x in _cmd])
+                    _txt.append(f"{_c.get('name','mcp')}>={_cmd or ''}")
+                else:
+                    _txt.append(_c.get("url", ""))
+            mcp_clients_edit.setText(";".join(_txt))
+        except Exception:
+            pass
+        lay.addWidget(mcp_clients_edit)
+        # 记住编辑框,供保存时读取(挂到 w 上,SettingsCenter.apply 用)
+        w._mcp_clients_edit = mcp_clients_edit
+
         lay.addStretch()
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, refresh)

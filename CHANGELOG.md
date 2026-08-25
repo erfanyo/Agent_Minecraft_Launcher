@@ -111,6 +111,7 @@
 - **MCP 服务器模块化成"默认关闭插件"**:`mcp_server.py` 加可启停的 `MCPHttpServer`(后台线程,不阻塞 GUI);新增 `plugins/mcp_server.py`——**默认关闭**(`PLUGIN_DEFAULT_ENABLED=False`,按需启动,不占端口),注册 **AI 工具 `MCP服务器__mcp_status`**(查服务是否运行)+ **独立设置页**(设置→左菜单单开一行:配置端口/启动/停止/显示连接 URL)。CLI 旧方式(`python main.py --mcp` stdio / `--mcp-http [port]` HTTP)保留、与插件互不影响。设置→界面 语言下拉已列内置+用户语言包。
 - **设置→插件 管理页 UI 优化**:① 整页放进**滚动区**(垂直拥挤可滚);② 启用/禁用改用**开关样式**(iOS 风格 `ToggleSwitch`),默认关闭的插件**不再写"默认关闭"文字**(开关是关即说明);③ 插件**标题调大**(15px)、描述不变;④ **注册内容移到 tooltip**(悬停才显示),不再常驻占行;⑤ 有**独立设置页**的插件在开关旁加**⚙ 齿轮按钮**,点击跳转到该插件设置页(未启用则提示先开开关)。
 - **设置「界面」「AI 助手」页加滚动区 + 语言包合并**:`_build_ui`/`_build_ai` 包进 `QScrollArea`(纵向不拥挤);MCP 集成已成独立「MCP」章节。「玩梗语言包」从独立插件改为**内置语言包**(`languages/meme.json`)——语言包统一为"可加载文本包"(插件可 `register_language_pack` 贡献 + 第三方丢 `AMCL/languages/*.json`),不必单独成插件;所有语言包(含机翻生成的 en/fr/es…)统一出现在 设置→界面→语言 下拉。
+- **MCP 全靠插件,不再留独立「MCP」菜单章节**:删掉设置左菜单的独立「MCP」章节,MCP Server 链接/生成配置 + MCP 客户端(外部服务器)全部并入 **mcp_server 插件的设置页**。这样 **mcp_server 默认关闭时左菜单无任何 MCP 相关项**(符合"关闭的插件不显示菜单");启用插件后才出现「插件:MCP Server」设置页,内含 server 启停 + 客户端配置。`apply()` 改为从插件设置页读取 MCP 客户端配置(找不到时保留原值)。
 - **名称解析·深挖(口语/别名/模糊 + 接进配方)**:`mc_names.py` 加 **440 条口语/别名/近义表**(如 会爆炸的怪/爆爆怪/绿皮怪→creeper、小黑→enderman、时运→Fortune)+(拼音/前缀/中文子串)**模糊匹配**(`cree`→creeper、`苦力`→苦力怕);新增 `resolve_for_wiki(query, wiki_lang)`——按目标 wiki 语言返回该用的检索名(英文 wiki 用 `Creeper`、中文 wiki 用 `苦力怕`)。并把别名表**并进 `recipe_graph.build_zh_index`**,让 `get_recipe_path`/`compare_items`/`resolve_item` 也吃口语叫法(`会爆炸的怪`→`minecraft:creeper`);`resolve_item` 复用下划线 compact 兜底。
 
 ### 🧩 Mod 依赖网络(灵感 #5,简单版)
