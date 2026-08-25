@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
@@ -49,12 +50,14 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTextBrowser,
     QToolButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ai_actions import PERMISSIONS, PermissionDenied, permission_instructions, require_workspace_write
 from agent_tools import TOOL_FUNCS
+from ui_style import set_style, list_style
 from settings import save_settings
 
 # 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
@@ -1599,11 +1602,25 @@ class AIChatDock(QDockWidget):
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.addLayout(top_row)          # 顶部:技能管理入口
-        layout.addWidget(self.history, 1)   # 历史区上下弹性伸缩
-        layout.addLayout(perm_row)
-        layout.addWidget(self.img_row_widget)   # 图片缩略图 + 上下文环
-        layout.addLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        # ---- 用标签页:0=聊天(原内容) 1=聊天记录·归档 ----
+        self.tabs = QTabWidget()
+        # Tab0: 聊天(历史+权限+图片+输入)
+        chat_tab = QWidget()
+        chat_lay = QVBoxLayout(chat_tab)
+        chat_lay.setContentsMargins(8, 4, 8, 4)
+        chat_lay.setSpacing(6)
+        chat_lay.addLayout(top_row)            # 顶部:技能管理入口
+        chat_lay.addWidget(self.history, 1)    # 历史区上下弹性伸缩
+        chat_lay.addLayout(perm_row)
+        chat_lay.addWidget(self.img_row_widget)  # 图片缩略图 + 上下文环
+        chat_lay.addLayout(row)                 # 输入行
+        self.tabs.addTab(chat_tab, "💬 聊天")
+        # Tab1: 聊天记录·归档
+        self.tabs.addTab(self._build_archive_tab(), "🗂 记录/归档")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tabs, 1)
         self.setWidget(container)
         self.setMinimumWidth(320)
         self.setObjectName("AIChatDock")
@@ -1777,6 +1794,89 @@ class AIChatDock(QDockWidget):
         save_settings(self.settings)
         self._update_permission_label()
         self._append_system(f"文件权限已切换为:{'工作区可写(AI 可改启动器目录内文件)' if nxt == 'workspace_write' else '只读(AI 不能改文件)'}")
+
+    # ---- 聊天记录·归档 tab ----
+    def _build_archive_tab(self) -> QWidget:
+        import chat_archive as ca
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(6)
+        tip = QLabel("把当前对话存成会话,或从归档快速恢复(恢复后可继续提问,含工具过程)。")
+        tip.setWordWrap(True); tip.setStyleSheet("color:#888888; font-size:11px;")
+        lay.addWidget(tip)
+        self._archive_list = QListWidget()
+        self._archive_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        set_style(self._archive_list, list_style)
+        lay.addWidget(self._archive_list, 1)
+        btn_row = QHBoxLayout(); btn_row.setSpacing(6)
+        save_btn = QPushButton("💾 存档当前")
+        save_btn.clicked.connect(self._archive_current)
+        restore_btn = QPushButton("↩ 恢复选中")
+        restore_btn.clicked.connect(self._restore_selected)
+        del_btn = QPushButton("删 除")
+        del_btn.clicked.connect(self._delete_selected)
+        for b in (save_btn, restore_btn, del_btn):
+            b.setStyleSheet("QPushButton{background:#2b2f3a;color:#e8ecf2;border:1px solid #3a4150;"
+                            "border-radius:6px;padding:4px 8px;} QPushButton:hover{border-color:#5B8DEF;}")
+            btn_row.addWidget(b)
+        lay.addLayout(btn_row)
+        self._refresh_archive_list()
+        return w
+
+    def _on_tab_changed(self, idx: int):
+        """切到归档 tab 时刷新列表。"""
+        if idx == 1:
+            self._refresh_archive_list()
+
+    def _refresh_archive_list(self):
+        import chat_archive as ca
+        self._archive_list.clear()
+        for s in ca.list_sessions():
+            item = QListWidgetItem(f"{s['title']}\n{s['created_at']}  ·  {s['count']} 条")
+            item.setData(Qt.ItemDataRole.UserRole, s["path"])
+            self._archive_list.addItem(item)
+
+    def _archive_current(self):
+        """把当前对话存成一份会话。"""
+        import chat_archive as ca
+        if not self._entries:
+            QMessageBox.information(self, "存档", "当前没有对话内容可存档。")
+            return
+        r = ca.save_session(self._chat_messages, self._entries)
+        if r.get("ok"):
+            QMessageBox.information(self, "存档", f"✅ 已存档:「{r['title']}」")
+            self._refresh_archive_list()
+        else:
+            QMessageBox.warning(self, "存档", f"❌ 存档失败:{r.get('error')}")
+
+    def _restore_selected(self):
+        """从归档恢复选中会话(替换当前对话历史,可继续提问)。"""
+        import chat_archive as ca
+        cur = self._archive_list.currentItem()
+        if cur is None:
+            return
+        path = cur.data(Qt.ItemDataRole.UserRole)
+        s = ca.load_session(path)
+        if not s.get("ok"):
+            QMessageBox.warning(self, "恢复", f"❌ 读取失败:{s.get('error')}")
+            return
+        self._chat_messages = list(s.get("chat_messages", []))
+        self._entries = list(s.get("entries", []))
+        self._render_all()
+        self.tabs.setCurrentIndex(0)          # 切回聊天 tab
+        self.input.setFocus()
+        self._append_system(f"已从归档恢复「{s.get('title','')}」,可继续提问。")
+
+    def _delete_selected(self):
+        import chat_archive as ca
+        cur = self._archive_list.currentItem()
+        if cur is None:
+            return
+        path = cur.data(Qt.ItemDataRole.UserRole)
+        if ca.delete_session(path):
+            QMessageBox.information(self, "删除", "已删除该归档会话。")
+            self._refresh_archive_list()
 
     # ---- 消息显示(条目化,支持展开重渲染) ----
     def _append_system(self, text: str):
