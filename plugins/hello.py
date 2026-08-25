@@ -7,8 +7,8 @@
 """
 # 可选:插件元数据(供设置→插件页面展示;不提供也有默认)
 PLUGIN_ID = "hello"
-PLUGIN_NAME = "示例:打招呼"
-PLUGIN_DESCRIPTION = "演示如何注册一个 AI 工具 + 一个设置项。"
+PLUGIN_NAME = "示例"
+PLUGIN_DESCRIPTION = "演示注册一个 AI 工具 + 一个设置项 + 一个页面 + 一个技能(完整的插件示例)。"
 PLUGIN_VERSION = "0.1.0"
 
 
@@ -40,7 +40,7 @@ def register(api):
         lay.addWidget(QLabel("页面里可以放任何 QWidget / 控件。"))
         return w
 
-    api.register_gui_page(label="示例·打招呼", build_fn=build_page)
+    api.register_gui_page(label="示例页面", build_fn=build_page)
 
     # 2b) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
     def build_settings_page():

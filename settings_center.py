@@ -124,17 +124,25 @@ class SettingsCenter(QWidget):
         self.shell.add_section(t("镜像源", "Mirror"), self._build_mirror)
         self.shell.add_section(t("插件", "Plugins"), self._build_plugins)
         self.shell.add_section(t("MCP", "MCP"), self._build_mcp)
-        # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)
+        # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)。
+        # 只在插件【启用】时才加(关闭/默认关未启用的插件不占菜单);可用齿轮从插件页进入,或启用后出现。
         self._plugin_settings_rows = []
         try:
             import plugin_manager
+            disabled = set(self.settings.get("plugins_disabled", []) or [])
+            enabled_override = set(self.settings.get("plugins_enabled", []) or [])
             pm_meta = plugin_manager.discover_plugins_meta()
             for pid in sorted(pm_meta.keys()):
-                if pm_meta[pid].get("has_settings"):
-                    build_fn = plugin_manager.plugin_settings_page(pid)
-                    if build_fn:
-                        self.shell.add_section(t(f"插件:{pm_meta[pid].get('name') or pid}"), build_fn)
-                        self._plugin_settings_rows.append(pid)
+                if not pm_meta[pid].get("has_settings"):
+                    continue
+                default_on = pm_meta[pid].get("default_enabled", True)
+                is_on = (pid not in disabled) and (default_on or pid in enabled_override)
+                if not is_on:
+                    continue   # 未启用 → 不显示设置行
+                build_fn = plugin_manager.plugin_settings_page(pid)
+                if build_fn:
+                    self.shell.add_section(t(f"插件:{pm_meta[pid].get('name') or pid}"), build_fn)
+                    self._plugin_settings_rows.append(pid)
         except Exception:
             pass
         if initial_tab:

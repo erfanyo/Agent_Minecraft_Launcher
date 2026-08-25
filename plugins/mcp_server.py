@@ -8,8 +8,8 @@ MCP Server 插件(默认关闭):把启动器工具暴露给外部 AI 宿主(MCP 
 import threading
 
 PLUGIN_ID = "mcp_server"
-PLUGIN_NAME = "MCP Server(给外部 AI 调用启动器)"
-PLUGIN_DESCRIPTION = "把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等)。默认关闭,按需拉起到本地端口。"
+PLUGIN_NAME = "MCP Server"
+PLUGIN_DESCRIPTION = "把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等),让外部 AI 能调用启动器能力。默认关闭,按需拉起到本地端口。"
 PLUGIN_DEFAULT_ENABLED = False   # 默认关闭:启动器 AI 用不到它,按需开
 
 # 全局:插件内维护的服务实例(附到插件模块,避免多实例)
@@ -70,8 +70,9 @@ def register(api):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(16, 12, 16, 12)
         lay.setSpacing(8)
-        lay.addWidget(QLabel("MCP Server(把启动器工具暴露给外部 AI 宿主)"))
-        desc = QLabel("客户端用「http」选项填下面的地址即可连本启动器;走后端 127.0.0.1 端口,不放公网。\n"
+        lay.addWidget(QLabel("MCP Server 设置"))
+        desc = QLabel("把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等),让外部 AI 能调用启动器能力。\n"
+                      "客户端用「http」选项填下面的地址即可连本启动器;走后端 127.0.0.1 端口,不放公网。\n"
                       "默认关闭:不用时不占端口;按需启动。")
         desc.setWordWrap(True); desc.setStyleSheet("color:#8a93a0; font-size:11px;")
         lay.addWidget(desc)
