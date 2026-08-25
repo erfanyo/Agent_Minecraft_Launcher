@@ -11,8 +11,8 @@ import uuid
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QMessageBox, QPushButton, QSpinBox, QStackedWidget,
-    QVBoxLayout, QWidget,
+    QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSpinBox,
+    QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from assistant import AISettingsForm
@@ -64,6 +64,44 @@ def _parse_mcp_entries(text: str) -> list:
             url = line.strip()
             entries.append({"name": nm, "transport": "http", "url": url})
     return entries
+
+
+class ToggleSwitch(QWidget):
+    """iOS 风格开关(替代 QCheckBox):可点击切换,checked 状态用颜色区分。
+    用 clicked(checked_forwards) 信号替代 QCheckBox.toggled。"""
+    toggled = Signal(bool)
+
+    def __init__(self, checked=False, parent=None):
+        super().__init__(parent)
+        self._checked = checked
+        self.setFixedSize(46, 24)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def isChecked(self) -> bool:
+        return self._checked
+
+    def setChecked(self, v: bool):
+        if self._checked != v:
+            self._checked = v
+            self.update()
+            self.toggled.emit(v)
+
+    def mousePressEvent(self, e):
+        self.setChecked(not self._checked)
+
+    def paintEvent(self, _):
+        from PySide6.QtGui import QColor, QPainter
+        from PySide6.QtCore import Qt as _Qt
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        track = QColor("#5B8DEF") if self._checked else QColor("#444a56")
+        p.setPen(Qt.PenStyle.NoPen); p.setBrush(track)
+        p.drawRoundedRect(0, 0, 46, 24, 12, 12)
+        # 圆点
+        p.setBrush(QColor("#ffffff"))
+        x = 25 if self._checked else 5
+        p.drawEllipse(x, 4, 16, 16)
+        p.end()
 
 
 class SettingsCenter(QWidget):
@@ -570,59 +608,54 @@ class SettingsCenter(QWidget):
         return w
 
     def _build_plugins(self) -> QWidget:
-        """插件管理:列出 plugins/*.py(默认安装,可启禁),显示各插件注册的 工具/页面/设置/技能。
-        也是「一切皆插件」的入口:核心组件不在此,只列非核心/可选功能插件。"""
+        """插件管理:列出 plugins/*.py(开关启停)。整页放进滚动条,避免垂直拥挤。
+        - 启用/禁用 = 开关样式(默认为关即表示默认关闭,不写文字);
+        - 标题大、描述小;注册内容移到 tooltip(悬停才显示);
+        - 有独立设置页的插件 → 开关旁齿轮按钮,点击跳到该插件设置页。"""
         import plugin_manager
-        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(8)
-        head = QLabel("插件 = 启动器的可选功能模块(默认安装,可点开关停用)。\n"
-                      "核心组件(启动/实例/下载/设置/AI)不在插件列表里,保证稳定。")
+        page = QWidget()
+        l = QVBoxLayout(page); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(8)
+        head = QLabel("插件 = 启动器的可选功能模块。\n核心组件(启动/实例/下载/设置/AI)不在插件列表里,保证稳定。")
         head.setWordWrap(True); head.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(head)
 
         disabled = set(self.settings.get("plugins_disabled", []) or [])
         enabled_override = set(self.settings.get("plugins_enabled", []) or [])
-        # 插件元数据(默认启禁 / 是否有独立设置页)
         metas = plugin_manager.discover_plugins_meta()
         for name, path in plugin_manager.discover_plugins():
             meta = metas.get(name, {})
             pname = meta.get("name") or name
             pdesc = meta.get("description", "")
             default_on = meta.get("default_enabled", True)
-            # 实际是否启用:默认关且未显式启用 / 显式禁用 → 关
             is_on = (name not in disabled) and (default_on or name in enabled_override)
             card = QWidget(); set_style(card, panel_style)
-            cl = QVBoxLayout(card); cl.setContentsMargins(10, 8, 10, 8); cl.setSpacing(4)
-            row = QHBoxLayout()
-            # 启禁开关(勾选=启用)
-            cb = QCheckBox("启用")
-            cb.setChecked(is_on)
-            cb.toggled.connect(lambda ch, n=name: self._toggle_plugin(n, ch))
-            title = QLabel(f"{pname}  <small>({name}.py)</small>")
-            title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
-            row.addWidget(title, 1); row.addWidget(cb)
+            cl = QVBoxLayout(card); cl.setContentsMargins(12, 8, 12, 8); cl.setSpacing(3)
+            # 行:标题(大)+ 工具/注册内容(tooltip)+ 齿轮 + 开关
+            row = QHBoxLayout(); row.setSpacing(6)
+            title = QLabel(pname)
+            title.setStyleSheet(f"font-weight:bold; font-size:15px; color:{text_color()};")
+            # 注册内容 → tooltip(悬停显示)
+            contents = self._describe_plugin(name, None)
+            if contents:
+                title.setToolTip(f"{pname}({name}.py)\n{contents}")
+            row.addWidget(title, 1)
+            # 有独立设置页 → 齿轮按钮
+            if meta.get("has_settings"):
+                gear = QToolButton()
+                gear.setText("⚙")
+                gear.setToolTip("插件设置")
+                gear.setCursor(Qt.CursorShape.PointingHandCursor)
+                gear.clicked.connect(lambda _c, n=name: self._goto_plugin_setting(n))
+                row.addWidget(gear)
+            # 开关
+            tsw = ToggleSwitch(is_on)
+            tsw.toggled.connect(lambda ch, n=name: self._toggle_plugin(n, ch))
+            row.addWidget(tsw)
             cl.addLayout(row)
-            if not default_on:
-                note = QLabel("🔒 默认关闭:需勾选启用后才生效(适合 MCP 服务器等按需功能)")
-                note.setWordWrap(True); note.setStyleSheet("color:#c78a2e; font-size:11px;")
-                cl.addWidget(note)
             if pdesc:
                 d = QLabel(pdesc); d.setWordWrap(True)
                 d.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
                 cl.addWidget(d)
-            # 展示注册的内容(工具/页面/设置/技能)+ 是否有独立设置页
-            contents = self._describe_plugin(name, None)
-            if contents:
-                c = QLabel(contents); c.setWordWrap(True)
-                c.setStyleSheet("color:#8a93a0; font-size:11px;")
-                cl.addWidget(c)
-            if meta.get("has_settings"):
-                srow = QHBoxLayout()
-                for other_btn in ():
-                    pass
-                lbl = QLabel("⚙ 有独立设置页")
-                lbl.setStyleSheet("color:#8a93a0; font-size:11px;")
-                srow.addWidget(lbl); srow.addStretch()
-                cl.addLayout(srow)
             l.addWidget(card)
 
         if not plugin_manager.discover_plugins():
@@ -630,7 +663,7 @@ class SettingsCenter(QWidget):
                            "或让 AI 按模板生成一个(见「插件模板」)。")
             empty.setWordWrap(True); empty.setStyleSheet(f"color: {muted_color()};")
             l.addWidget(empty)
-        # 插件注册的 GUI 页面(章节):嵌入预览(启用即显示)
+        # 插件注册的 GUI 页面(章节):嵌入预览
         gui_pages = plugin_manager.GUI_PAGES
         if gui_pages:
             l.addSpacing(8)
@@ -655,7 +688,28 @@ class SettingsCenter(QWidget):
                 l.addLayout(btn_row)
                 l.addWidget(self._plugin_page_host, 1)
         l.addStretch()
-        return w
+
+        # 放进滚动区(垂直拥挤也能滚)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
+
+    def _goto_plugin_setting(self, name: str):
+        """跳到某插件的独立设置页(在设置左菜单单开一行,标签为 插件:<显示名>)。
+        若插件未启用(默认关,其设置行未加载),提示先启用。"""
+        try:
+            import plugin_manager
+            meta = plugin_manager.discover_plugins_meta().get(name, {})
+            display = meta.get("name") or name
+            if self.shell.switch_by_label(f"插件:{display}"):
+                return
+            QMessageBox.information(self, "插件设置",
+                                    f"「{display}」目前未启用(默认关闭)。\n"
+                                    "请先把它的开关打开,再点⚙进入设置。")
+        except Exception:
+            pass
 
     def _describe_plugin(self, name: str, mod) -> str:
         """给插件页面显示该插件注册了哪些内容。"""
