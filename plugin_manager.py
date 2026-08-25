@@ -335,7 +335,9 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
     的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
     global TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META
     TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, {}, {}, [], {}, [], {}
+    # 禁用集合 = 显式传入 disabled 并上 settings["plugins_disabled"](传 settings 时生效)
     disabled = set(disabled or [])
+    disabled |= set((settings or {}).get("plugins_disabled", []) or [])
     # 显式启用的白名单(用于"默认关闭"插件)
     enabled_list = (settings or {}).get("plugins_enabled", []) or []
     enabled_set = set(enabled_list) if enabled_list else set()
