@@ -188,12 +188,49 @@ def _external_config() -> tuple:
         s = load_settings()
         mode = (s.get("ai_local_mode") or "builtin")
         base = (s.get("ai_local_endpoint") or "").strip()
-        model = (s.get("ai_local_model") or "").strip()
-        if mode in ("lmstudio", "ollama") or (base and model):
+        # 外部模型名单独存 ai_external_model(与 ai_local_model 本地 GGUF 分离,避免撞字段爆内存)
+        model = (s.get("ai_external_model") or "").strip()
+        if mode in ("lmstudio", "ollama"):
+            if not model:
+                # 没单独存模型名 → 从 LM Studio 探测一个(通常 qwen 9B)
+                from settings import load_settings as _ls
+                _b, _m = _probe_local_lmstudio()
+                base = base or _b
+                model = _m
+            if base and model:
+                return base, model
+        if (base and model):
+            return base, model
+        # 防御:显式 builtin 但本地 LM Studio(1234)可达且有较大模型 → 优先外部,
+        # 避免自起 llama-server 加载大模型爆内存(用户常手动用 LM Studio 跑大模型)。
+        base, model = _probe_local_lmstudio()
+        if base and model:
             return base, model
         return "", ""
     except Exception:
         return "", ""
+
+
+def _probe_local_lmstudio() -> tuple:
+    """探测本地 LM Studio(常见端口 1234 / 11434):返回 (base, model)。
+    仅当端口可达且加载了非内置 0.8B 的模型时才用(否则仍回落内置)。"""
+    import requests
+    for port, scheme in ((1234, "http"), (11434, "http")):
+        base = f"{scheme}://127.0.0.1:{port}"
+        try:
+            r = requests.get(base + "/v1/models", timeout=2)
+            if r.status_code != 200:
+                continue
+            models = [m.get("id", "") for m in r.json().get("data", []) if m.get("id")]
+            # 排除内置小模型,优先选一个非 0.8B 的大模型(如 qwen3.5-9b)
+            big = [m for m in models if "0.8" not in m and "0.8b" not in m.lower()]
+            if big:
+                # 优先 qwen 9b 类
+                pick = next((m for m in big if "9b" in m.lower() or "9b" in m), big[0])
+                return base, pick
+        except Exception:
+            continue
+    return "", ""
 
 
 def get_translation_engine():
@@ -305,11 +342,13 @@ def translate_text(text: str, slug: str = "", field: str = "description",
 
     gh = False
     conf = _confidence(text, output, gh) if not target_lang else "high"
-    with _store_lock:
-        store = _load_store()
-        store["entries"][key] = {"t": output, "c": conf, "g": gh,
-                                 "ts": _now_ts()}
-        _save_store(store)
+    # 空输出不落缓存(避免把"空翻译"污染缓存,下次命中空)
+    if output and output.strip():
+        with _store_lock:
+            store = _load_store()
+            store["entries"][key] = {"t": output, "c": conf, "g": gh,
+                                     "ts": _now_ts()}
+            _save_store(store)
     return {"translated": True, "text": output, "confidence": conf,
             "machine": True, "cached": False, "source": "model",
             "glossary_hit": gh}

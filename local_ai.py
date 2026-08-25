@@ -405,6 +405,13 @@ class GrammarToolEngine:
         r = requests.post(url, json=body, timeout=timeout)
         r.raise_for_status()
         content = (r.json()["choices"][0]["message"]["content"] or "").strip()
+        # LM Studio 偶发返回空(finish=length):重试一次
+        if not content:
+            import time
+            time.sleep(1)
+            r = requests.post(url, json=body, timeout=timeout)
+            r.raise_for_status()
+            content = (r.json()["choices"][0]["message"]["content"] or "").strip()
         # 剥掉思考块(Qwen 推理模型的 <think>...</think> 输出对用户无意义)
         if content.startswith("<think>"):
             end = content.find("</think>")
