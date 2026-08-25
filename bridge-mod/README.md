@@ -36,6 +36,15 @@
 3. **指令库同步**:mod 与启动器指令中心互通(自定义指令/NBT 模板)
 4. **未来**:更多启动器相关功能(游戏内状态回传、自动化操作等)
 
+### 🧠 游戏内 AI 入口(待实现 · 启动器侧已就绪)
+- **需求**:玩家在游戏里敲 `/ai <内容>`,内容交给启动器 AI 处理,结果回显出到游戏聊天栏。
+- **实现(文件交换,复用 .bridge 机制)**:
+  - **mod 侧(待做,需编译)**:注册 `/ai <内容>` 命令 → 写 `.bridge/ai_request.json`
+    `{"seq":1,"text":"<内容>","ts":...}`;并轮询 `.bridge/ai_reply.json`(seq 匹配)→ `tellraw` 回显。
+  - **启动器侧(✅ 已做)**:`in_game_ai.py`(InGameAI 轮询 + make_answerer 按 ai_in_game 作答),
+    发现新 seq → 调 AI → 写 `.bridge/ai_reply.json` `{"seq":1,"text":"回复","ts":...}`。
+- **状态**:启动器侧可用且可测(模拟 request→reply 通过);mod 侧代码待写 + 需 JDK/Gradle 编译。
+
 ## 目录结构
 
 ```
