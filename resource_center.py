@@ -1132,42 +1132,132 @@ class ResourceCenter(QWidget):
         return home
 
     def _build_plugins_placeholder(self) -> QWidget:
-        """启动器插件:占位页(插件生态建设中)。以后可在这里浏览/安装插件。"""
+        """启动器插件商店:手动注册仓库源 → 列出仓库里的插件 → 一键安装单文件。
+        参考 DSH「仓库即商店」:你的官方插件放你项目仓库(如 GitHub),用户添加该仓库 URL 即可装。"""
         import plugin_manager
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-        title = QLabel("🧩 启动器插件")
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(8)
+
+        title = QLabel("🧩 启动器插件商店")
         title.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {text_color()};")
-        layout.addWidget(title)
-        note = QLabel("插件 = 启动器的可选功能模块(联机方案中心 / Mod 依赖网络 / MCP 集成等),"
-                      "可在 设置 → 插件 里启用/停用。\n"
-                      "「插件生态」正在建设中,这里以后会提供插件浏览/一键安装;"
-                      "目前请到 设置 → 插件 管理已安装的插件。")
+        outer.addWidget(title)
+        note = QLabel("插件仓库 = 一个 plugins.json 清单(列出 名/版本/下载地址)。\n"
+                      "手动添加你的「官方」仓库(或任何第三方仓库)URL,即可浏览并一键安装;"
+                      "装的插件可到 设置→插件 启停。")
         note.setWordWrap(True); note.setStyleSheet(hint_style())
-        layout.addWidget(note)
-        # 当前已安装插件一览
-        cur = QLabel("已装载的插件:")
-        cur.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
-        layout.addWidget(cur)
-        metas = plugin_manager.discover_plugins_meta()
-        if metas:
-            for pid, meta in metas.items():
-                lbl = QLabel(f"• {meta.get('name') or pid}  <small>({pid}.py)</small>")
-                lbl.setStyleSheet(hint_style())
-                layout.addWidget(lbl)
-        else:
-            empty = QLabel("还没有插件。以后插件生态完善后,这里会显示可安装的插件。")
-            empty.setWordWrap(True); empty.setStyleSheet(hint_style())
-            layout.addWidget(empty)
-        # 打开插件管理(设置→插件)
+        outer.addWidget(note)
+
+        # ---- 仓库源管理 ----
+        reg_title = QLabel("仓库源:")
+        reg_title.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
+        outer.addWidget(reg_title)
+        self._registry_list = QListWidget(); self._registry_list.setMaximumHeight(80)
+        outer.addWidget(self._registry_list)
+        reg_row = QHBoxLayout()
+        self._registry_edit = QLineEdit()
+        self._registry_edit.setPlaceholderText("仓库 plugins.json 地址,如 https://raw.githubusercontent.com/…/plugins.json")
+        reg_row.addWidget(self._registry_edit, 1)
+        add_reg = QPushButton("添加仓库"); set_style(add_reg, card_btn_style); add_reg.setMinimumHeight(30)
+        add_reg.clicked.connect(self._add_registry)
+        del_reg = QPushButton("删除选中"); set_style(del_reg, card_btn_style); del_reg.setMinimumHeight(30)
+        del_reg.clicked.connect(self._del_registry)
+        reg_row.addWidget(add_reg); reg_row.addWidget(del_reg)
+        outer.addLayout(reg_row)
+
+        # ---- 仓库里的插件(汇总) ----
+        remote_title = QLabel("仓库里的插件:")
+        remote_title.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
+        outer.addWidget(remote_title)
+        self._plugin_store_list = QListWidget()
+        self._plugin_store_list.setWordWrap(True)
+        set_style(self._plugin_store_list, list_style)
+        outer.addWidget(self._plugin_store_list, 1)
+        btn_row = QHBoxLayout()
+        refresh_btn = QPushButton("刷新插件列表"); set_style(refresh_btn, card_btn_style); refresh_btn.setMinimumHeight(32)
+        refresh_btn.clicked.connect(self._refresh_store)
+        install_btn = QPushButton("安装选中插件"); set_style(install_btn, card_btn_style); install_btn.setMinimumHeight(32)
+        install_btn.clicked.connect(self._install_store_plugin)
+        btn_row.addWidget(refresh_btn); btn_row.addWidget(install_btn)
+        outer.addLayout(btn_row)
+
         open_btn = QPushButton(t("打开插件管理(设置→插件)", "Open plugin manager"))
         set_style(open_btn, card_btn_style); open_btn.setMinimumHeight(34)
         open_btn.clicked.connect(self._open_plugin_settings)
-        layout.addWidget(open_btn)
-        layout.addStretch()
-        return w
+        outer.addWidget(open_btn)
+        self._refresh_store()
+        return page
+
+    def _registries(self) -> list:
+        """读当前插件仓库源设置。"""
+        from settings import load_settings
+        s = load_settings()
+        return s.get("plugin_registries", []) or []
+
+    def _save_registries(self, regs: list):
+        from settings import load_settings, save_settings
+        s = load_settings()
+        s["plugin_registries"] = regs
+        save_settings(s)
+
+    def _add_registry(self):
+        u = self._registry_edit.text().strip()
+        if not u:
+            return
+        regs = list(self._registries())
+        if any(r.get("url") == u for r in regs):
+            self._registry_edit.setText("")
+            return
+        regs.append({"url": u, "name": u.split("/")[-1] or u})
+        self._save_registries(regs)
+        self._registry_edit.setText("")
+        self._refresh_store()
+
+    def _del_registry(self):
+        cur = self._registry_list.currentRow()
+        regs = list(self._registries())
+        if 0 <= cur < len(regs):
+            regs.pop(cur)
+            self._save_registries(regs)
+            self._refresh_store()
+
+    def _refresh_store(self):
+        import plugin_manager
+        regs = self._registries()
+        self._registry_list.clear()
+        for r in regs:
+            self._registry_list.addItem(r.get("url", ""))
+        # 拉取汇总
+        merged = plugin_manager.list_remote_plugins(regs) if regs else {}
+        self._plugin_store_list.clear()
+        if not regs:
+            self._plugin_store_list.addItem("还没有仓库源,请先在上面添加一个仓库 URL。")
+            return
+        for name, e in sorted(merged.items()):
+            title = e.get("title") or name
+            ver = e.get("version") or ""
+            desc = (e.get("description") or "")[:60]
+            repo = (e.get("repo") or "").split("/")[-1]
+            item = QListWidgetItem(f"{title}  <small>({ver})</small>   [{repo}]\n{desc}")
+            item.setData(Qt.ItemDataRole.UserRole, e)
+            self._plugin_store_list.addItem(item)
+        if not merged:
+            self._plugin_store_list.addItem("(仓库里没有可安装的插件,或拉取失败)")
+
+    def _install_store_plugin(self):
+        """安装选中的仓库插件(单文件下载+落盘)。"""
+        import plugin_manager
+        cur = self._plugin_store_list.currentItem()
+        if cur is None:
+            return
+        entry = cur.data(Qt.ItemDataRole.UserRole) or {}
+        r = plugin_manager.install_remote_plugin(entry)
+        if r.get("ok"):
+            QMessageBox.information(self, "安装插件",
+                                    f"✅ 已安装插件 {r.get('name', '')}:{r.get('path', '')}\n【重启启动器】后生效,可到 设置→插件 启用。")
+        else:
+            QMessageBox.warning(self, "安装插件", f"❌ 安装失败:{r.get('error', '未知')}")
 
     def _open_plugin_settings(self):
         """打开 设置(切到插件页)。"""
