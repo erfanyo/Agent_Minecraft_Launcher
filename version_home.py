@@ -22,6 +22,8 @@ import threading
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -340,6 +342,20 @@ class VersionHome(QWidget):
         tool_row.addWidget(self.config_btn, 1)
         lay.addLayout(tool_row)
 
+        # 「MC 存储路径」下拉:切换不同游戏目录/添加新路径(启动器工作区可写时可改)
+        gdir_row = QHBoxLayout(); gdir_row.setSpacing(8)
+        gdir_lbl = QLabel("存储路径:")
+        gdir_lbl.setStyleSheet(f"color: {muted_color()};")
+        self.game_dir_combo = QComboBox()
+        self.game_dir_combo.setObjectName("game_dir_combo")
+        self.game_dir_combo.setMinimumHeight(34)
+        self.game_dir_combo.setToolTip("游戏数据(.minecraft)存储目录。选一个或「添加新路径」。")
+        self._fill_game_dir_combo()
+        self.game_dir_combo.currentIndexChanged.connect(self._on_game_dir_changed)
+        gdir_row.addWidget(gdir_lbl)
+        gdir_row.addWidget(self.game_dir_combo, 1)
+        lay.addLayout(gdir_row)
+
         # 启动游戏大按钮
         self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
         self.launch_btn.setMinimumHeight(56)
@@ -348,6 +364,74 @@ class VersionHome(QWidget):
         lay.addWidget(self.launch_btn)
 
         return left
+
+    # ---- MC 存储路径(游戏目录)下拉 ----
+    def _game_dirs(self) -> list:
+        """历史上的游戏目录列表(不含当前默认)。"""
+        from settings import load_settings
+        s = load_settings()
+        return [p for p in (s.get("game_dirs_history") or []) if p.strip()]
+
+    def _fill_game_dir_combo(self):
+        from settings import load_settings
+        from paths import GAME_DIR as _cur_game_dir
+        s = load_settings()
+        cur = (s.get("game_dir") or _cur_game_dir or "").strip()
+        self.game_dir_combo.clear()
+        self.game_dir_combo.addItem(f"当前:{cur or '(默认)'}", cur)     # 0 当前
+        for p in self._game_dirs():
+            if p and p != cur:
+                self.game_dir_combo.addItem(p, p)
+        self.game_dir_combo.insertSeparator(self.game_dir_combo.count())
+        self.game_dir_combo.addItem("＋ 添加新路径…", "__add__")          # 最后一项 = 添加
+
+    def _on_game_dir_changed(self, idx: int):
+        data = self.game_dir_combo.itemData(idx)
+        if data == "__add__":
+            self._add_new_game_dir()
+            return
+        if data:
+            self._set_game_dir(data)
+
+    def _add_new_game_dir(self):
+        """弹目录选择,把新路径加入历史并切换。"""
+        import paths
+        start = paths.GAME_DIR or paths.DEFAULT_GAME_DIR
+        d = QFileDialog.getExistingDirectory(self, "选择 MC 存储路径(.minecraft 目录)", start)
+        if not d:
+            self._fill_game_dir_combo()   # 取消 → 恢复选择
+            return
+        self._set_game_dir(d, remember=True)
+
+    def _set_game_dir(self, path: str, remember: bool = True):
+        """切换全局游戏目录:set_game_dir + 存设置 + 记录历史 + 刷新实例。"""
+        from settings import load_settings, save_settings
+        import paths
+        path = (path or "").strip()
+        if not path:
+            return
+        paths.set_game_dir(path)
+        s = load_settings()
+        s["game_dir"] = path
+        if remember:
+            hist = [p for p in (s.get("game_dirs_history") or []) if p.strip()]
+            if path in hist:
+                hist.remove(path)
+            hist.insert(0, path)
+            s["game_dirs_history"] = hist[:20]
+        save_settings(s)
+        self._fill_game_dir_combo()
+        # 刷新实例列表 / 状态栏
+        try:
+            self.refresh_requested.emit()
+        except Exception:
+            pass
+        try:
+            win = self.window()
+            if win is not None and hasattr(win, "refresh_instances"):
+                win.refresh_instances()
+        except Exception:
+            pass
 
     def _build_right(self) -> QWidget:
         """右列:标签页(版本 / 更新日志 / MC 动态)。"""

@@ -1716,9 +1716,26 @@ class AIChatDock(QDockWidget):
             self.perm_label.setStyleSheet("color: #888888;")
 
     def _cycle_permission(self):
-        """切换 只读 ↔ 工作区可写,立即保存并同步主窗口"""
+        """切换 只读 ↔ 工作区可写,立即保存并同步主窗口。
+        从只读 → 工作区可写是"提升权限",弹【二级确认 + 免责声明】,确认后才生效。"""
         cur = self.settings.get("ai_permission", "readonly")
         nxt = "workspace_write" if cur == "readonly" else "readonly"
+        # 只读 → 可写:需二次确认 + 免责声明
+        if nxt == "workspace_write":
+            from PySide6.QtWidgets import QMessageBox
+            cap = "🛡️ 确认给 AI「工作区可写」权限?"
+            disc = ("【免责声明】\n"
+                    "一旦开启,AI 就能在【启动器工作区 + AMCL 私有数据 + 游戏目录】内\n"
+                    "创建/修改/删除文件(如 装 Mod、改配置、写插件、动存档)。\n\n"
+                    "· AI 是自动运行的,可能改到你不想动的东西;写操作前我会先备份(装 Mod 等);\n"
+                    "· 涉及游戏存档/私密数据请自行留意;\n"
+                    "· 需要「稳妥」时随时切回「只读」。\n\n"
+                    "确定要把 AI 权限改为「工作区可写」吗?")
+            ret = QMessageBox.question(self, cap, disc,
+                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                       QMessageBox.StandardButton.No)
+            if ret != QMessageBox.StandardButton.Yes:
+                return   # 用户取消:保持只读
         self.settings["ai_permission"] = nxt
         self.main.settings["ai_permission"] = nxt
         save_settings(self.settings)
