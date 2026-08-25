@@ -214,12 +214,14 @@ WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "install_modpa
 # ---- 插件注册的 AI 工具(plugin_manager.TOOLS)合并进 TOOLS --------
 def _merge_plugin_tools() -> list:
     """把 plugin_manager.TOOLS 里登记的插件工具并入 TOOLS schemas。
-    返回新增(或完整)的接插件工具的 TOOLS 列表。"""
+    返回新增(或完整)的接插件工具的 TOOLS 列表。
+    注:插件的 parameters 已是完整 JSON Schema(含 type/properties/required),直接用,勿再包 _tool(会双重嵌套)。"""
     try:
         import plugin_manager
         extra = []
         for full, (desc, params, _handler) in plugin_manager.TOOLS.items():
-            extra.append(_tool(full, desc, params, params.get("required", [])))
+            extra.append({"type": "function", "function": {
+                "name": full, "description": desc, "parameters": params}})
         return TOOLS + extra
     except Exception:
         return TOOLS
@@ -305,7 +307,8 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list:
         import plugin_manager
         extra = []
         for full, (desc, params, _h) in plugin_manager.TOOLS.items():
-            extra.append(_tool(full, desc, params, params.get("required", [])))
+            extra.append({"type": "function", "function": {
+                "name": full, "description": desc, "parameters": params}})
         mounted = mounted + extra
     except Exception:
         pass
