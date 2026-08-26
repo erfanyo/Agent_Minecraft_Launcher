@@ -41,10 +41,34 @@ class OnboardingDialog(QDialog):
         self.settings = load_settings()
         self.want_tutorial = False   # 用户在第一步是否选了「新手」(决定是否自动播教程)
         # 对话框统一主题背景(深浅色自适应);页面本身透明,避免「白边」
-        from ui_style import current_color, set_style
+        # 注意:父级一旦设置样式表,Qt 引擎会接管渲染,子控件文字会回退为默认黑色
+        # (深浅色系统都可能「黑底黑字」),所以必须在这里把所有控件类型显式上色。
+        from ui_style import current_color, set_style, text_color, muted_color, is_dark_mode
+        _dlg_bg = "#23272f" if is_dark_mode() else "#f5f6f9"   # 不透明背景,避免 QSS 半透明画成黑块
+        _text = text_color()
+        _muted = muted_color()
+        _base = "#1a1d23" if is_dark_mode() else "#ffffff"
+        _border = current_color("panel_border")
+        _btn_bg = current_color("btn_bg")
+        _sel = current_color("sel_bg")
         self.setObjectName("onboarding_dialog")
         self.setStyleSheet(
-            "QDialog#onboarding_dialog { background: %s; }" % current_color("panel_bg"))
+            f"QDialog#onboarding_dialog {{ background: {_dlg_bg}; color: {_text}; }}"
+            f"QDialog#onboarding_dialog QLabel {{ color: {_text}; background: transparent; }}"
+            f"QDialog#onboarding_dialog QRadioButton {{ color: {_text}; background: transparent; spacing: 8px; }}"
+            f"QDialog#onboarding_dialog QGroupBox {{ color: {_text}; background: transparent;"
+            f" border: 1px solid {_border}; border-radius: 8px; margin-top: 12px; }}"
+            f"QDialog#onboarding_dialog QGroupBox::title {{ color: {_muted};"
+            f" subcontrol-origin: margin; left: 10px; padding: 0 4px; }}"
+            f"QDialog#onboarding_dialog QLineEdit, QDialog#onboarding_dialog QSpinBox {{"
+            f" color: {_text}; background: {_base}; border: 1px solid {_border};"
+            f" border-radius: 6px; padding: 4px 8px; }}"
+            f"QDialog#onboarding_dialog QComboBox {{ color: {_text}; background: {_btn_bg};"
+            f" border: 1px solid {_border}; border-radius: 6px; padding: 3px 8px; }}"
+            f"QDialog#onboarding_dialog QComboBox QAbstractItemView {{ background: {_base};"
+            f" color: {_text}; selection-background-color: {_sel}; border: 1px solid {_border}; }}"
+            f"QDialog#onboarding_dialog QCheckBox {{ color: {_text}; background: transparent; spacing: 6px; }}"
+        )
         # 页面内容透明,避免默认白底
         for _w in (): pass
         self.setAutoFillBackground(False)
@@ -52,7 +76,7 @@ class OnboardingDialog(QDialog):
         # ---- 页面 0:新手 / 老手 ----
         page_welcome = QWidget()
         title0 = QLabel("欢迎!先确认一下你对 Minecraft 熟悉程度")
-        title0.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title0.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_text};")
         desc0 = QLabel(
             "接下来会带你选好游戏目录、配置 AI 助手。\n"
             "如果你是第一次接触本启动器(或想熟悉一下),选「新手」,"
@@ -76,7 +100,7 @@ class OnboardingDialog(QDialog):
         # ---- 页面 1:选择游戏目录 ----
         page_path = QWidget()
         title1 = QLabel("第一步 · 选择游戏文件位置")
-        title1.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title1.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_text};")
         desc = QLabel(
             "Minecraft 的所有文件(版本、依赖库、资源、Java)都会放在你选定的目录里。\n"
             "可以是全新空目录(启动器自动创建),也可以是已经存在的 .minecraft——\n"
@@ -110,7 +134,7 @@ class OnboardingDialog(QDialog):
         # ---- 页面 2:AI 首次配置 ----
         page_ai = QWidget()
         title2 = QLabel("第二步 · 配置 AI 助手(可以稍后改)")
-        title2.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title2.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_text};")
         desc2 = QLabel("AI 助手能回答问题、诊断报错、帮你装 Mod。首次配置一次,"
                        "以后随时在菜单 设置 / AI 设置 里修改。")
         desc2.setWordWrap(True)
@@ -162,7 +186,7 @@ class OnboardingDialog(QDialog):
         footer.setObjectName("onboard_footer")
         footer.setStyleSheet(
             "#onboard_footer { background: %s; border-top: 1px solid %s; }"
-            % (current_color("panel_bg"), current_color("panel_border")))
+            % (_dlg_bg, _border))
         f_lay = QVBoxLayout(footer)
         f_lay.setContentsMargins(14, 10, 14, 12)
         f_lay.addLayout(btn_row)

@@ -14,7 +14,7 @@ route 段格式 (类型, key):
 """
 import os
 
-from PySide6.QtWidgets import QPushButton, QListWidget, QToolButton, QTabWidget, QWidget
+from PySide6.QtWidgets import QPushButton, QListWidget, QStackedWidget, QToolButton, QTabWidget, QWidget
 
 
 def _find_button(root, label: str):
@@ -40,29 +40,51 @@ def _find_by_objectname(root, name: str):
 
 
 def _auto_switch_container(target, top):
-    """把「左菜单+右面板」容器(有 .stack + .switch_to)的内部堆叠页,切到目标所在页。
-    这样引导遮罩能框到**真正显示**的控件,而不是首页/错误页。"""
+    """确保目标控件可见:沿 parent 链把所有 QStackedWidget 切到「包含目标(或其祖先)」的页。
+
+    不依赖容器有 switch_to 方法(如 DownloadTab 只有 menu+stack,没有 switch_to):
+    目标是某 QStackedWidget 的页面(或页面内后代)时,就把该 stack 切到那一页,
+    这样引导遮罩能框到**真正显示**的控件,而不是首页/错误页/隐藏页。"""
     if target is None:
         return
-    # 从目标向上找最近的、有 stack+switch_to 的容器(如 ResourceCenter / CenterShell)
-    # 目标本身若是该容器(如首页),不切。
+    # 收集 target → top 的祖先链
+    chain = []
     w = target
     while w is not None and w is not top:
-        if hasattr(w, "stack") and hasattr(w, "switch_to"):
-            stack = getattr(w, "stack")
-            # 目标是不是该容器某个堆叠页里的控件(或就是该页)?
-            for i in range(stack.count()):
-                page = stack.widget(i)
-                # 目标就是该页,或目标坐落在该页内(通过 parent 链上溯到 page)
-                if page is target or _is_descendant(target, page):
-                    if stack.currentIndex() != i:
+        chain.append(w)
+        w = getattr(w, "parentWidget", lambda: None)() if hasattr(w, "parentWidget") else None
+    if w is not None:
+        chain.append(w)   # top 本身
+    # 对链上每个 QStackedWidget:把包含下一个节点(或其祖先)的页设为当前页
+    for i, cur_w in enumerate(chain):
+        parent = chain[i + 1] if i + 1 < len(chain) else None
+        if parent is None or not isinstance(parent, QStackedWidget):
+            continue
+        for j in range(parent.count()):
+            page = parent.widget(j)
+            if page is cur_w or _is_descendant(cur_w, page):
+                if parent.currentIndex() != j:
+                    switched = False
+                    # 优先走容器自身的 switch_to(保持左菜单高亮 / 触发 maybe_auto_load 等副作用)
+                    container = parent.parentWidget()
+                    if container is not None and hasattr(container, "switch_to"):
                         try:
-                            w.switch_to(i)
+                            container.switch_to(j)
+                            switched = True
                         except Exception:
                             pass
-                    return
-        w = getattr(w, "parentWidget", lambda: None)() if hasattr(w, "parentWidget") else None
-    # 兜底:目标本身是个 QStackedWidget 的当前页之外,不处理(交给 rcswitch 显式切)
+                    # 其次:容器只有 menu(如 DownloadTab 的 QListWidget → _switch_panel),用它同步高亮
+                    if not switched and container is not None:
+                        menu = getattr(container, "menu", None)
+                        if menu is not None and hasattr(menu, "setCurrentRow"):
+                            try:
+                                menu.setCurrentRow(j)
+                                switched = True
+                            except Exception:
+                                pass
+                    if not switched:
+                        parent.setCurrentIndex(j)
+                break
 
 
 def _is_descendant(widget, ancestor):

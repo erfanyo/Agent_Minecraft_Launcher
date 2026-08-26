@@ -153,8 +153,16 @@ class FlowLayout(QLayout):
         m = self.contentsMargins()
         effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
         x, y, line_height = effective.x(), effective.y(), 0
-        for item in self._items:
-            hint = item.sizeHint()
+        for item in list(self._items):
+            try:
+                hint = item.sizeHint()
+            except RuntimeError:
+                # 底层 C++ QWidgetItem 已被删除(页面切换/隐藏时 Qt 回收),跳过,防崩溃
+                try:
+                    self._items.remove(item)
+                except (ValueError, RuntimeError):
+                    pass
+                continue
             if x + hint.width() > effective.right() + 1 and line_height > 0:
                 x = effective.x()
                 y += line_height + self._vspace

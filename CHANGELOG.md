@@ -11,6 +11,27 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
+## [v0.4.2] - 2026-08-26
+
+> 🐛 补丁版:修复 v0.4.1 引入的引导页/引导教程显示问题。
+
+### 🐛 修复
+- **首次启动引导页深色系统下「黑底黑字」**(`onboarding.py`):v0.4.1 给 `OnboardingDialog` 加了
+  `QDialog#onboarding_dialog { background: rgba(...) }` 样式表——Qt 中父控件一旦设置样式表,引擎接管
+  渲染,子控件(QLabel/QRadioButton/QLineEdit 等)文字回退为默认黑色,且半透明 rgba 背景被画成黑块;
+  改为**不透明**深浅自适应背景 + 样式表内对 QLabel/QRadioButton/QGroupBox/QLineEdit/QComboBox/
+  QCheckBox/QSpinBox **全部显式上色**(`text_color()`),标题/footer 同步补色。已按深/浅色渲染采样验证。
+- **引导教程遮罩与路由不同步**(讲「加载器」时启动器还停在「版本」页,`ui_route.py`):`loader_panel`
+  是 `DownloadTab` 内部 QStackedWidget 的第 1 页,但 `_auto_switch_container` 只认**有 `switch_to()`
+  方法的容器**(ResourceCenter/CenterShell),`DownloadTab` 只有 `menu`+`stack` → 内部堆叠页未切,
+  遮罩框在隐藏页上;改为**沿 parent 链把所有 QStackedWidget 切到「包含目标控件」的页**(优先容器
+  `switch_to()` → 其次 `menu.setCurrentRow()` 同步高亮 → 兜底 `setCurrentIndex`),并补 `QStackedWidget` 导入。
+- **教程气泡跑出窗口**(`guide_overlay.py`):气泡翻到上方时 `by = tr.top()-H-18` 无下限 clamp(目标贴顶
+  即出窗)、宽度固定 300 不随窗口缩、高度按字符数估算不准(中文易溢出);改为**宽度自适应窗口** +
+  `QFontMetrics.boundingRect` **精确排版高度** + 上下/水平全部 clamp 进窗口(上放不下且下无空间 → 窗口底部安全区)。
+- **FlowLayout 页面切换偶发崩溃**(`resource_center.py`):`_do_layout` 遍历 item 时可能碰到已删除的
+  QWidgetItem(PySide6 双所有权经典坑)抛 `RuntimeError`;加 try/except 防御,跳过失效 item 并从列表移除。
+
 ## [v0.4.1] - 2026-08-26
 
 > 📄 正式版预览(测试版)。用户向说明见 `RELEASE_NOTES_0.4.1.md`。

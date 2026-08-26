@@ -106,19 +106,37 @@ class GuideOverlay(QWidget):
         tr = self._target_rect
         if tr is None:
             return
-        # 气泡尺寸(按文本估算)
-        W = 300
-        H = max(52, 20 + (len(self._text) // 18) * 18)
-        # 放在目标下方/上方
-        if self._arrow in ("below",):
+        # 气泡宽度:固定 300,但窗口太窄时收窄,保证不超出窗口
+        W = min(300, max(120, self.width() - 16))
+        fm = p.fontMetrics()
+        # 精确按文本排版算高度(中文换行/宽字符都按真实排版)
+        text_rect = fm.boundingRect(
+            QRect(0, 0, W - 28, 10000),
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextWordWrap,
+            self._text)
+        H = max(52, text_rect.height() + 20)
+        # 上限:不超过窗口可用高度(给底部控制条留 48)
+        H = min(H, self.height() - 48 - 8)
+
+        def _place_below():
             bx = tr.center().x() - W // 2
             by = tr.bottom() + 18
-            bx = max(8, min(bx, self.width() - W - 8))
-            if by + H > self.height() - 48:
-                by = tr.top() - H - 18
-        else:
+            return bx, by
+
+        def _place_above():
             bx = tr.center().x() - W // 2
             by = tr.top() - H - 18
+            return bx, by
+
+        bx, by = _place_below()
+        # 下方放不下 → 放上方(目标上方有足够空间时)
+        if by + H > self.height() - 48 and tr.top() - H - 18 >= 8:
+            bx, by = _place_above()
+        # 上下都不行(目标几乎占满窗口)→ 放窗口内安全区(紧贴底部控制条上方)
+        if by + H > self.height() - 48 or by < 8:
+            by = max(8, self.height() - H - 48 - 8)
+        # 水平 clamp 到窗口内
+        bx = max(8, min(bx, self.width() - W - 8))
         bubble = QRect(bx, by, W, H)
         self._bubble_rect = bubble
         # 气泡背景
@@ -135,11 +153,11 @@ class GuideOverlay(QWidget):
         p.drawText(QRectF(bubble).adjusted(14, 10, -14, -10),
                    Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
                    | Qt.TextFlag.TextWordWrap, self._text)
-        # 箭头三角
+        # 箭头三角(指向目标:气泡在目标下方 → 三角朝上,反之朝下)
         cx = bubble.center().x()
         p.setBrush(QBrush(QColor(90, 141, 239)))
         p.setPen(Qt.PenStyle.NoPen)
-        if self._arrow == "below" and bubble.bottom() < tr.top():
+        if bubble.bottom() < tr.top():
             p.drawPolygon(QPolygonF([QPointF(cx, bubble.bottom()),
                                      QPointF(cx - 8, bubble.bottom() + 12),
                                      QPointF(cx + 8, bubble.bottom() + 12)]))
