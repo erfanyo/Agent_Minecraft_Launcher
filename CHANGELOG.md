@@ -32,6 +32,17 @@
 - **FlowLayout 页面切换偶发崩溃**(`resource_center.py`):`_do_layout` 遍历 item 时可能碰到已删除的
   QWidgetItem(PySide6 双所有权经典坑)抛 `RuntimeError`;加 try/except 防御,跳过失效 item 并从列表移除。
 
+### ⚠️ 已知问题(待正式版处理)
+- **微软正版登录报 `AADSTS700016`**(`microsoft_auth.py`):点「微软正版登录」弹 `HTTP 400` /
+  `unauthorized_client` / `Application with identifier '00000000402b5328' was not found in the directory …`。
+  **根因(已实测)**:v0.4.1 沿用的 Mojang 公开 client_id `00000000402b5328`(及 azalea/社区的
+  `00000000441cc96b`)+ `/consumers` 端点,均已不在消费租户 `9188040d-6c67-4c5c-b112-36a304b66dad` 中;
+  `/common`、`/organizations` 分别报 no-tenant / multiple-resource。→ 微软已回收这些 Minecraft 公开
+  client_id 在该租户的可用性(2025 后对第三方启动器收紧,要求**自注册 Azure AD 应用**,见 PrismLauncher #3300 等)。
+  **解决方案(需一次性手工注册,待定)**:Azure portal 免费注册个人 Azure AD 应用取自己的 `client_id`
+  (允许 device code,scope `service::user.auth.xboxlive.com::MSCS`),替换 `_CLIENT_ID`;规划做成「设置里可填
+  自定义 client_id」最稳妥。详见 `ROADMAP.md` 待办。
+
 ## [v0.4.1] - 2026-08-26
 
 > 📄 正式版预览(测试版)。用户向说明见 `RELEASE_NOTES_0.4.1.md`。

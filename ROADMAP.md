@@ -108,6 +108,19 @@
 - [x] bridge-mod 多版本支持(1.20.1 / 1.21.4) — **1.20.1(fabric+forge)✅ 实测**;1.21.4 **未做**
   (当前已覆盖: fabric 1.20.1/1.21.1、forge 1.20.1、neoforge 1.21.1;1.21.4 待补)
 - [ ] Forge(1.19 及以前)加载器支持
+- [ ] **微软正版登录 AADSTS700016 修复(测试受阻,等正式版)** — 2026-08-26
+  - **现象**:点「微软正版登录」报 `HTTP 400` / `unauthorized_client` /
+    `AADSTS700016: Application with identifier '00000000402b5328' was not found in the directory '9188040d-…'`。
+  - **根因(已实测确认)**:`microsoft_auth.py` 用的 Mojang 旧公开 client_id `00000000402b5328`(以及 azalea/社区
+    的 `00000000441cc96b`)、`/consumers` 端点,均在消费租户 `9188040d-6c67-4c5c-b112-36a304b66dad` 中查不到该应用;
+    `/common`、`/organizations` 端点分别报 no-tenant / multiple-resource。→ **不是 client_id 写错,是微软已回收
+    这些 Minecraft 公开 client_id 在该租户的可用性**(2025 后对第三方启动器收紧,要求自注册 Azure AD 应用;
+    社区见 PrismLauncher #3300 "Cannot add microsoft account"、"Invalid app registration"、D-U-N-S 讨论)。
+  - **修复方案(需用户操作,待定)**:在 Azure portal 免费注册一个**个人 Azure AD 应用**拿到自己的
+    `client_id`(允许 public client flow / 设备码流,scope 用 `service::user.auth.xboxlive.com::MSCS`),
+    替换 `microsoft_auth.py` 的 `_CLIENT_ID`。这是个一次性手工步骤,我无法代注册。
+  - 备选/进一步确认:是否需要 `XboxLive.signin` Azure 权限(Microsoft Q&A 有专门讨论),以及 D-U-N-S/企业验证
+    是否强制(社区两种说法都有)。**做成「设置里可填自定义 Azure 应用 client_id」最稳妥**,避免硬编码。
 - [x] RconAutoOpener 反射修正 ✅ 2026-08-26(Forge 1.20.1 单参 `RconThread.create(ServerInterface)`(srg m_11615_);实测确认**专用服务器 vanilla 已自行开 RCON**,故改为识别并跳过,消除失真报错)
 - [x] check_bridge_mod 更新流程接入一键配置 ✅ 2026-08-26(一键配置 bridge-mod 区分 not_installed/outdated/up_to_date;旧版提示更新、一键覆盖)
 - [ ] ask_user 回归用例排查(ask_01/ask_02 持续 0 分,历史问题;t8/t12 评审均记录)
