@@ -1137,6 +1137,7 @@ class ResourceCenter(QWidget):
         参考 DSH「仓库即商店」:你的官方插件放你项目仓库(如 GitHub),用户添加该仓库 URL 即可装。"""
         import plugin_manager
         page = QWidget()
+        page.setObjectName("plugins_page")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(16, 16, 16, 16)
         outer.setSpacing(8)

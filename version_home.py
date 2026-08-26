@@ -19,17 +19,20 @@
 """
 import threading
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPixmap
+from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QListWidget,
     QMenu,
+    QMessageBox,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QTabWidget,
     QTextBrowser,
@@ -44,14 +47,15 @@ from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
                       muted_color, panel_style, tab_style, text_color, set_style)
 
-# 登录方式:目前仅支持离线(昵称可改);正版/外置为规划占位,不伪造后端能力
+# 登录方式:offline(离线昵称)/ microsoft(微软正版,设备码流)
 LOGIN_OFFLINE = "offline"
+LOGIN_MICROSOFT = "microsoft"
 _LOGIN_METHODS = [
     (LOGIN_OFFLINE, "离线模式", "正在使用:离线昵称,无需正版账号即可游玩"),
+    (LOGIN_MICROSOFT, "微软正版登录", "用微软 Minecraft 账号登录,启动时用正版凭证"),
 ]
 # 规划中的登录方式(仅展示,禁用,标注需后端支持)
 _PLANNED_LOGIN = [
-    ("microsoft", "微软正版登录", "正版登录需要后端支持(规划 v1.0)。"),
     ("yggdrasil", "外置登录(皮肤站)", "外置登录 / 皮肤站支持规划中。"),
 ]
 
@@ -134,13 +138,23 @@ class LoginCard(QWidget):
             f" padding: 2px 6px; border-radius: 6px; }}"
             f"QToolButton:hover {{ background: {hover_bg()}; }}")
         menu = QMenu(self.login_btn)
+        cur_method = load_settings().get("login_method", LOGIN_OFFLINE)
+        # 当前模式置 ✓
         for key, label, tip in _LOGIN_METHODS:
-            act = menu.addAction(f"✓ {label}")
-            act.setEnabled(False)          # 当前方式:仅展示
+            act = menu.addAction(("✓ " if key == cur_method else "") + label)
             act.setToolTip(tip)
+            if key == LOGIN_OFFLINE:
+                act.triggered.connect(lambda: self._set_offline())
+            elif key == LOGIN_MICROSOFT:
+                act.triggered.connect(self._do_microsoft_login)
         menu.addSeparator()
-        menu.addAction(t("修改离线昵称…", "Edit offline name…"),
-                       self._change_offline_name)
+        # 当前是微软正版 → 提供退出(回离线)
+        if cur_method == LOGIN_MICROSOFT:
+            menu.addAction("退出正版登录(回离线)", self._logout_microsoft)
+            menu.addSeparator()
+        elif cur_method == LOGIN_OFFLINE:
+            menu.addAction(t("修改离线昵称…", "Edit offline name…"),
+                           self._change_offline_name)
         menu.addSeparator()
         for _key, label, tip in _PLANNED_LOGIN:
             act = menu.addAction(label)
@@ -194,18 +208,52 @@ class LoginCard(QWidget):
     def refresh(self):
         """根据最新设置刷新:头像/昵称/登录方式。"""
         self._settings = load_settings()
-        name = self._settings.get("username", "Steve") or "Steve"
+        method = self._settings.get("login_method", LOGIN_OFFLINE)
+        if method == LOGIN_MICROSOFT:
+            name = (self._settings.get("ms_credentials") or {}).get("username", "Minecraft")
+        else:
+            name = self._settings.get("username", "Steve") or "Steve"
         self._name = name
         self.avatar_label.setPixmap(_avatar_pixmap(name, self._avatar_size))
         self.name_label.setText(name)
-        method = self._settings.get("login_method", LOGIN_OFFLINE)
-        if method == LOGIN_OFFLINE:
-            # 目前仅离线模式:如实显示,不伪装成「正版验证」
+        if method == LOGIN_MICROSOFT:
+            self.status_label.setText(t("微软正版 · 已登录", "Microsoft · signed in"))
+        elif method == LOGIN_OFFLINE:
             self.status_label.setText(t("离线模式 · 昵称可改", "Offline · name editable"))
         else:
             label = next((lbl for key, lbl, _tp in _LOGIN_METHODS if key == method),
                          "离线模式")
             self.status_label.setText(label)
+        # 正版登录:尝试拉真实皮肤头像(异步,失败回退占位)
+        if method == LOGIN_MICROSOFT:
+            uuid_str = (self._settings.get("ms_credentials") or {}).get("uuid", "")
+            self._fetch_avatar_async(uuid_str)
+
+    def _fetch_avatar_async(self, uuid_str: str):
+        """后台拉正版头像(不卡 UI);成功后换掉占位头像。"""
+        if not uuid_str:
+            return
+        size = max(28, self._avatar_size)
+        def worker():
+            try:
+                from microsoft_auth import download_player_avatar
+                data = download_player_avatar(uuid_str, size)
+                if data:
+                    from PySide6.QtGui import Qt as _Qt, QPixmap as _QPixmap
+                    from PySide6.QtCore import QByteArray as _QBA
+                    pm = _QPixmap()
+                    if pm.loadFromData(_QBA(data)):
+                        from PySide6.QtCore import QTimer
+                        QTimer.singleShot(0, lambda p=pm: self._apply_avatar_pixmap(p))
+            except Exception:
+                pass
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_avatar_pixmap(self, pm):
+        if pm is not None and not pm.isNull():
+            self.avatar_label.setPixmap(pm.scaled(self._avatar_size, self._avatar_size,
+                                                  Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                                  Qt.TransformationMode.SmoothTransformation))
 
     def _change_offline_name(self):
         """修改离线昵称(前端可自洽:写到 config.json 并通知启动器)。"""
@@ -222,6 +270,103 @@ class LoginCard(QWidget):
         save_settings(settings)
         self.refresh()
         self.changed.emit()
+
+    # ---- 微软正版登录 ----
+    def _do_microsoft_login(self):
+        """设备码流登录:先在弹窗里给用户 device code + 网址,后台线程轮询授权,成功后存凭证。"""
+        from microsoft_auth import MsAuth
+        # 用信号把线程结果搬回主线程(跨线程碰 Qt 会崩)
+        from PySide6.QtCore import QObject, Signal as _Sig, QTimer
+        class _Bridge(QObject):
+            done = _Sig(object)
+            fail = _Sig(str)
+        bridge = _Bridge()
+
+        auth = MsAuth()
+        try:
+            info = auth.start_device_code()
+        except Exception as e:
+            QMessageBox.warning(self, "微软登录", f"无法发起登录(网络/接口问题):\n{e}")
+            return
+
+        user_code = info.get("user_code", "")
+        uri = info.get("verification_uri", "")
+        # 提示弹窗:给用户 device code + 网址,并自动打开浏览器
+        dlg = QDialog(self)
+        dlg.setWindowTitle("微软登录 · 请在浏览器完成授权")
+        dlg.setMinimumSize(520, 300)
+        dl = QVBoxLayout(dlg)
+        dl.addWidget(QLabel("<b>请在浏览器里打开下面的网址,并输入设备代码:</b>"))
+        code_lbl = QLabel(f"<span style='font-size:28px;font-weight:bold;'>{user_code}</span>")
+        code_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        url_lbl = QLabel(f"<span style='font-size:16px;'>{uri}</span>")
+        url_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        url_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        open_btn = QPushButton("▶ 打开浏览器授权")
+        open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(uri)))
+        dl.addWidget(code_lbl)
+        dl.addWidget(url_lbl)
+        dl.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        wait = QLabel("登录过程中请保持此窗口打开;成功后自动关闭。")
+        wait.setWordWrap(True); wait.setStyleSheet("color:#888888;")
+        dl.addWidget(wait)
+        close_btn = QPushButton("取消")
+        close_btn.clicked.connect(dlg.reject)
+        dl.addWidget(close_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+        bridge.done.connect(lambda result: (dlg.accept(), self._finish_ms_login(result)))
+        bridge.fail.connect(lambda msg: (dlg.reject(), QMessageBox.warning(self, "微软登录", msg)))
+        QDesktopServices.openUrl(QUrl(uri))   # 自动打开浏览器
+
+        def worker():
+            try:
+                result = auth.await_token()
+                bridge.done.emit(result)
+            except Exception as e:
+                bridge.fail.emit(f"{type(e).__name__}: {e}")
+        threading.Thread(target=worker, daemon=True).start()
+        dlg.exec()
+
+    def _finish_ms_login(self, result: dict):
+        """登录成功:存凭证 + 切到 microsoft 模式。"""
+        settings = load_settings()
+        settings["login_method"] = LOGIN_MICROSOFT
+        settings["ms_credentials"] = {
+            "username": result.get("username", ""),
+            "uuid": result.get("uuid", ""),
+            "access_token": result.get("access_token", ""),
+            "refresh_token": result.get("refresh_token", ""),
+        }
+        save_settings(settings)
+        self.refresh()
+        self.changed.emit()
+        # 让主窗口也能用上(刷新标题栏/当前实例等)
+        try:
+            from PySide6.QtWidgets import QApplication
+            mw = QApplication.activeWindow()
+            if mw is not None and hasattr(mw, "_on_login_changed"):
+                mw._on_login_changed()
+        except Exception:
+            pass
+
+    def _logout_microsoft(self):
+        """退出微软正版,回离线。"""
+        settings = load_settings()
+        settings["login_method"] = LOGIN_OFFLINE
+        settings["ms_credentials"] = {}
+        save_settings(settings)
+        self.refresh()
+        self.changed.emit()
+
+    def _set_offline(self):
+        """切回离线(若当前非离线)。"""
+        settings = load_settings()
+        if settings.get("login_method") != LOGIN_OFFLINE:
+            settings["login_method"] = LOGIN_OFFLINE
+            settings["ms_credentials"] = {}
+            save_settings(settings)
+            self.refresh()
+            self.changed.emit()
 
 
 class InstanceSettingsCard(QWidget):

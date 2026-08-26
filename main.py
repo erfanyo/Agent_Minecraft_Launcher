@@ -533,34 +533,53 @@ class MainWindow(QMainWindow):
         from tutorial_gui import TutorialDialog
         TutorialDialog(self).exec()
 
-    def open_guide_demo(self):
-        """打开引导式新手教程(正式步骤):spctlight + 箭头 + 文本,用 UI 路由指向真实界面。"""
+    def open_guide_demo(self, intro: bool = True):
+        """打开引导式新手教程(正式步骤):spctlight + 箭头 + 文本,用 UI 路由指向真实界面。
+
+        intro=True 时先弹「基础知识页」(可跳过),再进正式引导。重播/自动播放都可用。
+        步骤覆盖:版本分类 → 加载器 → 下载 Mod(不遮盖选项)→ 启动器插件 → AI + 技能。
+        """
+        # ① 先弹基础知识页(可跳过):MC 版本/阵营/正版 + 版本分类
+        if intro:
+            try:
+                from tutorial_intro import TutorialIntroDialog
+                if TutorialIntroDialog(self).exec() != 1:
+                    return   # 用户跳过基础知识 → 不继续引导
+            except Exception:
+                pass
+
         from guide_overlay import GuideDriver
 
         steps = [
+            # ---- 版本分类(下载新资源 → 实例/下载向导 → 版本树)----
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "1"), ("widgetname", "version_tree")],
+             "arrow": "below",
+             "text": "① 先认识版本:左侧版本列表里,「正式版」最稳(其中几个「黄金版本」Mod 生态最好);"
+                     "「预览版」=公测(可能有 bug);「远古版」=考古;「愚人节版」=官方整活小改(类似整合包)。"},
+            # ---- 加载器(同页:下载向导的加载器卡片)----
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "1"), ("widgetname", "loader_panel")],
+             "arrow": "below",
+             "text": "② 选完版本选「加载器」:原版(不打 Mod)/ Fabric / Forge / NeoForge。"
+                     "NeoForge 是 Forge 的现代继承者(1.20.2 及以上);"
+                     "Fabric 轻量、Mod 多。以后可能支持更多加载器。"},
+            # ---- 下载 Mod(不遮盖选项,多个一起讲)----
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"), ("widgetname", "filter_version")],
+             "arrow": "below",
+             "text": "③ 这里逛 Mod:搜索框搜中文/英文;上面能选「游戏版本 + 加载器」、排序/标签,"
+                     "找到后点「下载」装到目标实例。光影包 / 数据包 / 资源包 也是同样的逛法。"},
+            # ---- 启动器插件(默认仓库)----
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "7"), ("widgetname", "plugins_page")],
+             "arrow": "below",
+             "text": "④ 启动器插件页:默认已填好官方仓库(erfanyo/Agent_Minecraft_Launcher,"
+                     "plugins.json 清单);点「添加仓库」还能加别的仓库,仓库里的插件可一键安装。"},
+            # ---- AI + 技能 ----
+            {"route": [("maintab", "设置"), ("btn", "AI 助手")],
+             "arrow": "below",
+             "text": "⑤ AI 助手:配云端或本地模型后,能问答、自动帮你装 Mod/查配方/诊断崩溃;"
+                     "「技能管理」里能开关 自动重启 / 备份提醒 / 崩溃诊断清单 等辅助技能。"},
             {"route": [("maintab", "我的实例"), ("btn", "启动游戏")],
              "arrow": "below",
-             "text": "① 在右侧「实例」列表挑一个想玩的实例,再点这个「启动游戏」大按钮就进游戏了。"},
-            {"route": [("maintab", "我的实例"), ("btn", "导入整合包")],
-             "arrow": "below",
-             "text": "② 已有整合包(.mrpack / .zip)?点「导入整合包」,自动导入成一个新实例。"},
-            {"route": [("maintab", "我的实例"), ("btn", "一键配置")],
-             "arrow": "below",
-             "text": "③ 「一键配置」:一键装 bridge-mod(游戏内指令口/配方导出,推荐)或临时 RCON。"},
-            {"route": [("maintab", "下载新资源"), ("btn", "Mod")],
-             "arrow": "below",
-             "text": "④ 下载新资源:像逛商场,挑 Mod / 光影包 / 数据包 / 资源包 / 整合包。"},
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"),
-                       ("widgetname", "filter_version")],
-             "arrow": "below",
-             "text": "⑤ 顶部这里选「游戏版本 + 加载器」:让搜到的资源匹配你的实例"
-                     "(如 1.21.1 + NeoForge),否则可能找不到对应版本或装不上。"},
-            {"route": [("maintab", "设置"), ("btn", "界面")],
-             "arrow": "below",
-             "text": "⑥ 设置 → 界面:切「全面 / 摘要」界面模式、自定义配色、检查更新、重播本教程。"},
-            {"route": [("maintab", "联机"), ("btn", "首页")],
-             "arrow": "below",
-             "text": "⑦ 联机:按场景推荐联机方案(虚拟局域网不用同一WiFi/内网穿透/联机Mod)。"},
+             "text": "⑥ 回到「我的实例」:右侧选中一个实例,点这个「启动游戏」大按钮就进游戏了。"},
         ]
         self._guide_driver = GuideDriver(self, steps)
         self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))
@@ -645,7 +664,7 @@ class MainWindow(QMainWindow):
             "你是 Agent Minecraft Launcher 启动器里内置的 AI 助手。",
             lang_instr,
             f"启动器设置: 离线游戏名 {self.settings.get('username', 'Player')},"
-            f" 内存 {self.settings.get('memory_gb', 2)}G,"
+            f" 内存 {self.settings.get('memory_gb', 4)}G,"
             f" 版本隔离 {'开' if self.settings.get('version_isolation', True) else '关'}",
         ]
         inst = None
@@ -1256,12 +1275,41 @@ class MainWindow(QMainWindow):
             #    整合包 json 可能从加载器版本复制而来,id 若没改对,游戏会被启动到
             #    加载器的空白目录里(mod 全不加载)—— 游戏目录必须是所选实例自己的目录。
             game_dir = self.game_dir_for(v["id"])
+            # 正版登录:若存了凭证,启动时用正版 UUID/令牌(online 服能过验证);否则离线
+            auth = None
+            username_load = self.settings.get("username", "Player")
+            if self.settings.get("login_method") == "microsoft":
+                cred = dict(self.settings.get("ms_credentials") or {})
+                # 顺手尝试刷新令牌(免每次重登;失败则用已存令牌)
+                if cred.get("refresh_token"):
+                    try:
+                        from microsoft_auth import refresh_with_ms_refresh
+                        new = refresh_with_ms_refresh(cred["refresh_token"])
+                        cred.update({
+                            "access_token": new.get("access_token", cred.get("access_token", "")),
+                            "uuid": new.get("uuid", cred.get("uuid", "")),
+                            "username": new.get("username", cred.get("username", "")),
+                        })
+                        self.settings["ms_credentials"] = cred
+                        save_settings(self.settings)
+                    except Exception:
+                        pass   # 刷新失败:用已存令牌(可能仍有效)
+                if cred.get("access_token") and cred.get("uuid"):
+                    auth = {
+                        "uuid": cred.get("uuid", ""),
+                        "access_token": cred.get("access_token", ""),
+                        "refresh_token": cred.get("refresh_token", ""),
+                        "username": cred.get("username", ""),
+                        "token_type": "msa",
+                    }
+                    username_load = cred.get("username") or username_load
             cmd = build_launch_command(
                 d, game_dir, java_exe,
-                username=self.settings.get("username", "Player"),
-                memory_gb=self.settings.get("memory_gb", 2),
+                username=username_load,
+                memory_gb=self.settings.get("memory_gb", 4),
                 assets_dir=os.path.join(paths.GAME_DIR, "assets"),
                 install_dir=paths.GAME_DIR,
+                auth=auth,
             )
         except Exception as e:
             self.dl_indicator.hide()
@@ -2112,6 +2160,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"实例已删除:{inst['id']}")
         self.refresh_instances()
 
+def _open_auto_tutorial_safe(window):
+    """首次启动选「新手」后自动开引导式教程;失败只记日志,不影响使用。"""
+    try:
+        window.open_guide_demo()
+    except Exception as e:
+        try:
+            window._log_feedback(f"自动新手教程启动失败:{e}", "警告")
+        except Exception:
+            pass
+
 if __name__ == "__main__":
     import sys as _sys
     if "--mcp" in _sys.argv:
@@ -2136,13 +2194,21 @@ if __name__ == "__main__":
     from ui_style import apply_global_dark_palette
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
-    # 首次启动:还没配置过游戏目录 → 弹引导界面(选路径 + 首次配置 AI)
+    # 首次启动:还没配置过游戏目录 → 弹引导界面(选路径 + 首次配置 AI + 新手/老手)
     first = not (load_settings().get("game_dir") or "").strip()
+    _auto_tutorial = False
     if first:
         from onboarding import OnboardingDialog
-        OnboardingDialog().exec()
+        od = OnboardingDialog()
+        od.exec()
+        # 新手:配置完成后自动走一遍引导式新手教程(老手跳过,设置→界面可重播)
+        if getattr(od, "want_tutorial", False):
+            _auto_tutorial = True
 
     window = MainWindow()
     window.load_versions()  # 启动时先加载一次
     window.show()
+    # 首次启动选了「新手」→ 自动走一遍引导式新手教程(用 QTimer 延迟到首帧后,保证控件就绪)
+    if _auto_tutorial:
+        QTimer.singleShot(400, lambda: _open_auto_tutorial_safe(window))
     sys.exit(app.exec())

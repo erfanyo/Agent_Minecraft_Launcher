@@ -12,15 +12,6 @@
 
 DEPRECATED_FEATURES = [
     {
-        "id": "tutorial_v1",
-        "name": "新手教程(基础版,按页面讲控件)",
-        "status": "临时弃用",
-        "note": "第一版是静态「按页面讲每个控件在哪、有什么用」的说明,效果不够好,先隐藏入口临时弃用。"
-                "计划改为**指引式教程**(真实 UI 上的箭头+文字,见「引导式教程」规划),改好后再上线。"
-                "代码仍在(内容 tutorial_content.py / 渲染 tutorial_gui.py),可从此临时入口查看。",
-        "reopen": "tutorial",
-    },
-    {
         "id": "instance_icons_view",
         "name": "实例:大图标显示(视图)",
         "status": "临时弃用",

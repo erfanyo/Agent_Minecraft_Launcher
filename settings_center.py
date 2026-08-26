@@ -245,9 +245,7 @@ class SettingsCenter(QWidget):
                           f"<span style='color:#8a93a0;'>{d.get('note','')}</span>")
             info.setWordWrap(True); info.setTextFormat(Qt.TextFormat.RichText)
             row = QHBoxLayout(); row.addWidget(info, 1)
-            if d.get("reopen") == "tutorial":
-                open_btn = QPushButton("临时查看"); set_style(open_btn, card_btn_style)
-                open_btn.clicked.connect(self._reopen_tutorial); row.addWidget(open_btn)
+            # 老版教程(基础版)已移除:不再提供「临时查看」入口,只保留新版「重播引导教程」
             l.addLayout(row)
         # 检查更新 / 重播引导教程(原在菜单栏,现并入设置 → 界面;重播按钮不放在最外层)
         l.addSpacing(8)

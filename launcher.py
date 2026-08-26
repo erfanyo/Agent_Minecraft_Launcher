@@ -7,7 +7,7 @@ Minecraft 的启动原理:游戏本体是个 jar,"启动"就是用 Java 运行�
 写在版本 JSON 的 arguments 字段里,里面是 ${xxx} 占位符——
 我们把占位符替换成真实值,就得到完整命令:
 
-  java -Xmx2G ... -cp <依赖库+客户端jar> net.minecraft.client.main.Main
+  java -Xmx4G ... -cp <依赖库+客户端jar> net.minecraft.client.main.Main
       --gameDir ... --assetsDir ... --username Player ...
 """
 import json
@@ -17,6 +17,16 @@ import uuid
 
 from downloader import download_with_mirror
 from game_files import DEFAULT_FEATURES, library_entries, rules_allow
+
+
+def offline_uuid(username: str) -> str:
+    """离线模式稳定 UUID(v3,社区公认):md5('OfflinePlayer:'+name) 按 UUID 格式截断。
+
+    这样离线身份与昵称绑定、跨启动稳定(存档/世界数据按 UUID 存),不再是每次启动随机。
+    """
+    import hashlib
+    digest = hashlib.md5(("OfflinePlayer:" + (username or "Player")).encode("utf-8")).hexdigest()
+    return "%s-%s-%s-%s-%s" % (digest[0:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32])
 
 TOKEN_RE = re.compile(r"\$\{([^}]+)\}")
 
@@ -127,10 +137,14 @@ def _resolve_logging(d: dict, game_dir: str) -> list:
 
 
 def build_launch_command(d: dict, game_dir: str, java_exe: str,
-                         username: str = "Player", memory_gb: int = 2,
+                         username: str = "Player", memory_gb: int = 4,
                          assets_dir: str | None = None,
-                         install_dir: str | None = None) -> list:
+                         install_dir: str | None = None,
+                         auth: dict | None = None) -> list:
     """把版本 JSON(d)翻译成完整的启动命令(列表形式,每项一个参数)。
+
+    auth(可选):正版登录凭证 {uuid, access_token, refresh_token, username, token_type}。
+    传了就用正版 UUID/令牌(online 服务器能通过验证);不传 = 离线(随机 UUID + 令牌 0)。
 
     三个目录要分清:
     - game_dir    —— 游戏运行目录(--gameDir),版本隔离后每版本一个
@@ -156,12 +170,24 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
     if assets_dir is None:
         assets_dir = os.path.join(game_dir, "assets")
     assets_root = assets_dir
+    auth = auth or {}
+    # 离线:随机 UUID + 令牌 0 + legacy;正版:账号真实 UUID + 正版令牌 + msa
+    if auth.get("uuid") and auth.get("access_token"):
+        auth_uuid = auth["uuid"]
+        auth_access = auth["access_token"]
+        user_type = auth.get("token_type", "msa")
+        auth_session = auth.get("refresh_token", "") or auth_access
+    else:
+        auth_uuid = offline_uuid(username)
+        auth_access = "0"
+        user_type = "legacy"
+        auth_session = "0"
     tokens = {
-        "auth_player_name": username,       # 离线账号名(账号体系在子步 E 完善)
-        "auth_uuid": str(uuid.uuid4()),
-        "auth_access_token": "0",           # 离线模式用 0 当令牌
-        "auth_session": "0",
-        "user_type": "legacy",
+        "auth_player_name": username,       # 正版=账号名;离线=昵称
+        "auth_uuid": auth_uuid,
+        "auth_access_token": auth_access,
+        "auth_session": auth_session,
+        "user_type": user_type,
         "user_properties": "{}",
         "version_name": version_id,
         "version_type": d.get("type", "release"),

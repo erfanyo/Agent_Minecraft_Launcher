@@ -20,6 +20,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -39,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from backup import backup_instance, list_backups, set_ftb_backup_frequency
-from ui_style import hint_style
+from ui_style import card_btn_style, hint_style, set_style
 
 
 class _DepGraphWorker(QObject):
@@ -114,6 +115,12 @@ class InstanceManagerDialog(QWidget):
 
         from center_shell import CenterShell
         self.shell = CenterShell(self, menu_width=150)
+        # 概览:实例基本信息 + 快捷操作
+        self.shell.add_section("概览", self._build_overview_tab)
+        # 设置:单个实例的启动选项(分配内存等;完全体以后完善)
+        self.shell.add_section("设置", self._build_instance_settings_tab)
+        # 导出:整合包导出(按目录选文件,类似 Windows 选安装路径)
+        self.shell.add_section("导出", self._build_export_tab)
         self.shell.add_section("Mod", self._build_mods_tab)
         self.shell.add_section("数据包", lambda: self._build_pack_tab("datapack"))
         self.shell.add_section("光影包", lambda: self._build_pack_tab("shader"))
@@ -121,12 +128,186 @@ class InstanceManagerDialog(QWidget):
             self.shell.add_section("皮肤(YSM)", self._build_ysm_tab)
         if self._has_mod("tacz", "timeless_and_classics", "timeless", "tac_z"):
             self.shell.add_section("枪包(TACZ)", self._build_tacz_tab)
+        if self._has_mod("create"):
+            self.shell.add_section("投影原理图", self._build_create_schematics_tab)
         if self._has_mod("kubejs"):
             self.shell.add_section("KubeJS", self._build_kubejs_tab)
         self.shell.add_section("指令库", self._build_command_tab)
         self.shell.add_section("运行配置", self._build_config_tab)
         self.shell.add_section("备份·存档", self._build_backup_tab)
         self._layout.addWidget(self.shell)
+
+    # ---------- 概览 ----------
+    def _build_overview_tab(self) -> QWidget:
+        tab = QWidget()
+        inst = self
+        info = QLabel(
+            f"<b>{inst.inst_id}</b><br>"
+            f"加载器: {inst._inst_loader or '原版'}<br>"
+            f"基础版本: {inst._inst_base}<br>"
+            f"目录: {inst.inst_dir}<br><br>"
+            f"Mod 数: {len(inst._mod_files())} · 存档: {len(inst._save_names())}")
+        info.setWordWrap(True)
+        info.setStyleSheet("font-size: 14px;")
+        launch_btn = QPushButton("▶ 启动游戏")
+        open_btn = QPushButton("打开实例目录")
+        launch_btn.clicked.connect(lambda: self._launch_instance())
+        open_btn.clicked.connect(lambda: self._open_dir(self.inst_dir))
+        row = QHBoxLayout()
+        for b in (launch_btn, open_btn):
+            set_style(b, card_btn_style); b.setMinimumHeight(32)
+            row.addWidget(b)
+        row.addStretch()
+        tip = QLabel("这是本实例的入口:选好「Mod / 光影包 / 数据包 / 存档」后从这里启动;"
+                     "「设置」可调本实例的启动内存。")
+        tip.setWordWrap(True); tip.setStyleSheet(hint_style())
+        layout = QVBoxLayout(tab)
+        layout.addWidget(info)
+        layout.addLayout(row)
+        layout.addWidget(tip)
+        layout.addStretch()
+        return tab
+
+    # ---------- 实例级设置(启动选项) ----------
+    def _launch_options_path(self) -> str:
+        return os.path.join(self.inst_dir, "launch_options.json")
+
+    def _load_launch_options(self) -> dict:
+        try:
+            with open(self._launch_options_path(), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_launch_options(self, opts: dict):
+        try:
+            with open(self._launch_options_path(), "w", encoding="utf-8") as f:
+                json.dump(opts, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.status_msg(f"保存启动选项失败:{e}")
+
+    def _build_instance_settings_tab(self) -> QWidget:
+        tab = QWidget()
+        opts = self._load_launch_options()
+
+        self.inst_memory_spin = QSpinBox()
+        self.inst_memory_spin.setRange(1, 64)
+        # 本实例覆盖全局内存:0 = 用全局设置(默认);>0 = 本实例专用
+        self.inst_memory_spin.setValue(int(opts.get("memory_gb") or 0))
+        mem_hint = QLabel("0 = 跟随全局设置(设置→游戏→内存);>0 = 本实例专用内存(整合包/光影建议 ≥6G)")
+        mem_hint.setWordWrap(True); mem_hint.setStyleSheet(hint_style())
+
+        save_btn = QPushButton("保存启动选项")
+        save_btn.clicked.connect(self._save_instance_settings)
+        set_style(save_btn, card_btn_style); save_btn.setMinimumHeight(32)
+        tip = QLabel("这是【单个实例】的启动选项。完全体以后会加更多(如 JVM 参数、Java 版本覆盖等)。")
+        tip.setWordWrap(True); tip.setStyleSheet(hint_style())
+
+        form = QFormLayout()
+        form.addRow("本实例内存(GB):", self.inst_memory_spin)
+        form.addRow("", mem_hint)
+        layout = QVBoxLayout(tab)
+        layout.addLayout(form)
+        layout.addWidget(save_btn)
+        layout.addWidget(tip)
+        layout.addStretch()
+        return tab
+
+    def _save_instance_settings(self):
+        opts = self._load_launch_options()
+        mem = self.inst_memory_spin.value()
+        opts["memory_gb"] = mem
+        self._save_launch_options(opts)
+        self.status_msg(f"已保存本实例启动选项(内存 {mem if mem else '跟随全局'}G)")
+
+    def _launch_instance(self):
+        """从概览快捷启动本实例(复用主窗口 launch_selected_instance)。"""
+        try:
+            from PySide6.QtWidgets import QApplication
+            mw = QApplication.activeWindow()
+            if mw is not None and hasattr(mw, "launch_selected_instance"):
+                mw._current_instance = lambda: self._inst_dict()
+                mw.launch_selected_instance()
+            else:
+                self.status_msg("请到主窗口「我的实例」启动")
+        except Exception as e:
+            self.status_msg(f"启动失败:{e}")
+
+    def _inst_dict(self) -> dict:
+        return {"id": self.inst_id, "base": self._inst_base, "loader": self._inst_loader}
+
+    def _save_names(self) -> list:
+        saves_dir = os.path.join(self.inst_dir, "saves")
+        if not os.path.isdir(saves_dir):
+            return []
+        return [n for n in sorted(os.listdir(saves_dir))
+                if os.path.isdir(os.path.join(saves_dir, n))]
+
+    # ---------- 导出整合包 ----------
+    def _build_export_tab(self) -> QWidget:
+        tab = QWidget()
+        title = QLabel("导出整合包:按文件勾选,打包成 .zip 分享给朋友")
+        title.setStyleSheet(f"font-weight: bold; font-size: 15px;")
+        title.setWordWrap(True)
+        desc = QLabel("支持两级:① 只打包整合包内容(mods/config/光影/资源包等,默认勾包内容、"
+                      "不勾存档/日志等个人记录);② 也可勾「带上启动器」做成两层压缩包(外包 = "
+                      "启动器 exe + 本整合包,朋友解压即装)。")
+        desc.setWordWrap(True); desc.setStyleSheet(hint_style())
+        btn = QPushButton("打开导出向导…")
+        btn.clicked.connect(self._open_export_dialog)
+        set_style(btn, card_btn_style); btn.setMinimumHeight(34)
+        hint = QLabel("导出前建议先在「备份·存档」里备份一下,避免误选。")
+        hint.setWordWrap(True); hint.setStyleSheet(hint_style())
+        layout = QVBoxLayout(tab)
+        layout.addWidget(title)
+        layout.addWidget(desc)
+        layout.addWidget(btn)
+        layout.addWidget(hint)
+        layout.addStretch()
+        return tab
+
+    def _open_export_dialog(self):
+        from export_modpack import PackExportDialog
+        base, loader, lver = self._inst_base, self._inst_loader, self._detect_loader_version()
+        dlg = PackExportDialog(self.inst_id, self.inst_dir, self,
+                               base=base, loader=loader or "", loader_version=lver or "")
+        dlg.exec()
+
+    def _detect_loader_version(self) -> str:
+        """从实例版本 JSON / 目录名推断加载器版本(如 fabric-loader-0.19.3-1.21.1 → 0.19.3)。"""
+        import re
+        inst_id = self.inst_id or ""
+        # fabric-loader-<ver>-<mc>
+        m = re.search(r"fabric-loader-([^-]+)-", inst_id)
+        if m:
+            return m.group(1)
+        # forge:<mc>-forge-<ver>
+        m = re.search(r"-forge-([\d.]+)", inst_id)
+        if m:
+            return m.group(1)
+        # neoforge-<ver>
+        m = re.search(r"neoforge-([\d.]+)", inst_id)
+        if m:
+            return m.group(1)
+        # 兜底:读版本 json 里的 "id"/"inheritsFrom" 或 libraries 里的加载器
+        try:
+            import json as _json
+            vjson = os.path.join(self.inst_dir, self.inst_id + ".json")
+            if os.path.isfile(vjson):
+                with open(vjson, encoding="utf-8") as f:
+                    jd = _json.load(f)
+                for lib in jd.get("libraries", []) or []:
+                    n = str(lib.get("name", "")).lower()
+                    if "fabric-loader" in n:
+                        return n.split(":")[-1].split("@")[0] or ""
+                    if "minecraftforge" in n and ":" in n:
+                        # net.minecraftforge:forge:1.20.1-47.4.23 → 47.4.23
+                        ver = n.split(":")[-1]; 
+                        mm = re.search(r"-([\d.]+)$", ver)
+                        if mm: return mm.group(1)
+        except Exception:
+            pass
+        return ""
 
     # ---------- 工具 ----------
     def _mod_files(self) -> list:
@@ -494,6 +675,37 @@ class InstanceManagerDialog(QWidget):
         self._refresh_dir_list(self.tacz_list, gunpack_dir)
         return tab
 
+    def _build_create_schematics_tab(self) -> QWidget:
+        """机械动力(Create)投影原理图:和 TACZ 枪包同款方案——列出实例 schematics/ 目录的 .nbt 图。"""
+        tab = QWidget()
+        schem_dir = os.path.join(self.inst_dir, "schematics")
+        self.schem_list = self._dir_list_widget()
+        open_btn = QPushButton("打开原理图目录")
+        open_btn.clicked.connect(lambda: self._open_dir(schem_dir))
+        refresh_btn = QPushButton("刷新")
+        refresh_btn.clicked.connect(lambda: self._refresh_schematics())
+        row = QHBoxLayout()
+        row.addWidget(open_btn)
+        row.addWidget(refresh_btn)
+        row.addStretch()
+        hint = QLabel("检测到机械动力(Create)模组。投影原理图(.nbt)放进 schematics 目录;"
+                      "进游戏用蓝图大炮/工程师护目镜(手持蓝图 + Ctrl)选图即可。"
+                      "注:存档内的原理图在 <存档>/schematics/,这里是实例级目录。")
+        hint.setStyleSheet(hint_style())
+        hint.setWordWrap(True)
+        layout = QVBoxLayout(tab)
+        layout.addWidget(self.schem_list, 1)
+        layout.addLayout(row)
+        layout.addWidget(hint)
+        self._refresh_schematics()
+        return tab
+
+    def _refresh_schematics(self):
+        schem_dir = os.path.join(self.inst_dir, "schematics")
+        list_widget = getattr(self, "schem_list", None)
+        if list_widget is not None:
+            self._refresh_dir_list(list_widget, schem_dir, exts=(".nbt",))
+
     def _build_kubejs_tab(self) -> QWidget:
         tab = QWidget()
         kjs_dir = os.path.join(self.inst_dir, "kubejs")
@@ -521,14 +733,20 @@ class InstanceManagerDialog(QWidget):
         self._refresh_dir_list(self.kubejs_list, os.path.join(self.inst_dir, "kubejs", "server_scripts"))
 
     @staticmethod
-    def _refresh_dir_list(list_widget: QListWidget, path: str):
+    def _refresh_dir_list(list_widget: QListWidget, path: str, exts: tuple = ()):
         list_widget.clear()
         if not os.path.isdir(path):
             return
         for name in sorted(os.listdir(path)):
             full = os.path.join(path, name)
-            suffix = " (目录)" if os.path.isdir(full) else ""
-            list_widget.addItem(name + suffix)
+            if os.path.isdir(full):
+                suffix = " (目录)"
+                list_widget.addItem(name + suffix)
+            else:
+                if exts and not name.lower().endswith(exts):
+                    # 某些目录(如 schematics)只显示特定类型;但保留子目录以便进入
+                    continue
+                list_widget.addItem(name)
 
     # ---------- 指令库(模板 + 每实例自定义指令) ----------
     def _build_command_tab(self) -> QWidget:

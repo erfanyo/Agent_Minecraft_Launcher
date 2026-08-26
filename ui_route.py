@@ -30,15 +30,58 @@ def _find_button(root, label: str):
 
 
 def _find_by_objectname(root, name: str):
+    # 先看 root 自身是否就是目标(如 rcswitch 切到的整页)
+    if root is not None and (root.objectName() or "") == name:
+        return root
     for w in root.findChildren(QWidget):
         if (w.objectName() or "") == name:
             return w
     return None
 
 
+def _auto_switch_container(target, top):
+    """把「左菜单+右面板」容器(有 .stack + .switch_to)的内部堆叠页,切到目标所在页。
+    这样引导遮罩能框到**真正显示**的控件,而不是首页/错误页。"""
+    if target is None:
+        return
+    # 从目标向上找最近的、有 stack+switch_to 的容器(如 ResourceCenter / CenterShell)
+    # 目标本身若是该容器(如首页),不切。
+    w = target
+    while w is not None and w is not top:
+        if hasattr(w, "stack") and hasattr(w, "switch_to"):
+            stack = getattr(w, "stack")
+            # 目标是不是该容器某个堆叠页里的控件(或就是该页)?
+            for i in range(stack.count()):
+                page = stack.widget(i)
+                # 目标就是该页,或目标坐落在该页内(通过 parent 链上溯到 page)
+                if page is target or _is_descendant(target, page):
+                    if stack.currentIndex() != i:
+                        try:
+                            w.switch_to(i)
+                        except Exception:
+                            pass
+                    return
+        w = getattr(w, "parentWidget", lambda: None)() if hasattr(w, "parentWidget") else None
+    # 兜底:目标本身是个 QStackedWidget 的当前页之外,不处理(交给 rcswitch 显式切)
+
+
+def _is_descendant(widget, ancestor):
+    """widget 是否是 ancestor 的后代(沿 parent 链上溯)。"""
+    w = getattr(widget, "parentWidget", lambda: None)() if widget else None
+    while w is not None:
+        if w is ancestor:
+            return True
+        w = getattr(w, "parentWidget", lambda: None)() if hasattr(w, "parentWidget") else None
+    return False
+
+
 def resolve(main_window, route):
     """按 route 逐级解析到目标控件。返回 (target_widget, top_widget) 或 (None, None)。
-    top_widget = 目标控件所在的最顶层窗口/容器(引导遮罩挂它上面)。"""
+    top_widget = 目标控件所在的最顶层窗口/容器(引导遮罩挂它上面)。
+
+    解析完若目标在某个「左菜单+右面板」容器(如 ResourceCenter / CenterShell)内部,
+    会自动把该容器的右侧堆叠页切到目标所在页,保证目标控件是**可见**的
+    (否则引导遮罩会框在首页/错误的页上)。"""
     cur = main_window
     for seg in route:
         if not isinstance(seg, (list, tuple)) or len(seg) != 2:
@@ -79,4 +122,7 @@ def resolve(main_window, route):
         else:
             return None, None
     # 目标控件所在的最顶层窗口(引导遮罩挂它上面)
-    return cur, cur.window()
+    top = cur.window()
+    # 自动把「左菜单+右面板」容器的内部堆叠页,切到目标控件所在页(让目标可见)
+    _auto_switch_container(cur, top)
+    return cur, top

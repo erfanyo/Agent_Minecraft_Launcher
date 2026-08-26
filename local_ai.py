@@ -487,7 +487,7 @@ def build_launcher_context(game_dir: str = None) -> str:
         from settings import load_settings
         s = load_settings()
         lines.append(f"启动器设置:游戏名 {s.get('username', 'Player')},"
-                     f"内存 {s.get('memory_gb', 2)}G")
+                     f"内存 {s.get('memory_gb', 4)}G")
     except Exception:
         pass
     return "\n".join(lines)

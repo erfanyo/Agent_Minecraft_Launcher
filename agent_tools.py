@@ -315,9 +315,11 @@ def launch_game(instance: str, game_dir: str = None) -> str:
         return f"错误:准备 Java 失败:{e}"
     game_dir_run = _os.path.join(gd, "versions", inst["id"])   # PCL2 风格实例目录
     try:
+        from settings import load_settings as _ls
+        _memory = _ls().get("memory_gb", 4)
         cmd = build_launch_command(
             d, game_dir_run, java_exe,
-            username="Player", memory_gb=2,
+            username="Player", memory_gb=_memory,
             assets_dir=_os.path.join(gd, "assets"),
             install_dir=gd)
     except Exception as e:

@@ -125,6 +125,7 @@ class DownloadTab(QWidget):
     def _build_version_panel(self):
         panel = QWidget()
         self.version_tree = QTreeWidget()
+        self.version_tree.setObjectName("version_tree")
         self.version_tree.setHeaderLabel("版本")
         self.version_tree.currentItemChanged.connect(self._on_version_selected)
         self._load_tree()
@@ -136,6 +137,7 @@ class DownloadTab(QWidget):
 
     def _build_loader_panel(self):
         panel = QWidget()
+        panel.setObjectName("loader_panel")
         self.loader_rows = []   # (key, card, arrow, combo)
         vbox = QVBoxLayout(panel)
 

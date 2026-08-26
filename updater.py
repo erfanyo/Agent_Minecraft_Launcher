@@ -20,7 +20,7 @@ RELEASES_API = f"https://api.github.com/repos/{REPO}/releases"
 LAUNCHER_ASSET = "AgentMinecraftLauncher.exe"
 
 # 当前启动器版本(发版时改这里 + 打同版本 tag)
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 
 _HEADERS = {"User-Agent": "AgentMinecraftLauncher-Updater/{}".format(VERSION)}
 
@@ -105,17 +105,19 @@ def make_update_bat(exe_path: str, new_exe: str, bat_path: str) -> str:
     """生成替换脚本:等旧 exe 退出 → 用新 exe 覆盖 → 重启 → 删脚本。
     返回 bat_path(Windows 运行中的 exe 无法覆盖自己,必须经脚本中转)。
 
-    重启方式说明:PyInstaller 6.x 单文件 bootloader 启动时会做「父进程安全校验」
-    (走进程快照解析父进程可执行路径,抗进程注入/旁路)。若新 exe 由本脚本的瞬态 cmd
-    (`start "" exe`)拉起,父进程是一条转瞬即逝的 cmd → 等不到它拍快照时已退出 →
-    bootloader 报 "Security validation failure: failed to obtain executable path for
-    parent process",重启后的应用起不来(更新"看起来失败")。
-    因此这里改用 Windows shell `explorer.exe` 拉起新 exe:它的父进程是常驻的 shell
-    (explorer.exe),永远存活且可解析,父进程链绝不落在死进程上,校验必通过。"""
+    重启方式说明(PyInstaller 6.22+ 父进程安全校验):
+    单文件 bootloader 启动时会解析【父进程】的可执行路径做安全校验;若父进程是
+    瞬态的(cmd / start 的临时进程),拍快照时父进程已退出 → 报
+    "Security validation failure: failed to obtain executable path for parent process",
+    重启后的应用起不来(更新"看起来失败")。
+    这里改用常驻的 **explorer.exe(shell)** 拉起新 exe:父进程是 explorer(常驻、可解析),
+    父进程链绝不落在死进程上,校验必通过。
+    (注:曾试过 schtasks 任务计划拉起,但部分环境需管理员权限/沙箱受限,故用 explorer。)"""
     lines = [
         "@echo off",
         "timeout /t 2 /nobreak >nul",
         f'taskkill /f /im {os.path.basename(exe_path)} >nul 2>&1',
+        'ping 127.0.0.1 -n 2 >nul',
         f'copy /y "{new_exe}" "{exe_path}" >nul',
         f'del "{new_exe}" >nul',
         # 用常驻 shell 拉起新 exe(父进程稳定可解析),避免瞬态 cmd 触发 PyInstaller 父进程校验失败

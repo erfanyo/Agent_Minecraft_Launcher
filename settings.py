@@ -13,7 +13,7 @@ from paths import CONFIG_PATH  # 与 paths.BASE_DIR 一致(打包后 = exe 旁�
 
 DEFAULTS = {
     "username": "Steve",        # 离线模式游戏名
-    "memory_gb": 2,              # 给游戏分配的内存
+    "memory_gb": 4,              # 给游戏分配的内存(默认 4G,整合包/Mod 多才够;设置里可改)
     "version_isolation": True,   # 版本隔离:每版本独立游戏目录
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
@@ -21,6 +21,16 @@ DEFAULTS = {
     "ui_mode": "beginner",       # 界面模式:beginner=全面(多提示/科普)/ expert=摘要(精简)。
                                  # 对外显示名叫「全面 / 摘要」(不用"新手/专家",免得显得看不起新手);
                                  # 值保持 beginner/expert 以兼容旧配置。
+    "microsoft_login": True,     # 正版登录开关(默认 True,正式版将要求正版登录)。
+                                 # 无 GUI 设置项;想跳过正版登录可手动改 config.json 的 microsoft_login=false;
+                                 # 也可以让 AI 关掉(告诉它"关掉正版登录")。
+    "login_method": "offline",   # 登录方式:offline(离线昵称) / microsoft(微软正版)。
+                                 # 正版登录后这里变成 microsoft,启动游戏用正版凭证。
+    "ms_credentials": {},        # 微软正版凭证(登录成功后存 refresh_token/username/uuid/access_token 摘要)。
+                                 # 敏感,只存本机;不随包分享。
+    "tutorial_auto": True,       # 新手教程自动播放:首次启动引导里选「新手」时自动进教程;选「老手」不进。
+                                 # 之后任何时刻都能在 设置→界面→重播引导教程 重播。
+                                 # 这里主要记住"是否已首次决定过",避免每次都弹。
     # AI 助手(OpenAI 兼容接口)
     "ai_provider": "deepseek",
     "ai_base_url": "https://api.deepseek.com/v1",
@@ -54,8 +64,47 @@ DEFAULTS = {
     # 是否用官方由 mirror_strategy 决定,这里不再出现 "official"
     "mirror_source": "bmclapi",
     "custom_mirrors": [],          # 自定义镜像源列表:[{"id","name","url"}]
-    "plugin_registries": [],       # 插件仓库源:[{"url","name"}] 手动添加(你的官方仓库默认在此)
+    "plugin_registries": [
+        # 默认填官方插件仓库(erfanyo/Agent_Minecraft_Launcher);用户可手动添加其它仓库
+        {"url": "https://github.com/erfanyo/Agent_Minecraft_Launcher", "name": "erfanyo/Agent_Minecraft_Launcher"},
+    ],       # 插件仓库源:[{"url","name"}] 手动添加(你的官方仓库默认在此)
 }
+
+
+def suggested_memory_gb() -> int:
+    """按机器实际物理内存,返回一个合理的默认给游戏的内存(GB)。
+
+    原则:给够、又不给到反伤(太低整合包开不了,太高在 8G 机器上反而卡)。
+    - 物理内存 ≤ 8G  → 4G(保守,整合包勉强够,原版/少量 Mod 流畅)
+    - 物理内存 16G   → 6G(整合包 + 光影可跑)
+    - 物理内存 ≥ 32G → 8G(放开,可再手动调)
+    读不到内存就回退 4G(默认值)。"""
+    try:
+        import ctypes
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            total_gb = stat.ullTotalPhys / (1024 ** 3)
+            if total_gb >= 32:
+                return 8
+            if total_gb >= 16:
+                return 6
+            return 4
+    except Exception:
+        pass
+    return 4
 
 
 def load_settings() -> dict:

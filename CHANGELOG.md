@@ -11,6 +11,32 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
+## [v0.4.1] - 2026-08-26
+
+> 📄 正式版预览(测试版)。用户向说明见 `RELEASE_NOTES_0.4.1.md`。
+
+### 🔐 微软正版登录
+- 新增 `microsoft_auth.py`:**微软 OAuth 设备码流 + 令牌链**(微软→Xbox Live→XSTS→Minecraft)+
+  `entitlements/mcstore` 所有权校验 + `minecraft/profile` 取账号名/UUID;用公开 client_id。
+- 登录卡片:`更改登录方式 ▾` 里可点「**微软正版登录**」——弹窗给 device code + 网址并自动开浏览器;
+  后台轮询授权,成功后存凭证并显示「微软正版 · 已登录」。支持「退出正版登录(回离线)」。
+- **启动接入**:正版用**账号真实 UUID + MC 访问令牌 + user_type=msa**(online 服能过验证);离线用
+  **离线 v3 UUID**(md5 OfflinePlayer:姓名,不再每次随机,存档稳定)+ legacy。
+- **自动刷新令牌**:每次启动用 refresh_token 换新令牌(免重登);失败自动回退已存令牌。
+- **皮肤头像**:登录后拉真实 3D 头像(crafatar),缓存到 AMCL/cache/avatars,失败回退占位。
+- 配置:`login_method`(offline/microsoft)+ `ms_credentials`(仅存本机)。
+
+### 📦 整合包导出 · Modrinth `.mrpack` 哈希回填
+- 导出向导可选「Modrinth .mrpack(推荐)」/「扁平 .zip」。
+- **哈希回填**:mods/ 里的 jar 按 sha1 查 Modrinth,匹配到 → 放进 `files[]`(导入时走 Modrinth 下载 +
+  收集 required 依赖);匹配不到(本地/非 Modrinth)或非 mods/ 文件 → `overrides/`。
+- `modrinth.index.json` 的 `dependencies` 自动写 `minecraft` + 加载器版本(从实例推断)。
+
+### 🖥 实例详情 · 新页签(参考菜单)
+- 新增「**概览**」(实例信息 + 一键启动/打开目录)、「**设置**」(单实例启动内存,存 launch_options.json)、
+  「**导出**」(整合包导出向导)、「**投影原理图**」(检测到 机械动力/Create 时出现,与 TACZ 枪包同款方案)。
+- 设置-界面移除老版「新手教程(基础版)」入口,仅保留新版「重播引导教程」。
+
 ## [v0.4.0] - 2026-08-26
 
 > 📄 用户向摘要版见 `RELEASE_NOTES_0.4.0.md`(面向玩家/朋友的大白话版本)。
