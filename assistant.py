@@ -105,6 +105,19 @@ TOOLS = [
            "game_version": {"type": "string", "description": "可选,游戏版本过滤"},
            "loader": {"type": "string", "description": "可选,加载器过滤"}},
           ["query"]),
+    _tool("resolve_mod_concept", "按用户的【功能/模糊描述】解析出候选 Mod 清单(特殊:描述抽象时用,不是直接搜名字)。"
+          "用于用户说不清具体 mod 名、只描述功能的场景,如'我要个能加速熔炉/自动合成/能量很大的东西'。"
+          "做法:把用户的话转成一组候选 mod/物品名(含宿主 mod),系统会逐个去 Modrinth 校验,"
+          "只返回真实存在的候选(按契合度+下载量排序),由用户挑选后安装。"
+          "注意:若用户已给出明确 mod 名请用 search_mods;这是给【说不出名字、只描述功能】的需求兜底的。",
+          {"requirement": {"type": "string", "description": "用户的原话/功能描述,如'加速熔炉的东西'或'自动合成物品'"},
+           "candidates": {"type": "array", "description": "你(模型)根据需求联想出的一组候选名——mod 名、物品名、宿主 mod 名都行,"
+                           "越多越准;系统会过滤掉搜不到(幻觉)的,只留真实存在的。如 ['torcherino','time in a bottle','projecte','mekanism']",
+                          "items": {"type": "string"}},
+           "game_version": {"type": "string", "description": "可选,游戏版本"},
+           "loader": {"type": "string", "description": "可选,加载器:fabric/forge/neoforge"},
+           "top_n": {"type": "integer", "description": "可选,返回候选数,默认 8"}},
+          ["requirement", "candidates"]),
     _tool("list_mods", "列出某实例已安装的 Mod 文件",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("read_instance_log", "读取某实例最近的游戏日志(诊断报错/崩溃用)",
@@ -241,7 +254,8 @@ CLOUD_MAX_TOKENS = 1024
 CLOUD_MAX_TOOLS = 14
 
 # 任何请求都带的通用工具(交互确认 / 通用查询 / 实例查询——模型经常先查实例再执行)
-GENERAL_TOOLS = ["ask_user", "get_settings", "list_instances", "create_plugin"]
+GENERAL_TOOLS = ["ask_user", "get_settings", "list_instances", "create_plugin",
+                 "resolve_mod_concept"]   # 概念解析:查询类,始终可用(抽象描述兜底)
 
 # 工具分组(请求意图 → 相关工具)
 TOOL_GROUPS = {
@@ -249,6 +263,7 @@ TOOL_GROUPS = {
     "instance": ["install_instance", "launch_game", "backup_instance"],
     "mod": ["search_mods", "install_mod", "install_mods", "list_mods"],
     "modpack": ["search_modpacks", "install_modpack"],
+    "concept": ["resolve_mod_concept"],
     "recipe": ["get_recipe_path", "compare_items"],
     "command": ["send_game_command", "get_command_guide"],
     "log": ["read_instance_log", "read_crash_report", "resolve_mc_name"],
@@ -262,6 +277,11 @@ TOOL_GROUP_KEYWORDS = {
     "instance": ["建", "创建", "下载", "实例", "启动", "备份", "原版", "装一个", "install"],
     "mod": ["mod", "模组", "装", "安装", "钠", "锂", "玉", "jei", "sodium", "lithium",
             "jade", "搜", "搜索", "fabric", "forge"],
+    # 抽象功能/模糊描述(用户说不出 mod 名,只描述"能干嘛")→ 挂概念解析工具
+    "concept": ["想要", "想要个", "我要", "找个", "能", "会自动", "自动", "加速", "熔炉", "烧",
+                "合成", "自动合成", "能量", "储存", "存储", "魔法", "飞行", "传送", "背包",
+                "自动化", "发电", "电力", "矿石", "矿", "刷", "收集", "整理", "搬运",
+                "wants", "need", "something", "thing", "machine", "power"],
     "modpack": ["整合包", "整合法", "整合", "集成", "modpack", "整合包推荐", "装整合"],
     "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
     "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
@@ -303,8 +323,17 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list:
     by_name = {t["function"]["name"]: t for t in TOOLS}
     mounted = [by_name[n] for n in names if n in by_name]
     if len(mounted) > CLOUD_MAX_TOOLS:
-        # 超限截断:保通用(前 3 个),砍掉排后的组工具
-        mounted = mounted[:CLOUD_MAX_TOOLS]
+        # 超限截断:保通用(前 3 个)+ 本请求命中组里"核心查询/解析"工具,
+        # 砍掉排后的(通常是次要的操作/写工具),避免关键工具被挤掉导致模型选不到。
+        core = {"resolve_mod_concept", "search_mods", "search_modpacks", "list_instances",
+                "get_settings", "get_recipe_path", "read_instance_log", "read_crash_report"}
+        keep = []
+        for t in mounted:
+            if t["function"]["name"] in core:
+                keep.append(t)
+        rest = [t for t in mounted if t["function"]["name"] not in core]
+        # 核心工具放前(保证在截断窗口内),再补能放的其余
+        mounted = (keep + rest)[:CLOUD_MAX_TOOLS]
     if settings:
         mounted = mounted + mcp_tools_schemas(settings)
     # 插件注册的工具:追加在截断之后(始终让模型看得见、可调用)

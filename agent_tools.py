@@ -55,6 +55,107 @@ def search_mods(query: str, game_version: str = "", loader: str = "") -> str:
                      for h in hits[:15])
 
 
+def resolve_mod_concept(requirement: str, candidates: list = None,
+                        game_version: str = "", loader: str = "",
+                        top_n: int = 8) -> str:
+    """按"功能/模糊描述"解析出候选 Mod,给用户挑选(核心:猜名→校验→过滤→排序)。
+
+    **为什么**:用户常说不清 mod 名,只说"我要个能加速熔炉/自动合成/能量很大的东西"。
+    这类抽象描述直接搜 Modrinth(项目级)命中率极低,因为承载它的往往是综合型大 mod
+    里的一个**物品**,title/description 不会写"熔炉加速"这种功能词。
+
+    **做法**:
+    - `candidates` = 云端模型根据 `requirement` 联想出的一组**候选名**(mod 名 / item 名 /
+      宿主 mod 名,混合真伪);
+    - 每个名字逐个去 Modrinth 检索,取真实命中(搜不到的候选=模型幻觉,天然被过滤);
+    - 同名去重(不同词命中同一 slug 合并),按"候选词在结果里的位次(契合度)+ 下载量"排序;
+    - 返回候选清单(中文名/描述/下载量/适配加载器),由用户挑选,选定后走 install_mod。
+
+    只返回检索校验过的真实结果,绝不让模型凭空给出的名字直接当作可装 mod。
+    """
+    from modrinth import search_mods as _raw_search
+    req = (requirement or "").strip()
+    cands = [c.strip() for c in (candidates or []) if str(c).strip()]
+    if not req and not cands:
+        return "(缺少描述或候选名,无法解析)"
+
+    # ---- 逐个候选词检索,收集真实命中 ----
+    # rec: slug -> {title, slug, downloads, description, loader_cn, hit_rank(最小位次)}
+    rec = {}
+    for ci, c in enumerate(cands):
+        try:
+            hits = _raw_search(c, game_version or None, loader or None, limit=5,
+                               project_type="mod", order_by="downloads")
+        except Exception:
+            continue
+        for hi, h in enumerate(hits or []):
+            slug = h.get("slug", "")
+            if not slug:
+                continue
+            # 契合度:候选词排第 ci 位(越靠前说明模型越确定),结果内位次 hi 也越低越好
+            rank = ci * 10 + hi
+            if slug not in rec or rank < rec[slug]["rank"]:
+                rec[slug] = {
+                    "slug": slug,
+                    "title": h.get("title", slug),
+                    "downloads": h.get("downloads", 0),
+                    "description": (h.get("description") or "").strip(),
+                    "author": h.get("author", ""),
+                    "categories": h.get("categories", []),
+                    "rank": rank,
+                }
+    if not rec:
+        return ("(没有搜到符合『%s』的 Mod;可能是该功能只存在于整合包/自制包,或描述太抽象。" % req
+                + "可换个说法,或告诉我你的游戏版本/加载器再试)")
+
+    # ---- 排序:契合度优先,下载量只在相近时微调 ----
+    # 契合度主信号 = 候选词是否"精确"命中该 mod(候选词 == title 或 slug 或 title 含候选词):
+    #   强命中(如候选词 "draconic" 精确落在 title/slug 里)远优先于搜索顺带命中的无关 mod。
+    # 下载量只做 +分(同契合度下热门的靠前),但权重压不过契合度,避免热门无关 mod 淹没。
+    import math
+    def _fit_score(it):
+        title = (it.get("title") or "").lower()
+        slug = (it.get("slug") or "").lower()
+        # 该 slug 是被哪些候选词命中的?取命中里最"像"的候选词做契合信号
+        best = 0.0
+        for c in cands:
+            cl = c.lower()
+            if not cl:
+                continue
+            # 强命中:候选词精确等于 slug/title,或 title 以候选词开头/含候选词作独立词
+            if cl == slug or cl == title:
+                best = max(best, 1.0)
+            elif cl in slug or cl in title:
+                best = max(best, 0.75)
+        dl = math.log10(1 + it["downloads"]) * 0.35   # 下载量微量权重(0~约2.8)
+        return best * 10.0 + dl
+    items = sorted(rec.values(), key=_fit_score, reverse=True)
+
+    # ---- 中文名标注(能查到的补一下) ----
+    try:
+        from mod_cn import merged_names
+        _cn = merged_names()
+    except Exception:
+        _cn = {}
+    for it in items:
+        cn = _cn.get(it["slug"])
+        if cn:
+            it["title"] = cn
+
+    # ---- 组装返回文本 ----
+    lines = [f"按『{req}』找到以下候选(已校验为真实 Mod,可安装):", ""]
+    for i, it in enumerate(items[:top_n], 1):
+        dl = f"⬇{it['downloads']:,}"
+        cats = ",".join((it["categories"] or [])[:3])
+        desc = (it["description"] or "")[:72]
+        lines.append(f"{i}. {it['title']}  slug={it['slug']}  {dl}  [{cats}]")
+        if desc:
+            lines.append(f"   {desc}")
+    lines.append("")
+    lines.append("告诉我要装哪个(序号或 slug);不确定可以让我逐个看描述。")
+    return "\n".join(lines)
+
+
 def search_modpacks(query: str, game_version: str = "", loader: str = "") -> str:
     """搜整合包(Modrinth 项目类型 modpack,即 .mrpack),支持中文名。
     用户想"装一个整合包/整合包推荐"时用;结果里的 slug 可交给 install_modpack 直接下载导入。"""
@@ -467,6 +568,7 @@ TOOL_FUNCS = {
     "list_mods": list_mods,
     "search_mods": search_mods,
     "search_modpacks": search_modpacks,
+    "resolve_mod_concept": resolve_mod_concept,
     "read_instance_log": read_instance_log,
     "read_crash_report": read_crash_report,
     "get_settings": get_settings,

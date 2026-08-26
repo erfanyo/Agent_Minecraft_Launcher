@@ -134,9 +134,15 @@ def schemas_from_assistant_tools() -> dict:
     返回 {工具名: {"properties": {k: 类型}, "required": [...]}}"""
     try:
         import assistant
+        # 本地模型(0.8B)只配跑"简单、参数结构直白"的工具;需要大模型语义联想/复杂数组参数的
+        # 云端专用工具(如 resolve_mod_concept 的 candidates 数组)对本地没意义,反而浪费轮次/误导,
+        # 故从本地 grammar 中排除。
+        CLOUD_ONLY = {"resolve_mod_concept"}
         out = {}
         for t in assistant.TOOLS:
             fn = t["function"]
+            if fn["name"] in CLOUD_ONLY:
+                continue
             params = fn.get("parameters", {})
             props = params.get("properties", {})
             out[fn["name"]] = {
