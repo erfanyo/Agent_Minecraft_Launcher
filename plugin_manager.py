@@ -238,9 +238,35 @@ def save_plugin(name: str, code: str) -> dict:
 #      "repo": "官方", "author": "…"}, ... ]
 # 安装 = 下载 download_url 的单文件 .py → 校验 → 落盘 plugins/<name>.py(复用 save_plugin)。
 
+def _resolve_registry_url(url: str) -> str:
+    """把仓库源 URL 规范成「能直接作为 JSON 清单请求」的地址。
+
+    支持:
+    - GitHub 仓库主页 / git 地址(https://github.com/user/repo 或 …/.git)
+      → 转成 https://raw.githubusercontent.com/user/repo/<branch>/plugins.json
+      (默认分支 main;若 raw 404 可再回退 master —— 见 load_registry);
+    - 已经是 raw.githubusercontent.com / 其它 http(s) 直链 / file://  → 原样返回。
+    """
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return url
+    # file:// 或已是 raw 直链 → 不动
+    if url.startswith("file://") or "raw.githubusercontent.com" in url:
+        return url
+    # GitHub 主页 / git 地址 → 转 raw 直链
+    import re as _re
+    m = _re.search(r"github\.com/([^/]+)/([^/]+?)(?:\.git)?$", url)
+    if m:
+        user, repo = m.group(1), m.group(2)
+        return f"https://raw.githubusercontent.com/{user}/{repo}/main/plugins.json"
+    # 其它:原样(可能直接就是可返回 JSON 的 URL,如 raw.githubusercontent.com / 自建 API)
+    return url
+
+
 def load_registry(url: str) -> list:
     """从插件仓库源拉取插件清单,返回 [{name, version, title, description, download_url, repo}]。
     支持:http(s) URL(GitHub raw 等)返回清单,或本地 file://(调试/测试)。失败返回 []。"""
+    url = _resolve_registry_url(url)
     try:
         if url.startswith("file://"):
             from urllib.parse import unquote
@@ -257,7 +283,19 @@ def load_registry(url: str) -> list:
             data = r.json()
         rows = data if isinstance(data, list) else data.get("plugins", [])
     except Exception:
-        return []
+        # GitHub 仓库默认分支可能不是 main(是 master)——转一次再试
+        if "raw.githubusercontent.com" in url and "/main/" in url:
+            try:
+                import requests
+                alt = url.replace("/main/", "/master/")
+                r = requests.get(alt, timeout=12)
+                r.raise_for_status()
+                data = r.json()
+                rows = data if isinstance(data, list) else data.get("plugins", [])
+            except Exception:
+                return []
+        else:
+            return []
     out = []
     for it in rows or []:
         if not isinstance(it, dict):
