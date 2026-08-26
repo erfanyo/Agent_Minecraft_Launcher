@@ -1,2 +1,14 @@
-PySide6>=6.6
-requests>=2.31
+# ===== 运行时依赖(直接 pip install -r requirements.txt 即可运行) =====
+PySide6>=6.6          # GUI 框架
+requests>=2.31        # 网络请求(版本清单/Modrinth/微软认证/模型下载等)
+
+# ===== 可选依赖(不装也能运行,装了增强特定功能) =====
+# psutil —— CPU/温度采样,供「过热劝退」提示。可选:未装时自动走 Windows WMI 兜底。
+#   pip install psutil
+psutil>=5.9
+
+# ===== 开发/打包依赖(仅在本地打包 exe 时需额外安装) =====
+# PyInstaller 用于把启动器打包成单文件 exe(开发机一次性):
+#   pip install pyinstaller
+# 项目已提供 AgentMinecraftLauncher.spec;命令行也可:
+#   python -m PyInstaller --noconfirm --clean AgentMinecraftLauncher.spec
