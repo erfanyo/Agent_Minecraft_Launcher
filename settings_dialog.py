@@ -212,6 +212,8 @@ class SettingsDialog(QDialog):
         self.ai_form = AISettingsForm(self.settings)
         ai_hint = QLabel("AI 设置会自动保存,下次打开启动器仍然有效。\n"
                          "· 云/本地两块分开配:顶部选「当前使用(AI 策略)」哪档,AI 对话就走哪边;\n"
+                         "· ⚠️ 本地是小模型:只懂直白指令,理解不了模糊需求(如\"按功能找 mod\"),甚至会选错工具;"
+                         "这类要靠云端,想要稳定体验请配云端(如 DeepSeek);\n"
                          "· 发图片(多模态):只有所选模型本身会\"看图\"才有效,内置本地模型自动关闭;\n"
                          "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
         ai_hint.setWordWrap(True)

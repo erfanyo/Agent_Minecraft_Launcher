@@ -470,6 +470,8 @@ class SettingsCenter(QWidget):
         dl_row = QHBoxLayout(); dl_row.addWidget(self.model_dl_btn); dl_row.addWidget(self.model_dl_status, 1)
 
         hint = QLabel("· 云/本地两块分开配:顶部选「当前使用(AI 策略)」哪档,AI 对话就走哪边;\n"
+                      "· ⚠️ 本地是小模型:只懂直白指令,理解不了模糊需求(如\"按功能找 mod\"),甚至会选错工具;"
+                      "这类要靠云端,想要稳定体验请配云端(如 DeepSeek);\n"
                       "· 发图片(多模态):只有所选模型本身会看图才有效,内置本地模型自动关闭;\n"
                       "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
         hint.setWordWrap(True); hint.setStyleSheet("color: #888888;")

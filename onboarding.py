@@ -144,7 +144,9 @@ class OnboardingDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #888888;")
         builtin_hint = QLabel("💡 也可以直接用「内置本地 AI 模型」:离线可用、无需密钥,"
-                              "首次用到时自动下载(约 500MB,镜像优先)。")
+                              "首次用到时自动下载(约 500MB,镜像优先)。\n"
+                              "⚠️ 但它很小,只懂直白指令;像\"按功能找 mod\"这类模糊需求它理解不了,"
+                              "甚至会选错工具——想要稳定体验建议配云端(如 DeepSeek)。")
         builtin_hint.setWordWrap(True)
         builtin_hint.setStyleSheet("color: #888888;")
 
