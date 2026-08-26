@@ -60,8 +60,25 @@ pip install pyinstaller
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name AgentMinecraftLauncher main.py
 # 产物:dist\AgentMinecraftLauncher.exe,直接拷给朋友即可
 ```
-> 提示:exe 会把游戏目录 `.minecraft` 建在**自己旁边**;首次启动稍慢(单文件自解压)属正常;
-> Windows Defender 可能误报 PyInstaller 单文件 exe,分发时请朋友"添加信任"。
+> 提示:exe 会把游戏目录 `.minecraft` 建在**自己旁边**;首次启动稍慢(单文件自解压)属正常。
+
+#### ⚠️ 首次运行出现「Windows 已保护你的电脑 / 是否保留」提示?
+这是 Windows SmartScreen 对**未签名 + 下载量较少**的免费软件的标准确认(不是病毒,只是还没被足够多人运行过),按下面处理即可:
+
+1. 出现蓝色提示 → 点「**更多信息**」→「**仍要运行**」,之后启动器正常打开;
+2. 想彻底不再弹:右键 exe → **属性** → 底部勾选「**解除锁定**」→ 确定,一劳永逸;
+3. 不放心?用下面的 **SHA256 校验码**核对文件,和发布页一致即未被改动。
+
+> 本项目未购买代码签名证书(个人免费项目),exe 未签名属正常现象;已关闭 UPX 压缩以减少误报。
+
+#### 🔍 SHA256 校验码
+每次 Release 的 exe 校验码发布在对应 Release 说明里。校验方法(Windows PowerShell):
+
+```powershell
+Get-FileHash .\AgentMinecraftLauncher.exe -Algorithm SHA256
+```
+
+比对输出与 Release 说明里的哈希,**一致 = 文件完整未被篡改**。
 
 ### 方式二:从源码运行(给开发者)
 ```bash
