@@ -45,3 +45,8 @@ DPH_Chat/
 _agent_comms/
 # AgentTeams 插件状态目录(本地专用,不进 GitHub)
 .agent-teams/
+
+# 备份/临时文件(不进 GitHub)
+*.bak_*
+*.bak
+

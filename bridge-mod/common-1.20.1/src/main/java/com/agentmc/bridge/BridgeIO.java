@@ -16,7 +16,7 @@ public final class BridgeIO {
 
     /** 服务器运行目录的 .bridge 子目录(不存在则创建) */
     public static Path bridgeDir(MinecraftServer server) {
-        Path root = server.getServerDirectory();   // 1.20.5+ 提供
+        Path root = server.getServerDirectory().toPath();   // 1.20.1: getServerDirectory() 返回 File;1.21.1 已是 Path
         return bridgeDirFrom(root);
     }
 

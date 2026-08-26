@@ -137,6 +137,12 @@ def refresh_theme() -> None:
             apply_global_dark_palette(app)
     except Exception:
         pass
+    # 主题色变了 → 主题化图标缓存作废,下次 theme_icon() 用新色重建(懒导入防循环)
+    try:
+        from theme_icon import recolor_icons
+        recolor_icons()
+    except Exception:
+        pass
 
 
 def set_style(widget, style_fn, *args) -> None:

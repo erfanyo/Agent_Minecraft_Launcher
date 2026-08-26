@@ -29,7 +29,7 @@ public final class RecipeExporter {
         RecipeManager manager = server.getRecipeManager();
         JsonArray out = new JsonArray();
         manager.getRecipeIds().forEach(id -> {
-            manager.byKey(id).ifPresent(holder -> out.add(toJson(holder.value(), id, access)));
+            manager.byKey(id).ifPresent(recipe -> out.add(toJson(recipe, id, access)));
         });
         Path p = BridgeIO.bridgeDir(server).resolve("recipes.json");
         BridgeIO.write(p, new com.google.gson.GsonBuilder().setPrettyPrinting().create().toJson(out));

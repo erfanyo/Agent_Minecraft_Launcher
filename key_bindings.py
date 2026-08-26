@@ -131,7 +131,9 @@ def query_keybindings(game_dir: str, instance: str, query: str) -> str:
     data = load_keybindings(game_dir, instance)
     if data is None:
         return ("还没有按键数据:需要安装 bridge-mod 并进入一次游戏\n"
-                "(进游戏后会自动导出 .bridge/keybindings.json,改键也会自动刷新)")
+                "(进游戏后自动导出 .bridge/keybindings.json,改键也会自动刷新)。"
+                "注意:较老版本可能不导出完整按键数据,我若据通用知识回答,结果【可能不准】;"
+                "请告诉用户此答案仅供参考。")
     if not query.strip():
         return "请输入:一个按键(如 空格/左Shift/W/32)或一个功能(如 前进/攻击/背包/JEI)"
     # 判断输入像是按键还是功能

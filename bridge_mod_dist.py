@@ -1,27 +1,54 @@
 # -*- coding: utf-8 -*-
 """
-bridge-mod 自动拉取(分发模块,灵感 #12):
-- 版本表:各平台 × MC 版本的 jar 下载地址与校验
-- download_bridge_mod():按实例的加载器+基础版本拉取 jar 装到 mods 目录
-- 发布流:本地编译 → 传 GitHub Releases → 更新本文件版本表(见 bridge-mod/RELEASE.md)
-- 发布仓库:github.com/erfanyo/Agent_Minecraft_Launcher(bridge-mod 子目录)
+bridge-mod 自动拉取(分发模块,灵感 #12 + 自动发现):
+- 版本表 = 兜底/固定 sha1(离线可校验);但首选【按文件名自动发现】,
+  这样以后发布新的 bridge-mod(新版本 / 新加载器 / 新 MC 版本)无需改启动器。
+- jar 命名约定:agentmc-bridge-{loader}-{mc}-{version}.jar
+  (如 agentmc-bridge-forge-1.20.1-0.1.0.jar)
+- 发现顺序:
+  ① 内置离线通道(_MEIPASS/bridge-mod/,PyInstaller 打包时随 exe 内嵌)
+  ② 本地编译产物(bridge-mod/dist/,开发者/源码运行)
+  ③ GitHub Releases(在线,按文件名模式匹配)
+  ④ 版本表兜底(BRIDGE_MOD_RELEASES,带 sha1 可校验)
+- download_bridge_mod():按实例加载器+基础版本拉 jar 装到 mods 目录
+- 发布流:本地编译 → 传 GitHub Releases(附全部 agentmc-bridge-*.jar 资产)→
+  之后启动器自动按名字发现,无需改本文件(版本表仅作陈旧兜底)。
 """
 import hashlib
 import os
+import re
+import sys
+
+import requests
 
 from downloader import download_with_mirror
 
+# bridge-mod 兜底版本(当自动发现拿不到 jar 版本号时用);也用于版本表。
 BRIDGE_MOD_VERSION = "0.1.0"
 
-# 版本表:loader -> mc_version -> {version, url, sha1}
-# 当前支持:Fabric 1.21.1 / NeoForge 1.21.1(均已编译);Forge(1.19 及以前)晚点再做
+# 兜底版本表:loader -> mc_version -> {version, url, sha1}
+# 仅用于【离线 + 无法访问 GitHub】时的 sha1 校验兜底;正常优先自动发现。
 BRIDGE_MOD_RELEASES = {
     "fabric": {
+        "1.20.1": {
+            "version": BRIDGE_MOD_VERSION,
+            "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
+                    "v0.1.0/agentmc-bridge-fabric-1.20.1-0.1.0.jar"),
+            "sha1": "a014570661f3b5b07a272759960461e42dbbd9bf",
+        },
         "1.21.1": {
             "version": BRIDGE_MOD_VERSION,
             "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
                     "v0.1.0/agentmc-bridge-fabric-1.21.1-0.1.0.jar"),
-            "sha1": "fdfb15ba1982d073411fb7c3d439d85d746182ac",
+            "sha1": "65fa0a51c7691aea1b42648d3b6f8119550c243b",
+        },
+    },
+    "forge": {
+        "1.20.1": {
+            "version": BRIDGE_MOD_VERSION,
+            "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
+                    "v0.1.0/agentmc-bridge-forge-1.20.1-0.1.0.jar"),
+            "sha1": "402dc735cf8bc37c7f7701c7d1aed87e587e9174",
         },
     },
     "neoforge": {
@@ -29,15 +56,119 @@ BRIDGE_MOD_RELEASES = {
             "version": BRIDGE_MOD_VERSION,
             "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
                     "v0.1.0/agentmc-bridge-neoforge-1.21.1-0.1.0.jar"),
-            "sha1": "9c98674546ed408c50c71e36d1503c108e051705",
+            "sha1": "227d01ffba887eb76a1ce13e36c1685b5e67dc2f",
         },
     },
 }
 
+# GitHub 仓库(与 updater 一致),用于在线自动发现 jar 资产
+_GITHUB_RELEASES_API = "https://api.github.com/repos/erfanyo/Agent_Minecraft_Launcher/releases"
+_GITHUB_HEADERS = {"User-Agent": "AgentMinecraftLauncher-BridgeMod/{}".format(BRIDGE_MOD_VERSION)}
+
+
+# ---------------------------------------------------------------------------
+# 文件名模式 与 版本比较
+# ---------------------------------------------------------------------------
+_JAR_RE = re.compile(
+    r"^agentmc-bridge-(?P<loader>fabric|forge|neoforge)-"
+    r"(?P<mc>[\d.]+)-(?P<ver>[\d.]+)\.jar$", re.IGNORECASE)
+
+
+def _parse_jar_name(name: str) -> dict | None:
+    """解析 bridge-mod jar 文件名,返回 {loader, mc, version} 或 None(不匹配)。"""
+    m = _JAR_RE.match(os.path.basename(name))
+    if not m:
+        return None
+    return {"loader": m.group("loader").lower(),
+            "mc": m.group("mc"),
+            "version": m.group("ver")}
+
+
+def _version_key(v: str) -> tuple:
+    """'0.1.0' → (0,1,0);用于取最新版本。"""
+    try:
+        return tuple(int(x) for x in re.findall(r"\d+", v)[:3]) or (0,)
+    except Exception:
+        return (0,)
+
+
+def _jar_urls_by_pattern(loader: str, mc: str) -> list:
+    """按 loader+mc 计算期望的文件名前缀,用于本地/GitHub 匹配。
+    返回 (前缀, 匹配函数)。前缀如 'agentmc-bridge-forge-1.20.1-'。"""
+    prefix = f"agentmc-bridge-{loader}-{mc}-"
+    return prefix, (lambda name: name.lower().startswith(prefix) and name.lower().endswith(".jar"))
+
+
+# ---------------------------------------------------------------------------
+# 发现候选(源码/打包/在线)
+# ---------------------------------------------------------------------------
+def _offline_candidates(loader: str, mc: str) -> list:
+    """返回离线可用 jar 的绝对路径列表(内置 _MEIPASS + 本地 dist),按版本从新到旧。"""
+    prefix, match = _jar_urls_by_pattern(loader, mc)
+    seen = set()
+    out = []
+    dirs = []
+    meipass = getattr(sys, "_MEIPASS", "")
+    if meipass:
+        dirs.append(os.path.join(meipass, "bridge-mod"))
+    # 源码/开发者:项目根 bridge-mod/dist
+    proj = os.path.dirname(os.path.abspath(__file__))
+    dirs.append(os.path.join(proj, "bridge-mod", "dist"))
+    for d in dirs:
+        if not os.path.isdir(d):
+            continue
+        try:
+            for fn in sorted(os.listdir(d)):
+                if match(fn) and fn not in seen:
+                    seen.add(fn)
+                    parse = _parse_jar_name(fn)
+                    out.append({"file": os.path.join(d, fn), "name": fn,
+                                "version": parse["version"] if parse else BRIDGE_MOD_VERSION,
+                                "source": "offline"})
+        except OSError:
+            pass
+    out.sort(key=lambda c: _version_key(c["version"]), reverse=True)
+    return out
+
+
+def _github_candidates(loader: str, mc: str) -> list:
+    """从 GitHub Releases 找匹配 {loader}-{mc} 的 jar 资产(按版本从新到旧)。"""
+    prefix, match = _jar_urls_by_pattern(loader, mc)
+    try:
+        resp = requests.get(_GITHUB_RELEASES_API, params={"per_page": 15},
+                            headers=_GITHUB_HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return []
+        out = []
+        for rel in resp.json():
+            tag = rel.get("tag_name", "")
+            for a in rel.get("assets", []):
+                name = a.get("name", "")
+                if not match(name):
+                    continue
+                parse = _parse_jar_name(name)
+                out.append({"url": a.get("browser_download_url", ""),
+                            "name": name,
+                            "version": (parse["version"] if parse else tag.lstrip("v")),
+                            "source": "github",
+                            "tag": tag})
+        out.sort(key=lambda c: _version_key(c["version"]), reverse=True)
+        return out
+    except Exception:
+        return []
+
 
 def bridge_mod_info(loader: str, mc_version: str) -> dict | None:
-    """查版本表:该 加载器+MC版本 有没有可用的桥 mod"""
-    return BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
+    """查该 加载器+MC版本 是否有可用的 bridge-mod(自动发现优先,版本表兜底)。
+    返回 {version, url?, sha1?, source, name?} 或 None(该组合不支持)。"""
+    # ① 自动发现:本地/在线
+    for cand in _offline_candidates(loader, mc_version) + _github_candidates(loader, mc_version):
+        return {"version": cand["version"], "source": cand["source"]}
+    # ② 版本表兜底(仅当自动发现拿不到,但表里有这个组合)
+    info = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
+    if info:
+        return {"version": info.get("version", BRIDGE_MOD_VERSION), "source": "table"}
+    return None
 
 
 def has_bridge_mod(inst_dir: str) -> bool:
@@ -70,52 +201,71 @@ def _installed_bridge_jar(inst_dir: str) -> str | None:
 def check_bridge_mod(inst_dir: str, loader: str, mc_version: str) -> str:
     """检查 bridge-mod 安装状态:
     - not_installed: 没装
-    - outdated: 已装但版本旧(sha1 与版本表不符,需更新)
+    - outdated: 已装但版本旧(sha1 与表不符,或名字不是最新)
     - up_to_date: 已装且是最新
-    版本表没有该组合时,已装的算 up_to_date(无从比较)。"""
+    自动发现拿不到期望值时,已装的算 up_to_date(无从比较)。"""
     jar = _installed_bridge_jar(inst_dir)
     if jar is None:
         return "not_installed"
     info = bridge_mod_info(loader, mc_version)
-    if info is None or not info.get("sha1"):
+    if info is None:
         return "up_to_date"
-    return "up_to_date" if verify_sha1(jar, info["sha1"]) else "outdated"
+    table = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
+    if table and table.get("sha1"):
+        return "up_to_date" if verify_sha1(jar, table["sha1"]) else "outdated"
+    # 无 sha1 兜底时:比较文件名是否含最新版本号(自动发现结果)
+    exp = info.get("version")
+    if exp and _version_key(exp) > _version_key(_version_from_name(os.path.basename(jar))):
+        return "outdated"
+    return "up_to_date"
+
+
+def _version_from_name(name: str) -> str:
+    """从 jar 文件名提取版本号,拿不到返回空。"""
+    parse = _parse_jar_name(name)
+    return parse["version"] if parse else ""
 
 
 def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
                         progress_callback=None) -> str:
     """下载 bridge-mod 到实例 mods 目录,返回文件名。
-    查不到版本表 → 抛 ValueError(给出提示)。
-    优先内置离线通道:PyInstaller 打包时 jar 随 exe 内置(_MEIPASS/bridge-mod/),
-    命中直接复制,零联网(灵感 #12 离线通道)。"""
-    # 内置 jar 优先(离线通道)
-    meipass = getattr(sys, "_MEIPASS", "")
-    if meipass:
-        import shutil
-        bundled = os.path.join(meipass, "bridge-mod")
-        want = "neoforge" if loader == "neoforge" else "fabric"
-        if os.path.isdir(bundled):
-            for f in sorted(os.listdir(bundled)):
-                low = f.lower()
-                if low.endswith(".jar") and want in low and mc_version in low:
-                    mods_dir = os.path.join(inst_dir, "mods")
-                    os.makedirs(mods_dir, exist_ok=True)
-                    dest = os.path.join(mods_dir, f)
-                    if not os.path.exists(dest) or not _installed_bridge_jar(inst_dir):
-                        shutil.copy2(os.path.join(bundled, f), dest)
-                    return f
-    info = bridge_mod_info(loader, mc_version)
-    if info is None:
-        raise ValueError(
-            f"桥 mod 暂不支持 {mc_version}+{loader}(当前支持 Fabric 1.21.1)。\n"
-            "或先手动从 GitHub Releases 下载 jar 放进实例 mods 目录。")
+    自动发现(离线内置 / 本地 dist / GitHub)优先;版本表兜底(GitHub 固定 URL)。
+    全部失败 → 抛 ValueError(给出提示)。"""
     mods_dir = os.path.join(inst_dir, "mods")
     os.makedirs(mods_dir, exist_ok=True)
-    filename = info["url"].rsplit("/", 1)[-1]
-    dest = os.path.join(mods_dir, filename)
-    download_with_mirror(info["url"], dest,
-                         sha1=info.get("sha1"), progress_callback=progress_callback)
-    return filename
+
+    # ① 离线候选:直接复制(零联网)
+    offline = _offline_candidates(loader, mc_version)
+    if offline:
+        cand = offline[0]
+        dest = os.path.join(mods_dir, cand["name"])
+        if not os.path.exists(dest) or not _installed_bridge_jar(inst_dir):
+            import shutil
+            shutil.copy2(cand["file"], dest)
+        return cand["name"]
+
+    # ② GitHub 自动发现并下载
+    gh = _github_candidates(loader, mc_version)
+    if gh and gh[0].get("url"):
+        cand = gh[0]
+        dest = os.path.join(mods_dir, cand["name"])
+        table = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
+        download_with_mirror(cand["url"], dest, sha1=(table or {}).get("sha1"),
+                             progress_callback=progress_callback)
+        return cand["name"]
+
+    # ③ 版本表兜底(固定 URL)
+    info = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
+    if info:
+        filename = info["url"].rsplit("/", 1)[-1]
+        dest = os.path.join(mods_dir, filename)
+        download_with_mirror(info["url"], dest, sha1=info.get("sha1"),
+                             progress_callback=progress_callback)
+        return filename
+
+    raise ValueError(
+        f"桥 mod 暂不支持 {mc_version}+{loader}(当前支持 Fabric/Forge 1.20.1、Fabric/NeoForge 1.21.1)。\n"
+        "或先手动从 GitHub Releases 下载对应 jar 放进实例 mods 目录。")
 
 
 def verify_sha1(path: str, expected: str) -> bool:

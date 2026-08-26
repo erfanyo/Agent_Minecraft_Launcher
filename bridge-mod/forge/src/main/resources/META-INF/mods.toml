@@ -1,5 +1,5 @@
 modLoader = "javafml"
-loaderVersion = "[52,)"
+loaderVersion = "[47,)"
 license = "MIT"
 
 [[mods]]
@@ -12,6 +12,6 @@ authors = "AgentMinecraftLauncher"
 [[dependencies.agentmc_bridge]]
 modId = "forge"
 mandatory = true
-versionRange = "[52,)"
+versionRange = "[47,)"
 ordering = "NONE"
 side = "BOTH"

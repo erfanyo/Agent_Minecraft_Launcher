@@ -49,6 +49,8 @@ class DownloadTab(QWidget):
         self.modrinth_loader = None
         self._expanded_loader = None    # 当前展开版本下拉的加载器 key(或 None)
         self.loader_versions = {}   # loader -> QComboBox(指定版本)
+        self.loader_available = {}  # loader -> bool(当前版本该加载器是否有可用版本,由异步检测填充)
+        self._loader_checking = set()  # 正在异步检测版本可用性的 loader key 集合(避免重复请求)
         self.shader_combo = None
         self.opt_combos = {}        # mod slug -> QComboBox
 
@@ -174,6 +176,11 @@ class DownloadTab(QWidget):
             inner.addLayout(top)
 
             vbox.addWidget(card)
+            # 非原版加载器默认隐藏:等选中版本后由 _refresh_loader_cards 按可用性显示,
+            # 避免"先全部显示、再隐藏不可用项"的闪烁。原版始终可见。
+            if key is not None:
+                card.setVisible(False)
+                card.setEnabled(False)
             self.loader_rows.append((key, card, arrow, combo))
             self.loader_versions[key] = combo
 
@@ -260,11 +267,14 @@ class DownloadTab(QWidget):
             self.version_tree.topLevelItem(i).setExpanded(False)
         self.status_label.setText(f"已选版本:{self.mc}")
         self.menu.setCurrentRow(1)
+        # 按新版本重新检测各加载器可用性,决定显示哪些卡片
+        self._refresh_loader_cards()
 
     # ================= 菜单切换 =================
     def _switch_panel(self, row):
         self.stack.setCurrentIndex(row)
         if row == 1 and self.mc:
+            self._refresh_loader_cards()   # 打开加载器面板时按版本刷新卡片可见性
             self._request_loader_versions(self.loader_key)   # 只刷当前加载器,异步
         elif row == 2:
             self._request_shader()
@@ -312,6 +322,12 @@ class DownloadTab(QWidget):
 
     # ================= 加载器 =================
     def _select_loader(self, key):
+        # 防御:若目标加载器在当前版本已知不可用,拒绝切换(卡片已隐藏,正常点不到,
+        # 但防止代码/异步回调误触发)。原版(None)始终允许。
+        if key is not None and self.mc and key in self.loader_available \
+                and self.loader_available[key].get("mc") == self.mc \
+                and not self.loader_available[key]["ok"]:
+            return
         self.loader_key = key
         for k, card, _a, _c in self.loader_rows:
             card.setChecked(k == key)
@@ -381,6 +397,14 @@ class DownloadTab(QWidget):
         combo.setEnabled(True)
         combo.setCurrentIndex(0)
 
+    def _loader_versions_of(self, key: str) -> list:
+        """返回某加载器在 self.mc 下的可用版本列表(fabric/forge/neoforge)。"""
+        if key == "fabric":
+            return list_fabric_loaders(self.mc)
+        if key == "forge":
+            return list_forge_versions(self.mc)
+        return list_neoforge_versions(self.mc)
+
     def _request_loader_versions(self, key=None):
         """异步加载某加载器的版本列表(只刷 key,不重复请求其他加载器)"""
         key = self.loader_key if key is None else key
@@ -407,6 +431,50 @@ class DownloadTab(QWidget):
             return list_neoforge_versions(self.mc)
 
         self._async(ck, fetch, lambda vs, c=combo: self._fill_loader_combo(c, vs))
+
+    # ================= 加载器卡片可用性(按版本决定显示哪些卡片) =================
+    def _refresh_loader_cards(self):
+        """按当前版本决定哪些加载器卡片可见。
+        对每个非原版加载器异步检测版本可用性;有版本则显示卡片,无版本则隐藏。
+        版本切换/加载器面板打开时调用;结果回主线程后调用 _apply_loader_availability。
+        先全部隐藏非原版卡片,再逐个按可用性显示,避免"先显示再隐藏"或切换版本时的残留。"""
+        if not self.mc:
+            return
+        # 先隐藏非原版卡片(切换版本/首次进入时清掉残留可见状态;可用项稍后回填)
+        for key, card, _arrow, _combo in self.loader_rows:
+            if key is None:
+                card.setVisible(True)
+                card.setEnabled(True)
+            else:
+                card.setVisible(False)
+                card.setEnabled(False)
+        # 逐个非原版加载器:命中缓存直接显示,否则异步检测后显示
+        for key, card, _arrow, _combo in self.loader_rows:
+            if key is None:
+                continue
+            if key in self.loader_available and self.loader_available[key].get("mc") == self.mc:
+                self._apply_loader_availability(key, card, self.loader_available[key]["ok"])
+                continue
+            if key in self._loader_checking:
+                continue
+            self._loader_checking.add(key)
+            ck = ("loader", key, self.mc)   # 与版本下拉复用同一 cache_key,避免重复下载
+            self._async(ck, lambda k=key: self._loader_versions_of(k),
+                        lambda vs, k=key, c=card: self._on_loader_availability(k, vs, c))
+
+    def _on_loader_availability(self, key, versions, card):
+        """异步检测回调:记录可用性并应用显示/隐藏。"""
+        self._loader_checking.discard(key)
+        ok = bool(versions)
+        self.loader_available[key] = {"mc": self.mc, "ok": ok}
+        self._apply_loader_availability(key, card, ok)
+        # 若当前选中的加载器变为不可用,回退到"原版",避免状态停留在隐形的加载器上
+        if not ok and self.loader_key == key:
+            self._select_loader(None)
+
+    def _apply_loader_availability(self, key, card, ok):
+        card.setVisible(ok)
+        card.setEnabled(ok)
 
     # ================= 光影 =================
     def _request_shader(self):

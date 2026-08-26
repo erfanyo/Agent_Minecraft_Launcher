@@ -11,6 +11,78 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
+## [v0.4.0] - 2026-08-26
+
+> 📄 用户向摘要版见 `RELEASE_NOTES_0.4.0.md`(面向玩家/朋友的大白话版本)。
+
+### 🛠 崩溃诊断 · 自主修复回路(进阶②)
+- 新增技能「崩溃诊断·自主修复回路」(进阶、默认关):AI 诊断出崩溃原因后,对**可自动修复项**
+  (内存不够→`set_setting` 加内存 / 冲突/损坏 Mod→`install_mod` 重装兼容版 / 实例乱→先备份再建新实例)
+  在**用户同意 + 工作区可写**时**直接动手并验证**;改不了的(显卡驱动/硬件/需删存档)明确说明,不硬来。
+- 铁律:写操作前先经用户同意 + 确认有「工作区可写」权限;动手前先 `backup_instance` 备份;
+  **绝不删除/覆盖用户存档、世界、配置**;同一修复项最多试 1~2 次,失败停并回退到修改意见清单/云端深度诊断。
+- 配套:云端工具挂载新增 `crashrepair` 组(崩溃/诊断/修复关键词命中→挂上 install_mod/install_mods/
+  set_setting/backup_instance/install_instance 写工具),`CLOUD_MAX_TOOLS` 10→14;工具执行器仍按
+  `ai_actions` 校验(readonly 拒写 / workspace_write 放行,已实测)。
+
+### 🧩 bridge-mod 支持扩展
+- **forge 1.20.1**:bridge-mod 在 Forge 1.20.1(47.1.3)下**编译+实测通过**(方案B:仅指令口+/ai;
+  ModDevGradle `legacyforge` 插件)。`mods.toml` 修正为 Forge 格式(`javafml` / `loaderVersion [47,)`)。
+- **bridge-mod 自动发现(以后发新版免改启动器)**:`bridge_mod_dist.py` 改为**按文件名模式自动发现**
+  jar(`agentmc-bridge-{loader}-{mc}-{ver}.jar`),顺序为 离线内置(_MEIPASS) → 本地 `bridge-mod/dist` →
+  GitHub Releases(在线按名字匹配)→ 版本表兜底(仅作 sha1 兜底)。新版本/新加载器/新 MC 版本
+  只要发布 jar(或丢进 dist)即可识别,**无需改本文件**。
+- **一键配置明确化**:版本兼容 → 自动下载安装;不兼容 → 明确提示"暂不兼容",并引导可改走 RCON 临时方案;
+  自动兜底(自动选择)在 bridge-mod 不兼容时会提示原因再走 RCON。
+- **`check_bridge_mod` 接入一键配置(版本更新检测)**:一键配置 bridge-mod 现在区分
+  `not_installed / outdated / up_to_date` 三态——已装且最新 → 提示就绪;**已装但版本旧 → 提示"可更新到最新",一键覆盖旧 jar**;
+  未装 → 下载。三个入口(专用 bridge / 自动选择)统一走这套检测,不再只要"装了 bridge jar 就当作就绪"。
+- **RCON 自动开启反射修正(`RconAutoOpener`)**:原反射找 `create(MinecraftServer,String)` /
+  `create(ServerInterface,String,int)` 签名,但 Forge 1.20.1 下工厂是**单参**
+  `RconThread.create(ServerInterface)`(srg `m_11615_`;生产运行时为 srg 名),且只有 `DedicatedServer`
+  implements `ServerInterface`。实测确认:**专用服务器 vanilla 已自行开 RCON**(enable-rcon=true 时
+  `DedicatedServer.initServer()` 调 `RconThread.m_11615_(ServerInterface)`,日志 "RCON running")。
+  故修正为:专用服务器 → 识别 vanilla 已管理并跳过(不再误报 "signature not found" / 重复开启端口占用);
+  非专用(单人集成,1.20.1 不是 ServerInterface)→ 记日志跳过。主通道仍为本地指令口(TCP 26100)。
+- **离线通道取 jar bug 修复**:内置 `_MEIPASS/bridge-mod/` 通道原来把 Forge 误判成 fabric 去匹配
+  (`want = "neoforge" if neoforge else "fabric"`),导致 Forge 实例离线通道找不到 jar;改为按实际 loader 匹配。
+- **jar 资源包元数据**:补 `pack.mcmeta`(1.20.1 = pack_format 15;1.21.1 NeoForge = 18),
+  消除客户端 "Missing metadata in pack / failed to load a valid ResourcePackInfo" 告警/报错。
+- **实测**:Forge 1.20.1 服务端启动后 mod 正常加载;BridgeCore 启动本地指令口(TCP :26100)+ token.txt
+  + items/recipes 导出;经 TCP 发 `weather rain` 写 command_result.json、发 `/ai` 写 ai_request.json,
+  写入 ai_reply.json 后回显 `[AI] …` 且被消费。
+- **游戏内 AI 端到端验证**:启动器侧 `in_game_ai.py`(`InGameAI` 轮询 + `make_answerer` 按 `ai_in_game`
+  路由、强制挂指令工具)离屏实测通过 —— ai_request.json → answer_fn → ai_reply.json round-trip 正确,带 instance 上下文。
+
+### 🔄 实例列表「实例(共x个)」自动刷新
+- 用 `QFileSystemWatcher` 监听 `versions/` 目录:子文件夹**新增/删除**(外部放的实例、导入的整合包、
+  删除的实例)→ 防抖后自动刷新实例列表与「实例(共x个)」计数,无需手动点刷新/切页。
+- 防抖(500ms)合并连续变动;`_tidy_base_versions` 迁移只做一次,不触发自身死循环;
+  切换游戏目录后重建监听指向新 `versions/`。
+- 实测:temp 目录下新建实例目录 → 计数 0→1 自动刷新;删除 → 1→0。
+
+### 🌙 深色模式修复(实例详情 / 更新日志)
+- **实例详情 · Mod 列表**:Mod 项文字原本硬编码黑色(`Qt.GlobalColor.black`),深色模式下看不清;
+  改为用主题文字色(`text_color()` 启用 / `muted_color()` 禁用),列表套用 `list_style()` 深色适配。
+- **更新日志**:`changelog_html()` 原先 `<li>`/body 颜色硬编码(黑/#888888),深色模式下正文黑字;
+  改为颜色取自 `ui_style.current_color()`(text/muted/accent),深浅色/自定义主题自适应;
+  「正在拉取/拉取失败」提示也改用 `muted_color()`。
+- 数据包/光影包列表(instance_manager `_dir_list_widget`)同样套用 `list_style()` 深色适配。
+
+### 🎨 图标系统:emoji → 主题化单色 SVG(灵感 #17 第一批)
+- 新增 `theme_icon.py` + `icons/*.svg`:**单色线框图标,渲染后按 `current_color('accent')` 染色**,
+  深浅色 / 自定义主题 / 色盲模板 下图标颜色自动跟随,风格统一、极简。
+  内置兜底(内嵌 SVG 表),打包后仍可用;`icons/` 文件优先(易编辑)。
+- 接入点:`LeftMenu.add_item(label, icon)` 支持**主题图标名**(渲染成 QIcon,不再污染文字);
+  下载新资源左侧菜单 8 项(首页/实例/整合包/Mod/光影/数据/资源/插件)已换用主题图标,去掉 emoji。
+- 主题刷新联动:换色时 `recolor_icons()` 清缓存,图标立即用新配色;PyInstaller spec 加 `icons/*.svg` 打包。
+- 说明:文字内容里的 emoji(资源科普、AI 系统提示等)属内容文本,不是 UI 图标,本批不强制替换。
+
+### 🔧 加载器卡片按版本显隐(下载新资源)
+- 选版本后**异步检测各加载器是否有可用版本**,再决定显示哪些卡片:不可用的直接隐藏,
+  不再"先显示 4 张再收起"。切换版本先从无残留再按可用性回填。
+  (例:1.20.1 隐藏 NeoForge 卡片、显示 Forge;1.21.1 隐藏 Forge、显示 NeoForge)
+
 ## [v0.3.0] - 2026-08-24
 
 ### 🧠 AI 助手(本地模型全链路)

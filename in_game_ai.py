@@ -113,39 +113,72 @@ class InGameAI:
 
 
 # ---- 便捷:在游戏运行期间轮询,用启动器 AI 作答 ----
-def make_answerer(win=None, settings: dict | None = None):
-    """返回 answer_fn(text, instance) -> str:用启动器 AI(按 ai_in_game)同步回答游戏内提问。
+def _in_game_tools():
+    """游戏内可用的 AI 工具子集(从 assistant.TOOLS 里挑):以指令/查询为主,不含写操作。"""
+    try:
+        from assistant import TOOLS
+    except Exception:
+        return None
+    want = {"send_game_command", "get_command_guide", "get_recipe_path",
+            "compare_items", "get_key_bindings", "get_settings",
+            "list_instances", "ask_user"}
+    return [t for t in TOOLS if t.get("function", {}).get("name") in want] or None
 
-    - 云端(ai_in_game=cloud 或默认):用 settings 的 cloud base/key/model 直连 chat_completion;
-    - 本地(local):走内置 GrammarToolEngine(约 500MB,需已下载);
-    - off:返回引导提示。
+
+def _in_game_system(instance: str) -> str:
+    return ("你是 Agent Minecraft 启动器的 AI,在游戏内回答玩家。"
+            f"当前正在运行的实例是「{instance}」,你可以对它执行操作(如 send_game_command 发指令改天气/召唤生物)。"
+            "用中文简洁回答,能执行就直接执行,不要只说不做。执行结果要反馈给玩家。")
+
+
+def _make_cloud_executor(instance: str, base_exec):
+    """在 build_executor 基础上,把 send_game_command 强制指向当前实例(避免 AI 写错实例)。"""
+    def executor(name, args):
+        if name == "send_game_command":
+            args = dict(args or {})
+            args["instance"] = instance
+            args.setdefault("game_dir", paths.GAME_DIR)
+        return base_exec(name, args)
+    return executor
+
+
+def _in_game_ctx(win, instance: str, settings: dict) -> str:
+    """游戏内 AI 的系统提示 = 启动器 ai_context(含 skill 系统)+ 当前实例说明。"""
+    parts = []
+    if win is not None and hasattr(win, "ai_context"):
+        try:
+            parts.append(win.ai_context())
+        except Exception:
+            pass
+    if not parts:
+        parts.append("你是 Agent Minecraft 启动器里内置的 AI 助手,用中文简洁回答玩家。")
+    parts.append(
+        f"你正在【游戏内】响应玩家,当前运行实例:「{instance}」。"
+        "玩家不用切出游戏。下面这些工具你【应该】能用,能执行就直接执行、不要只给指南:"
+        "send_game_command(向该实例发指令,如 weather rain 改雨天 / summon 召唤 / give 给物品)、"
+        "get_command_guide(查指令写法)、get_recipe_path(查配方)、compare_items(比物品)、"
+        "get_key_bindings(查按键)。执行结果要反馈给玩家。")
+    return "\n\n".join(parts)
+
+
+def make_answerer(win=None, settings: dict | None = None):
+    """返回 answer_fn(text, instance) -> str:游戏内 AI,按启动器 AI 路由(ai_strategy)作答。
+
+    开关(ai_in_game):off=关闭;其它值(如 on)=打开 → 走 assistant.route_answer,
+    与启动器 AI 同一套路由,并始终挂上指令相关工具(send_game_command 等)。
     """
+    _FORCE_TOOLS = ["send_game_command", "get_command_guide", "get_recipe_path",
+                    "compare_items", "get_key_bindings"]
+
     def answer(text: str, instance: str) -> str:
         try:
             cfg = settings if settings is not None else \
                 (__import__("settings").load_settings())
-            mode = cfg.get("ai_in_game", "off")
-            if mode == "off":
-                return "游戏内 AI 未开启(设置→AI 助手→游戏内 AI)。"
-            base = cfg.get("ai_cloud_base_url") or cfg.get("ai_base_url") or ""
-            key = cfg.get("ai_cloud_api_key") or cfg.get("ai_api_key") or ""
-            model = cfg.get("ai_cloud_model") or cfg.get("ai_model") or ""
-            if base and key and model:
-                from assistant import chat_completion
-                messages = [{"role": "system", "content":
-                             "你是 Agent Minecraft 启动器的 AI,用中文简短回答用户(≤3 句)。"},
-                            {"role": "user", "content": text}]
-                return chat_completion(messages, base.rstrip("/"), key, model)
-            # 无云端 → 本地模型(需已下载)
-            if mode == "local":
-                from local_ai import GrammarToolEngine
-                eng = GrammarToolEngine()
-                try:
-                    eng.start()
-                    return eng.chat(text, n_predict=256, temperature=0.3)
-                except Exception as e:
-                    return f"(本地模型不可用:{type(e).__name__})"
-            return "(未配置云端 AI,无法游戏内回答。)"
+            if str(cfg.get("ai_in_game", "off") or "off").strip().lower() == "off":
+                return "游戏内 AI 未开启(设置→AI 助手→开启游戏内 AI)。"
+            from assistant import route_answer
+            ctx = _in_game_ctx(win, instance, cfg)
+            return route_answer(text, cfg, context=ctx, force_tools=_FORCE_TOOLS)
         except Exception as e:
             return f"(游戏内 AI 错误:{type(e).__name__})"
     return answer

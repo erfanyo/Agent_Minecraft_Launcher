@@ -402,8 +402,8 @@ def compare_items(attribute: str, top_n: int = 10, game_dir: str = None) -> str:
     import recipe_graph
     rd = recipe_graph.load_bridge_data(_gd(game_dir))
     if rd is None:
-        return ("还没有物品数据:需要 bridge-mod 导出 .bridge/items.json"
-                "(装 bridge-mod 进一次世界即可)")
+        return ("该实例未导出物品属性数据(.bridge/items.json)——较老版本的 bridge-mod 不导出此项。"
+                "我若凭通用知识/模型判断,结果【可能不准确】。请告诉用户:该版本的物品属性比较仅供参考。")
     rows = rd.compare_items(attribute, top_n)
     if not rows:
         return f"没有找到属性 {attribute} 的数据"

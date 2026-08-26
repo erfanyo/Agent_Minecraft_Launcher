@@ -8,11 +8,14 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)   // fabric 的 Loom 需项目仓库(否则映射解析失败)
     repositories {
         mavenCentral()
         maven("https://maven.fabricmc.net")
         maven("https://maven.minecraftforge.net")
-        maven("https://maven.neoforged.net/releases")
+        maven("https://maven.neoforged.net/releases") {   // neoforge 以 ivy 形式发布,允许 artifact 元数据
+            metadataSources { mavenPom(); artifact() }
+        }
         maven("https://libraries.minecraft.net")
     }
 }

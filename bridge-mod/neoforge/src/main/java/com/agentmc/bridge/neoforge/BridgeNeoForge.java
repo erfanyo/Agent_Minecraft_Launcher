@@ -1,5 +1,6 @@
 package com.agentmc.bridge.neoforge;
 
+import com.agentmc.bridge.AiChat;
 import com.agentmc.bridge.BridgeCore;
 import com.agentmc.bridge.KeyBindingExporter;
 import net.minecraft.client.Minecraft;
@@ -10,6 +11,7 @@ import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 
@@ -30,6 +32,7 @@ public class BridgeNeoForge {
         var gameBus = NeoForge.EVENT_BUS;
         gameBus.addListener(this::onServerStarted);
         gameBus.addListener(this::onServerStopping);
+        gameBus.addListener(this::onRegisterCommands);
         if (FMLEnvironment.dist == Dist.CLIENT) {
             gameBus.addListener(this::onClientTick);
             gameBus.addListener(this::onScreenClosed);
@@ -42,6 +45,14 @@ public class BridgeNeoForge {
 
     private void onServerStopping(ServerStoppingEvent event) {
         BridgeCore.onServerStopped();
+    }
+
+    /** 注册 /ai 指令(与 fabric 的 CommandsMixin 等效,走 neoforge 事件) */
+    private void onRegisterCommands(RegisterCommandsEvent event) {
+        try {
+            event.getDispatcher().register(AiChat.command());
+        } catch (Exception ignored) {
+        }
     }
 
     /** 客户端首帧:导出按键绑定(options 就绪后) */

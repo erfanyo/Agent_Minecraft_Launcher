@@ -246,6 +246,43 @@ class CrashDiagnosisGuide(Skill):
                 "④ 用中文;专业术语(完整异常类名、Mod 名、文件路径、版本号)保留原样,方便定位。")
 
 
+class CrashRepairLoop(Skill):
+    """崩溃诊断后的【自主修复回路】:对可自动修复项,在用户同意+有写权限时直接动手,并验证结果。"""
+    id = "crash_repair_loop"
+    name = "崩溃诊断 · 自主修复回路(进阶)"
+    description = ("诊断出崩溃原因后,若修复项属于 AI 可自动执行的(改设置/重装 Mod/加内存/干净重装),"
+                   "在用户同意且有「工作区可写」权限时可直接调用工具修复,并验证是否解决;"
+                   "改不了的(硬件/驱动/缺资源)则明确说明,不硬来。")
+    category = "运行辅助"
+    default_enabled = False   # 进阶、涉及改动,默认关,用户按需开启
+
+    def ai_hint(self) -> str:
+        return ("【崩溃诊断·自主修复回路】在输出【修改意见清单】之后,对每条修复项判断:\n"
+                "到底能不能由【你(启动器 AI)直接动手修】(用现有工具),还是必须用户自己做。\n"
+                "\n"
+                "【你能自动修的(需先征得用户同意 + 你有「工作区可写」权限)】\n"
+                "· 内存不够(OutOfMemoryError)→ set_setting(memory_gb=更大值),让用户重启游戏生效;\n"
+                "· Java 版本不适配/缺失 → 用启动器换/装对应 Java(可配合设置),或明确让用户来;\n"
+                "· 某 Mod 与当前版本/加载器冲突或损坏 → 先 backup_instance 备份,再 install_mod(slug) "
+                "重装一个兼容版本;若装不上就明确说,别反复试;\n"
+                "· 实例损坏/配置乱 → 先备份,再说明「干净重装该实例」需要几步(创建新实例+重装 Mod),\n"
+                "  可主动帮用户创建新实例,但**绝不覆盖/删除用户原有实例或存档**;\n"
+                "· 启动配置错误 → set_setting / 走启动器设置改。\n"
+                "\n"
+                "【只能用户自己做的(不要硬来,说不清就不用)】\n"
+                "· 显卡驱动 / 系统更新 / 硬件;缺失的原版资源文件(需重置/重新下载);杀软误删;\n"
+                "· 需要用户在游戏内操作(如 进游戏改画质);涉及删用户存档/世界数据。\n"
+                "\n"
+                "【铁律】\n"
+                "① 一切写操作前**先经用户同意**(一句话说明要改什么、为什么);\n"
+                "② 写操作前先确认你有「工作区可写」权限(只读权限 → 只给清单,不动手);\n"
+                "③ 动手前**先备份**(backup_instance),绝不先删后补;\n"
+                "④ **绝不删除/覆盖用户的存档、世界、配置**;只做可逆改动;\n"
+                "⑤ 改完**验证**:重读日志/重看是否还报同样错/确认设置生效;没解决就如实说,并回到修改意见清单;\n"
+                "⑥ 同一修复项最多试 1~2 次,失败就停,交给用户/升级到云端深度诊断。")
+
+
+
 class McNameNormalize(Skill):
     """本地名称归一化:查 wiki/资料库前,先把中文/口语叫法解析成规范英文名+id"""
     id = "mc_name_normalize"
@@ -336,7 +373,7 @@ class CloudAIConfigGuide(Skill):
 
 BUILTIN_SKILLS = [AutoRestart, BackupReminder, CommandGuide, TaskSplit,
                   BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide,
-                  McNameNormalize, PluginCreationGuide]
+                  CrashRepairLoop, McNameNormalize, PluginCreationGuide]
 
 
 # ================= 管理器 =================

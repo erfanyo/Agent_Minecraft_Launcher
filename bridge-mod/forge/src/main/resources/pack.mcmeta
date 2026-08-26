@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "description": "AgentMC Bridge: local command entry + recipe/item data export + auto RCON",
+    "pack_format": 15
+  }
+}

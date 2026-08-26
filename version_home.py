@@ -514,7 +514,7 @@ class VersionHome(QWidget):
 
         # 初始态:显示"正在拉取",加载完成后替换
         self.changelog_view.setHtml(
-            "<p style='color:#888888'>🔄 正在从 GitHub 拉取更新日志…</p>")
+            f"<p style='color:{muted_color()}'>🔄 正在从 GitHub 拉取更新日志…</p>")
         self.changelog_status.setText(
             t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md",
               "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md"))
@@ -525,7 +525,7 @@ class VersionHome(QWidget):
         self.changelog_status.setText(
             t("正在从 GitHub 拉取…", "Fetching from GitHub…"))
         self.changelog_view.setHtml(
-            "<p style='color:#888888'>🔄 正在从 GitHub 拉取更新日志…</p>")
+            f"<p style='color:{muted_color()}'>🔄 正在从 GitHub 拉取更新日志…</p>")
 
         def worker():
             try:
@@ -549,7 +549,7 @@ class VersionHome(QWidget):
     def _on_changelog_failed(self, err: str):
         """从 GitHub 拉取失败 → 显示友好提示 + 重试入口。"""
         self.changelog_view.setHtml(
-            "<p style='color:#888888'>暂时拉不到更新日志(网络或 GitHub 不可用)。"
+            f"<p style='color:{muted_color()}'>暂时拉不到更新日志(网络或 GitHub 不可用)。"
             "<br>可点击右上角「刷新」重试,或检查网络。</p>")
         self.changelog_status.setText(t("拉取失败,请检查网络后点「刷新」",
                                         "Fetch failed, check network and Refresh"))

@@ -8,6 +8,7 @@ a = Analysis(
     datas=[
         ('AMCL/runtime/llama-cpp/*', 'runtime/llama-cpp'),
         ('bridge-mod/dist/*.jar', 'bridge-mod'),
+        ('icons/*.svg', 'icons'),
     ],
     hiddenimports=[],
     hookspath=[],

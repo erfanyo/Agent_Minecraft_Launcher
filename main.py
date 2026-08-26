@@ -20,7 +20,7 @@ from datetime import datetime
 
 import requests
 
-from PySide6.QtCore import QObject, Qt, QSize, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, Qt, QSize, QTimer, QUrl, Signal, QFileSystemWatcher
 from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -421,6 +421,9 @@ class MainWindow(QMainWindow):
         self.refresh_instances()
         self.statusBar().showMessage("就绪")
 
+        # 监听 versions/ 目录文件变动 → 实例列表自动刷新(如外部新增/删除实例文件夹)
+        self._setup_instance_watcher()
+
         # 左下角下载指示器:下载时显示 ⬇ 圆环进度,点击查看详情
         self._dl_log = []                      # 本次下载的状态消息流
         self._dl_progress = (0, 1)
@@ -470,6 +473,7 @@ class MainWindow(QMainWindow):
         self.skill_mgr.settings = s
         self.resource_center.set_ui_mode(s.get("ui_mode", "beginner"))
         self.refresh_instances()   # 游戏目录可能被改了,重新扫描
+        self._watch_versions_dir()   # 游戏目录若变更,把监听指向新的 versions/
         self.statusBar().showMessage("设置已保存")
 
     def open_update_dialog(self):
@@ -1283,10 +1287,10 @@ class MainWindow(QMainWindow):
             cmd = [javaw] + cmd[1:]
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
-        # 游戏内 AI 通道:off/cloud → 游戏启动前卸载本地模型(llama-server),把内存让给游戏;
-        # local → 保持本地模型加载(游戏内 AI 通道,规划中)
-        ai_in_game = self.settings.get("ai_in_game", "off")
-        if ai_in_game != "local":
+        # 游戏内 AI 通道:关闭 → 游戏启动前卸载本地模型(llama-server),把内存让给游戏;
+        # 开启 → 可能用本地模型(看 ai_strategy),保持加载(游戏内 AI 通道)
+        ai_in_game = str(self.settings.get("ai_in_game", "off") or "off").strip().lower()
+        if ai_in_game == "off":
             self.ai_dock.stop_local_engine()
 
         try:
@@ -1303,6 +1307,8 @@ class MainWindow(QMainWindow):
         # 运行实例指示:登记并刷新底部标签
         self._running_instances.add(d["id"])
         self._update_running_label()
+        # 游戏内 AI 通道(ai_in_game=cloud/local):启动 .bridge/ai_request↔ai_reply 轮询器
+        self._start_in_game_ai(v["id"])
 
         # 通知技能系统:游戏已启动(自动重启等技能开始工作)
         self.skill_mgr.on_game_start(self.game_process, self._running_instance_id)
@@ -1353,6 +1359,7 @@ class MainWindow(QMainWindow):
                     self.ai_dock.set_game_stopped()
                 except Exception:
                     pass
+                self._stop_in_game_ai()
                 if code not in (0, None):
                     self._auto_debug(code)   # 异常退出 → 自动收集日志给 AI 分析
                 elif self._detect_log_crash():
@@ -1361,6 +1368,32 @@ class MainWindow(QMainWindow):
                 return
             self.log_view.appendPlainText(line)
             self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(自动重启等)
+
+    def _start_in_game_ai(self, instance_id: str):
+        """游戏内 AI(ai_in_game 开启):启动 InGameAI 轮询器(读 .bridge/ai_request.json)。
+        目标实例在 launch_selected 里用 v['id'](游戏目录名)。"""
+        try:
+            if str(self.settings.get("ai_in_game", "off") or "off").strip().lower() == "off":
+                return
+            from in_game_ai import InGameAI, make_answerer
+            ai = InGameAI(instance_id,
+                          make_answerer(win=self, settings=self.settings),
+                          poll=1.0, game_dir=paths.GAME_DIR)
+            ai.start()
+            self._in_game_ai = ai
+            self.statusBar().showMessage(
+                f"游戏内 AI 已开启({instance_id}),进游戏敲 /ai 试试")
+        except Exception as e:
+            self.statusBar().showMessage(f"游戏内 AI 启动失败: {type(e).__name__}: {e}")
+
+    def _stop_in_game_ai(self):
+        ai = getattr(self, "_in_game_ai", None)
+        if ai:
+            try:
+                ai.stop()
+            except Exception:
+                pass
+            self._in_game_ai = None
 
     def _toggle_log(self, checked: bool):
         """显示游戏日志:切到「实例详情」标签页并选中「游戏日志」项(若有实例)。"""
@@ -1537,6 +1570,48 @@ class MainWindow(QMainWindow):
 
         # 4) 资源中心的目标实例卡片(Mod/光影/数据包浏览器)
         self.resource_center.refresh_browser_instances(shown)
+
+    # ---- 实例目录文件变动 → 自动刷新实例列表 ----
+    def _setup_instance_watcher(self):
+        """监听 versions/ 目录:子文件夹新增/删除 → 防抖后刷新「实例(共x个)」列表。"""
+        self._inst_watcher = None
+        self._inst_refresh_timer = QTimer(self)
+        self._inst_refresh_timer.setSingleShot(True)
+        self._inst_refresh_timer.setInterval(500)   # 防抖:多次文件变动合并成一次刷新
+        self._inst_refresh_timer.timeout.connect(self._on_instance_dir_debounced)
+        try:
+            self._inst_watcher = QFileSystemWatcher(self)
+            self._inst_watcher.directoryChanged.connect(self._on_instance_dir_changed)
+            self._watch_versions_dir()
+        except Exception as e:
+            self._inst_watcher = None
+            self._log_feedback(f"实例目录监听初始化失败:{e}", "警告")
+
+    def _watch_versions_dir(self):
+        """(重新)把监听指向当前游戏目录的 versions/。游戏目录变更时也调用。"""
+        if self._inst_watcher is None:
+            return
+        try:
+            dirs = self._inst_watcher.directories()
+            if dirs:
+                self._inst_watcher.removePaths(dirs)
+            versions_dir = os.path.join(paths.GAME_DIR, "versions")
+            if os.path.isdir(versions_dir):
+                self._inst_watcher.addPath(versions_dir)
+        except Exception as e:
+            self._log_feedback(f"监听 versions/{os.path.basename(paths.GAME_DIR)} 失败:{e}", "警告")
+
+    def _on_instance_dir_changed(self, _path: str):
+        """versions/ 目录有变动:重启防抖计时器(合并连续变动)。"""
+        # 正在游戏内/下载等忙时也允许,但防抖+避免 TidyBase 迁移又触发自身
+        self._inst_refresh_timer.start()
+
+    def _on_instance_dir_debounced(self):
+        """防抖到期:确实有变动才刷新。避免 refresh→tidy→目录变动→refresh 死循环。"""
+        try:
+            self.refresh_instances()
+        except Exception as e:
+            self._log_feedback(f"实例目录变动刷新失败:{e}", "警告")
 
     def _resource_download(self, hit, version, inst, target_dir, sub_dir):
         """资源中心下载回调:把项目下载到目标实例的对应目录(mods/shaderpacks/...)"""
@@ -1809,29 +1884,45 @@ class MainWindow(QMainWindow):
         self._one_click_bridge_for(inst)
 
     def _one_click_bridge_for(self, inst):
-        """一键配置 bridge-mod(本地指令口,推荐):检测 → 确认 → 自动下载安装"""
+        """一键配置 bridge-mod(本地指令口,推荐):检测 → 确认 → 自动下载安装。
+        兼容(能自动发现该加载器+版本)则下载;不兼容 → 明确提示 + 说明可改走 RCON。
+        已装但版本旧(check_bridge_mod=outdated)→ 提示可更新到最新。"""
         import bridge_mod_dist
         inst_dir = self.game_dir_for(inst["id"])
-        if bridge_mod_dist.has_bridge_mod(inst_dir):
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
-                                    "✅ bridge-mod 已就绪:重进世界即可用本地指令口\n"
-                                    "(无需'对局域网开放',指令结果可精确回传)。")
-            return
         loader = inst.get("loader")
         if loader not in ("fabric", "forge", "neoforge"):
             QMessageBox.information(self, f"一键配置 · {inst['id']}",
                                     "该实例没有加载器(原版),bridge-mod 是 mod 需要加载器。\n"
                                     "先给这个实例装个 Fabric/Forge 等加载器再回来。")
             return
+        status = bridge_mod_dist.check_bridge_mod(inst_dir, loader, inst["base"])
+        if status == "up_to_date":
+            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+                                    "✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n"
+                                    "(无需'对局域网开放',指令结果可精确回传)。")
+            return
+        if status == "outdated":
+            ret = QMessageBox.question(
+                self, f"一键配置 · {inst['id']}",
+                f"⚠️ 检测到已装 bridge-mod 但版本较旧({inst['base']}+{loader})。\n\n"
+                "自动更新到最新版吗?(会覆盖旧的 jar)")
+            if ret == QMessageBox.StandardButton.Yes:
+                self._install_bridge_mod(inst)
+            return
+        # status == "not_installed" (或不兼容组合的兜底检查)
         info = bridge_mod_dist.bridge_mod_info(loader, inst["base"])
         if info is None:
+            # 不兼容:明确提示,并引导走 RCON 临时方案
             QMessageBox.information(
                 self, f"一键配置 · {inst['id']}",
-                f"版本表还没有 {inst['base']}+{loader} 的 bridge-mod。\n"
-                "可先手动从 GitHub Releases 下载 jar 放进实例 mods 目录。")
+                f"💡 bridge-mod 暂不兼容 {inst['base']}+{loader}(版本表/自动发现都没有这个组合)。\n\n"
+                "可以改用临时方案 RCON:功能略弱(指令结果不精确),但覆盖更多版本。\n"
+                "要换 RCON 的话,点菜单里的「一键配置 RCON」。")
             return
         ret = QMessageBox.question(self, f"一键配置 · {inst['id']}",
-                                   "未安装 bridge-mod(本地指令口,推荐)。\n\n自动下载安装吗?")
+                                   f"未安装 bridge-mod(本地指令口,推荐)。\n\n"
+                                   f"检测到 {inst['base']}+{loader} 可用的 bridge-mod v{info['version']},"
+                                   "自动下载安装吗?")
         if ret != QMessageBox.StandardButton.Yes:
             return
         self._install_bridge_mod(inst)
@@ -1877,19 +1968,26 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(msg)
 
     def _one_click_config_for(self, inst):
-        """对指定实例执行一键配置(自动:bridge-mod 优先,版本表没覆盖时备选 RCON)。
-        菜单里两个显式入口(bridge / RCON)之外的兜底逻辑。"""
+        """对指定实例执行一键配置(自动:bridge-mod 优先,不兼容则提示走 RCON)。
+        菜单里两个显式入口(bridge / RCON)之外的兜底逻辑。
+        已装但版本旧(outdated)→ 走 _one_click_bridge_for(触发更新提示)。"""
         import bridge_mod_dist
         inst_dir = self.game_dir_for(inst["id"])
-        if bridge_mod_dist.has_bridge_mod(inst_dir):
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
-                                    "✅ bridge-mod 已就绪:重进世界即可用本地指令口\n"
-                                    "(无需'对局域网开放',指令结果可精确回传)。")
-            return
-        if inst.get("loader") in ("fabric", "forge", "neoforge") \
-                and bridge_mod_dist.bridge_mod_info(inst["loader"], inst["base"]):
-            self._one_click_bridge_for(inst)
-            return
+        status = self.statusBar()
+        loader = inst.get("loader")
+        if loader in ("fabric", "forge", "neoforge"):
+            bstatus = bridge_mod_dist.check_bridge_mod(inst_dir, loader, inst["base"])
+            if bstatus != "not_installed":
+                # 已装(up_to_date / outdated)→ 交给 _one_click_bridge_for 处理(最新=提示就绪;旧=提示更新)
+                self._one_click_bridge_for(inst)
+                return
+            if bridge_mod_dist.bridge_mod_info(loader, inst["base"]):
+                self._one_click_bridge_for(inst)
+                return
+        # bridge-mod 不可用(无加载器 / 不兼容)→ 提示原因,然后走 RCON 临时方案
+        if status:
+            status.showMessage(
+                f"bridge-mod 暂不可用于 {inst['base']}+{loader or '原版'},改走 RCON 临时方案")
         self._one_click_rcon_for(inst)
 
     def _install_bridge_mod(self, inst):

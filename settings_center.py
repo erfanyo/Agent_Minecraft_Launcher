@@ -432,10 +432,16 @@ class SettingsCenter(QWidget):
         self._update_readability()
 
     def _retheme(self):
-        """自定义配色改了 → 实时重刷整应用上色(之前要重启才生效)。"""
+        """自定义配色改了 → 实时重刷整应用上色(之前要重启才生效)。
+        也清空主题化图标缓存,让图标颜色跟随新配色。"""
         try:
             from ui_style import refresh_theme
             refresh_theme()
+        except Exception:
+            pass
+        try:
+            from theme_icon import recolor_icons
+            recolor_icons()
         except Exception:
             pass
 

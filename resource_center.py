@@ -1000,17 +1000,18 @@ class ResourceCenter(QWidget):
         self._shared_dir = None
 
         # ---- 左侧菜单(独立模块 LeftMenu,无折叠) ----
+        # 图标用内置单色 SVG + 主题色(theme_icon),跟随深浅色/自定义主题;不再是 emoji。
         from left_menu import LeftMenu
         self.menu = LeftMenu(width=150)
         for label, icon in [
-                (t("首页", "Home"), "🏠"),
-                (t("实例", "Instances"), "📦"),
-                ("🎁 " + t("整合包", "Modpacks"), ""),
-                ("🧩 " + t("Mod", "Mods"), ""),
-                ("🌄 " + t("光影包", "Shaders"), ""),
-                ("🗂 " + t("数据包", "Datapacks"), ""),
-                ("🎨 " + t("资源包", "Resourcepacks"), ""),
-                ("🧩 " + t("启动器插件", "Plugins"), "")]:
+                (t("首页", "Home"), "home"),
+                (t("实例", "Instances"), "instances"),
+                (t("整合包", "Modpacks"), "modpack"),
+                (t("Mod", "Mods"), "mod"),
+                (t("光影包", "Shaders"), "shader"),
+                (t("数据包", "Datapacks"), "datapack"),
+                (t("资源包", "Resourcepacks"), "resourcepack"),
+                (t("启动器插件", "Plugins"), "utility")]:
             self.menu.add_item(label, icon)
         self.menu.itemClicked.connect(self.switch_to)
 

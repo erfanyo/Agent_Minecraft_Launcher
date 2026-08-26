@@ -238,7 +238,7 @@ def _merge_plugin_tools() -> list:
 # 云端回复最大长度(限制长回复;多轮工具调用轮次同用)
 CLOUD_MAX_TOKENS = 1024
 # 云端单请求工具数量上限(通用 + 相关组;防多组同时命中时工具集膨胀)
-CLOUD_MAX_TOOLS = 10
+CLOUD_MAX_TOOLS = 14
 
 # 任何请求都带的通用工具(交互确认 / 通用查询 / 实例查询——模型经常先查实例再执行)
 GENERAL_TOOLS = ["ask_user", "get_settings", "list_instances", "create_plugin"]
@@ -252,6 +252,7 @@ TOOL_GROUPS = {
     "recipe": ["get_recipe_path", "compare_items"],
     "command": ["send_game_command", "get_command_guide"],
     "log": ["read_instance_log", "read_crash_report", "resolve_mc_name"],
+    "crashrepair": ["install_mod", "install_mods", "set_setting", "backup_instance", "install_instance"],
     "keybind": ["get_key_bindings"],
 }
 
@@ -265,6 +266,7 @@ TOOL_GROUP_KEYWORDS = {
     "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
     "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
     "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因", "wiki", "维基", "百科", "查一下", "叫什么", "物品", "生物", "实体", "名词", "名称", "名字", "配料"],
+    "crashrepair": ["崩溃", "崩了", "崩", "闪退", "报错", "诊断", "修", "修复", "解决", "重装", "装不上", "crash", "fix"],
     "keybind": ["按键", "绑定", "键位", "keybind", "空格"],
 }
 
@@ -454,6 +456,114 @@ def chat_with_tools(messages: list, settings: dict, tools: list,
             working.append({"role": "tool", "tool_call_id": call["id"], "content": result})
     reply = "(达到最大工具轮数,已停止。可以让我继续,或拆分任务。)"
     return (reply, working) if return_messages else reply
+
+
+def _cloud_available_settings(settings: dict) -> bool:
+    """云端/兼容通道是否可用(与 dock._cloud_available 同逻辑,headless 版)。"""
+    base = (settings.get("ai_cloud_base_url") or settings.get("ai_base_url") or "").strip()
+    if not base.startswith(("http://", "https://")):
+        return False
+    h = base.split("://", 1)[-1].split("/", 1)[0].lower()
+    host = h.split("]")[0][1:] if h.startswith("[") else h.split(":")[0]
+    if host in ("localhost", "127.0.0.1", "::1") or host.startswith("127.0.0.1"):
+        return True
+    key = (settings.get("ai_cloud_api_key") or settings.get("ai_api_key") or "").strip()
+    return bool(key)
+
+
+def _cloud_settings_headless(settings: dict) -> dict:
+    s = settings
+    if (s.get("ai_cloud_base_url") or "").strip():
+        return {**s,
+                "ai_provider": s.get("ai_cloud_provider", "deepseek"),
+                "ai_base_url": s.get("ai_cloud_base_url") or "",
+                "ai_api_key": s.get("ai_cloud_api_key") or "",
+                "ai_model": s.get("ai_cloud_model") or ""}
+    return s
+
+
+def _local_model_downloaded() -> bool:
+    try:
+        import model_registry
+        return model_registry.is_downloaded(LOCAL_MODEL_ID)
+    except Exception:
+        return False
+
+
+def _cloud_chat(text: str, settings: dict, context: str = "", on_tool=None,
+                force_tools: list | None = None) -> str:
+    """云端带工具对话(复用 chat_with_tools)。context = 给 AI 的系统提示(如游戏内实例上下文)。
+    force_tools: 始终挂上的工具名(如游戏内必须的 send_game_command),不被按关键词裁剪。"""
+    cs = _cloud_settings_headless(settings)
+    if not _cloud_available_settings(cs):
+        return ("这个任务需要联网的云端模型。请在 设置→AI 助手 里配置云端服务(如 DeepSeek)。")
+    tools = mount_tools_for(text, cs) or []
+    if force_tools:
+        by_name = {t["function"]["name"]: t for t in tools}
+        for n in force_tools:
+            if n not in by_name:
+                t = next((x for x in TOOLS if x["function"]["name"] == n), None)
+                if t:
+                    tools = tools + [t]
+                    by_name[n] = t
+    sys_text = context or ("你是 Agent Minecraft 启动器的 AI 助手,用中文简洁回答用户。")
+    msgs = [{"role": "system", "content": sys_text}, {"role": "user", "content": text}]
+    exec_ = build_executor(cs)
+    try:
+        return chat_with_tools(msgs, cs, tools, exec_, max_rounds=12, on_tool=on_tool)
+    except Exception as e:
+        return f"(AI 请求失败:{type(e).__name__})"
+
+
+def route_answer(text: str, settings: dict, context: str = "", on_tool=None,
+                 force_tools: list | None = None) -> str:
+    """headless AI 路由:按 ai_strategy 用启动器 AI(规则 → 本地对话/工具 → 云端带工具)作答。
+    复用 task_router 决策 + 启动器工具链;不依赖 GUI 信号。供游戏内 AI 等复用。
+    context = 给 AI 的系统提示(可含当前实例等游戏上下文);on_tool(name,args,result) 可选回调。
+    force_tools: 始终挂上的工具名(如游戏内必须的 send_game_command)。"""
+    from task_router import route, match_rule
+    from local_ai import GrammarToolEngine, build_launcher_context
+    strategy = str(settings.get("ai_strategy", "local_first") or "local_first")
+    have_cloud = _cloud_available_settings(settings)
+    local_ready = _local_model_downloaded()
+    decision = route(text, strategy=strategy, have_cloud=have_cloud, follow_up=False)
+    target = decision.get("target", "cloud")
+    if target == "rule":
+        return match_rule(text) or "(没想好怎么答,稍后再试试)"
+
+    if target in ("chat", "local"):
+        if local_ready:
+            try:
+                eng = GrammarToolEngine()
+                eng.start()
+                try:
+                    if target == "chat":
+                        rep = eng.chat(text, context=context or build_launcher_context())
+                    else:
+                        call = eng.tool_call(text, context=context or build_launcher_context())
+                        name = call.get("name", "")
+                        args = call.get("arguments", {})
+                        if not name:
+                            return "(本地模型未给出明确动作)"
+                        if on_tool:
+                            on_tool(name, args, "(本地推理)")
+                        result = str(build_executor(settings)(name, args))
+                        rep = f"✅ 已执行「{name}」:\n{result}"
+                except Exception:
+                    rep = ""
+                if rep and rep.strip():
+                    return rep
+                if have_cloud:
+                    return _cloud_chat(text, settings, context, on_tool, force_tools)
+                return "(本地模型未成功,且无可用云端服务。)"
+            except Exception:
+                pass
+        if have_cloud:
+            return _cloud_chat(text, settings, context, on_tool, force_tools)
+        return ("本地模型未下载,且当前没有可用的云端服务。可在 设置→AI 助手 里配置云端(如 DeepSeek)。")
+
+    # cloud / ask:落云端带工具(ask_user 由 chat_with_tools 的 on_user_ask 处理;无交互通道时降级)
+    return _cloud_chat(text, settings, context, on_tool, force_tools)
 
 
 def _friendly_cloud_error(e: Exception) -> str:
@@ -966,21 +1076,29 @@ class AISettingsForm(QWidget):
         self.vision_check.setToolTip(
             "图片功能不是想开就开:要看你选的模型本身会不会\"看图\"(多模态)。\n"
             "不确定的话保持关闭最稳妥;勾了但模型不支持,发图片时会报错。")
-        self.ai_in_game = QComboBox()
-        self.ai_in_game.addItem("关闭(游戏内不用 AI,推荐)", "off")
-        self.ai_in_game.addItem("云端(游戏内用云端 AI)", "cloud")
-        self.ai_in_game.addItem("本地(游戏内用内置本地模型)", "local")
+        self.ai_in_game = QCheckBox("开启游戏内 AI(玩家在游戏里敲 /ai 问启动器 AI)")
         self.ai_in_game.setToolTip(
-            "游戏运行时是否保留本地模型:\n"
-            "· off/cloud → 游戏启动时卸载本地模型,省内存给游戏;\n"
-            "· local → 游戏启动时保持本地模型加载(游戏内 AI 通道,规划中)。")
+            "玩家在游戏里敲 /ai <描述> 问启动器 AI,不用切出游戏。\n"
+            "开启后走启动器 AI 的路由(本地/云端/混合),策略跟随启动器选的 ai_strategy\n"
+            "(云端/混合能真执行指令,如改天气;本地为纯对话)。\n"
+            "注意:必须【用启动器启动游戏】才会带起游戏内 AI 轮询。")
 
         common = QGroupBox("通用")
         cf = QFormLayout(common)
         cf.addRow("文件权限:", self.permission)
         cf.addRow("上下文窗口:", self.context_window)
         cf.addRow("图片输入:", self.vision_check)
-        cf.addRow("游戏内 AI:", self.ai_in_game)
+
+        # ---------- 游戏内 AI(独立成组,方便理解/测试) ----------
+        ai_group = QGroupBox("游戏内 AI")
+        av = QVBoxLayout(ai_group)
+        av.addWidget(self.ai_in_game)
+        ai_explain = QLabel(
+            "开启后,玩家在游戏里敲 /ai(如「/ai 把天气改为雨天」),\n"
+            "启动器 AI 会按所选策略处理(云端/混合能真执行,结果回显到游戏聊天窗;本地为纯对话)。")
+        ai_explain.setWordWrap(True)
+        ai_explain.setStyleSheet("color: #888888;")
+        av.addWidget(ai_explain)
 
         # ---------- 布局 ----------
         source_row = QHBoxLayout()
@@ -992,6 +1110,7 @@ class AISettingsForm(QWidget):
         layout.addWidget(cloud_box)
         layout.addWidget(local_box)
         layout.addWidget(common)
+        layout.addWidget(ai_group)
 
         # 联动
         self.cloud_provider.currentIndexChanged.connect(self._fill_cloud_defaults)
@@ -1037,9 +1156,8 @@ class AISettingsForm(QWidget):
         self.permission.currentIndexChanged.connect(self._on_permission_combo_changed)
         self.context_window.setValue(int(s.get("context_window", 65536) or 65536))
         self.vision_check.setChecked(bool(s.get("ai_multimodal", False)))
-        ig = s.get("ai_in_game", "off")
-        idx = self.ai_in_game.findData(ig)
-        self.ai_in_game.setCurrentIndex(idx if idx >= 0 else 0)
+        ig = str(s.get("ai_in_game", "off") or "off")
+        self.ai_in_game.setChecked(ig.strip().lower() not in ("", "off"))
         self.blockSignals(False)
         self._apply_source_visibility()    # 按策略显示云端/本地块
         self._toggle_local_visibility()    # 仅切换子区显隐,不改用户已存值
@@ -1202,7 +1320,7 @@ class AISettingsForm(QWidget):
             "ai_permission": self.permission.currentData(),
             "context_window": self.context_window.value(),
             "ai_multimodal": self.vision_check.isChecked(),
-            "ai_in_game": self.ai_in_game.currentData(),
+            "ai_in_game": "on" if self.ai_in_game.isChecked() else "off",
         }
 
 

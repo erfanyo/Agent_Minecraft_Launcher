@@ -16,6 +16,7 @@ import shutil
 import threading
 
 from PySide6.QtCore import Qt, QObject, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -178,6 +179,9 @@ class InstanceManagerDialog(QWidget):
     def _dir_list_widget(self) -> QListWidget:
         w = DropListWidget()
         w.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        # 深色模式适配:列表文字用主题色(list_style 处理),不再默认黑
+        from ui_style import list_style, set_style
+        set_style(w, list_style)
         return w
 
     # ---------- Mod 管理 ----------
@@ -223,7 +227,9 @@ class InstanceManagerDialog(QWidget):
             display = f[:-len(".disabled")] if disabled else f
             item = QListWidgetItem(("[已禁用] " if disabled else "") + display)
             item.setData(Qt.ItemDataRole.UserRole, f)
-            item.setForeground(Qt.GlobalColor.gray if disabled else Qt.GlobalColor.black)
+            # 深色模式下用主题文字色(启用=text_color,禁用=muted);不再硬编码黑
+            from ui_style import text_color, muted_color
+            item.setForeground(QColor(muted_color()) if disabled else QColor(text_color()))
             self.mods_list.addItem(item)
 
     def _open_dep_graph(self):

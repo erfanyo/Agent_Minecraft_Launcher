@@ -57,20 +57,20 @@
   - RCON(+ Lan Server Properties + 模拟按键)定位为**长期备用通道**,服务 bridge-mod 未覆盖的
     老版本/非黄金版本(详见项目规划.md 灵感 #10 勘误;game_command.py 通道:bridge → RCON → 模拟按键)
 
-- [ ] **下一版目标(2026-08-24,用户指定)**
-  - **资源中心 Mod 列表默认自动加载**:现在要动搜索框才加载列表,应打开即默认展示(体验断档)
-  - **Mod 中文名翻译对照表**:评估直接从 PCL2 开源仓库复制其 `WikiEntries.txt`(约 2.9 万条
-    slug↔中文名映射,含浏览量排行;MIT 类开源许可,需核对 LICENSE);与现有 `mod_cn.py` 本地库合并
+- [x] **下一版目标(2026-08-24,用户指定)**
+  - **资源中心 Mod 列表默认自动加载** ✅ 2026-08-26:切到资源浏览器页且搜索框为空 → 自动默认浏览(`maybe_auto_load`
+    在 `switch_to` 调用,已加载过则不重复拉取,不覆盖用户已输关键词)
+  - **Mod 中文名翻译对照表**(PCL2 `WikiEntries.txt` 合并):**未做** —— `mod_cn.py` 现为人工 curated(70+)+
+    `mod_cn_ext.json` 扩展(Modrinth Top-N + 人工通译);PCL2 开源库合并待评估 LICENSE/**暂缓**
 
 - [ ] **发版更新日志两版(2026-08-24 定)** — 打包/发布时必须同时出:① 完整技术版 changelog(现有
   `CHANGELOG.md` 风格,给开发者,含模块/commit 信息)② 「摘要」版(名义摘要、实际要求**新手能看懂**:
   大白话讲"这次更新能干嘛/对用户有啥用",不堆技术黑话,面向普通玩家/朋友)。Release / README 面向用户用摘要版。
 
-- [ ] **bridge-mod 游戏内 AI 交互入口(日程,未来)**
-  - 在 bridge-mod 里提供游戏内 AI 入口(聊天栏/快捷键 → 向启动器提问 → 回显游戏内)
-  - 通道由启动器设置 `ai_in_game` 决定:off(不用)/ cloud(走云端,游戏内辅助复杂场景)/ local(本地模型)
-  - 启动器侧需要:接收游戏内请求的本地通道(bridge 指令口扩展),后端待定
-  - 卸载联动已定:off/cloud 时游戏启动卸载本地模型;local 时常驻(见 AI规划.md §5.1)
+- [x] **bridge-mod 游戏内 AI 交互入口** ✅ 2026-08-26(launcher 侧 + mod 侧 /ai 已通)
+  - mod 侧:`/ai <内容>` 写 `.bridge/ai_request.json` → 轮询 ai_reply.json → 回显 `[AI] …`(AiChat)
+  - launcher 侧:`in_game_ai.py` `InGameAI` 轮询 + `make_answerer`(按 `ai_in_game` 路由,带指令工具)实测通过
+  - 通道由 `ai_in_game` 决定;卸载联动同 §5.1 —— **核心已做,后续细化**(如给 mod 补 /ai 用法提示等)
 
 - [ ] **D. 配方数据新鲜度**
   - 返回信息里带"数据来自 X 实例、导出于 YYYY-MM-DD HH:MM"(目前 describe_full 头部已有,可再扩展)
@@ -92,16 +92,24 @@
 ## 🧭 其他候选(用户挑选)
 
 - [ ] MCP server(让外部工具/脚本也能调用启动器能力)
-- [ ] **崩溃分析与修改意见(进阶)**
+- [x] **崩溃分析与修改意见(进阶):修改意见清单 ✅ + 自主修复回路 ✅ 2026-08-26**
   - ✅ 分析层**已具备**:`read_instance_log` / `read_crash_report` 工具(AI 可读日志/崩溃报告)+
     云端深度诊断 + 游戏异常退出自动抓日志/崩溃报告问 AI(`main.py`)
-  - 待做:① **分析结果 → 返回结构化"修改意见"清单**给用户照着改(现阶段目标);
-    ② 远期:权限内**自主修复回路**(改配置/重装 Mod 等,需与 `ai_actions` 权限联动)
+  - ✅ ① **分析结果 → 结构化"修改意见"清单**:技能「崩溃诊断·修改意见清单」(每条=改什么+为什么/怎么做,按严重度+兜底);
+    诊断触发已修复(退出码非0 / 本次新崩溃报告 / 日志含崩溃标记)
+  - ✅ ② **权限内自主修复回路**:技能「崩溃诊断·自主修复回路」——诊断后对**可自动修复项**
+    (改内存 set_setting / 重装冲突 Mod install_mod / 备份 backup_instance / 建新实例)在**用户同意 + 工作区可写**
+    时直接动手并验证;硬件/驱动/删存档等不可自动项明确说明不硬来。
+    **改不了 → 回到修改意见清单 / 升级云端深度诊断**。
+  - 配套:云端工具挂载加 `crashrepair` 组(崩溃/诊断关键词命中→挂上 install_mod/install_mods/set_setting/
+    backup_instance/install_instance 写工具),CLOUD_MAX_TOOLS 10→14;工具执行器按 ai_actions 权限校验
+    (readonly 拒写 / workspace_write 放行,已实测)。
 - [ ] 26.2 实例回归测试
-- [ ] bridge-mod 多版本支持(1.20.1 / 1.21.4)
+- [x] bridge-mod 多版本支持(1.20.1 / 1.21.4) — **1.20.1(fabric+forge)✅ 实测**;1.21.4 **未做**
+  (当前已覆盖: fabric 1.20.1/1.21.1、forge 1.20.1、neoforge 1.21.1;1.21.4 待补)
 - [ ] Forge(1.19 及以前)加载器支持
-- [ ] RconAutoOpener 反射修复(RCON 长期通道的改进:免装 Lan Server Properties 也能自动开 RCON)
-- [ ] check_bridge_mod 更新流程接入一键配置
+- [x] RconAutoOpener 反射修正 ✅ 2026-08-26(Forge 1.20.1 单参 `RconThread.create(ServerInterface)`(srg m_11615_);实测确认**专用服务器 vanilla 已自行开 RCON**,故改为识别并跳过,消除失真报错)
+- [x] check_bridge_mod 更新流程接入一键配置 ✅ 2026-08-26(一键配置 bridge-mod 区分 not_installed/outdated/up_to_date;旧版提示更新、一键覆盖)
 - [ ] ask_user 回归用例排查(ask_01/ask_02 持续 0 分,历史问题;t8/t12 评审均记录)
 - [ ] route_by_model 评审结果短时缓存(P2/P3 优化,减少重复本地推理)
 - [~] **界面模式:全面 / 摘要**(原"新手/专家",2026-08-24 初步落地:设置→界面;全面=显示资源科普/详细提示,摘要=隐藏科普/精简。**规范:以后任何 UI 改动都要适配两种模式**;对外不叫"新手/专家",免得显得看不起新手)

@@ -136,43 +136,54 @@ def changelog_html(entries: list | None = None) -> str:
 
     entries 缺省时重新从 GitHub 拉取。若仍然为空(拉取失败/网络不可用),
     返回一段说明文案,保证「更新日志」页始终有内容可读。
+
+    颜色取自 ui_style.current_color:深色/浅色/自定义主题自适应,不再硬编码黑。
     """
+    # 取主题色(文本/次要/强调),避免深色模式下正文黑字看不清
+    try:
+        from ui_style import current_color
+        text_c = current_color("text")
+        muted_c = current_color("muted")
+        accent_c = current_color("accent")
+    except Exception:
+        text_c, muted_c, accent_c = "#e7ecf5", "#8b96a8", "#5B8DEF"
+
     if entries is None:
         entries = parse_changelog_text(fetch_from_github())
     if not entries:
-        return "<p style='color:#888888'>未找到更新日志(GitHub 拉取失败或为空)。</p>"
+        return f"<p style='color:{muted_c}'>未找到更新日志(GitHub 拉取失败或为空)。</p>"
 
-    parts = ['<html><body style="font-family:Sans-Serif; font-size:13px; color:inherit;">']
+    parts = [f'<html><head></head><body style="font-family:Sans-Serif; font-size:13px; color:{text_c}; background:transparent;">']
     for entry in entries:
         title = _inline(entry["version"])
         date = _inline(entry["date"]) if entry["date"] else ""
         parts.append(
             '<h2 style="margin:6px 0 4px; padding-top:14px; '
             'border-top:1px solid #555; font-size:18px;">'
-            f"<span style='color:#5B8DEF;'>{title}</span>"
-            + (f" <span style='color:#999; font-size:12px; font-weight:normal;'>{date}</span>" if date else "")
+            f"<span style='color:{accent_c};'>{title}</span>"
+            + (f" <span style='color:{muted_c}; font-size:12px; font-weight:normal;'>{date}</span>" if date else "")
             + "</h2>")
         if entry["groups"]:
             parts.append("<ul style='margin:0 0 6px; padding-left:18px;'>")
             for group in entry["groups"]:
                 if group["title"]:
                     parts.append(
-                        f"<li style='margin-top:6px; font-weight:bold; color:#c9d7ee;'>"
+                        f"<li style='margin-top:6px; font-weight:bold; color:{accent_c};'>"
                         f"{_inline(group['title'])}</li>")
                     parts.append("<ul style='margin:2px 0 6px; padding-left:16px;'>")
                     for item in group["items"]:
-                        parts.append(f"<li style='margin:2px 0;'>{_inline(item)}</li>")
+                        parts.append(f"<li style='margin:2px 0; color:{text_c};'>{_inline(item)}</li>")
                     parts.append("</ul>")
                 else:
                     for item in group["items"]:
-                        parts.append(f"<li style='margin:2px 0;'>{_inline(item)}</li>")
+                        parts.append(f"<li style='margin:2px 0; color:{text_c};'>{_inline(item)}</li>")
             parts.append("</ul>")
         else:
             # 没有 ### 分组,直接列出条目
             parts.append("<ul style='margin:0 0 6px; padding-left:18px;'>")
             for group in entry["groups"]:
                 for item in group["items"]:
-                    parts.append(f"<li style='margin:2px 0;'>{_inline(item)}</li>")
+                    parts.append(f"<li style='margin:2px 0; color:{text_c};'>{_inline(item)}</li>")
             parts.append("</ul>")
     parts.append("</body></html>")
     return "".join(parts)
