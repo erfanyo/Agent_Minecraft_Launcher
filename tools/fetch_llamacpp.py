@@ -22,6 +22,13 @@ import zipfile
 
 import requests
 
+# Windows 默认控制台可能非 UTF-8,print 中文会 UnicodeEncodeError;强制 UTF-8
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # 让脚本能 import 项目(os_platform)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from os_platform.system import current_arch, current_os_name  # noqa: E402
