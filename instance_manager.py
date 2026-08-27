@@ -15,6 +15,7 @@ import re
 import shutil
 import threading
 
+from os_platform.openpath import open_path  # 跨平台打开文件/文件夹(替代 os.startfile)
 from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -323,7 +324,7 @@ class InstanceManagerDialog(QWidget):
 
     def _open_dir(self, path: str):
         os.makedirs(path, exist_ok=True)
-        os.startfile(path)
+        open_path(path)
 
     def _drop_to_mods(self, files: list):
         """拖到 Mod 列表区域:把文件拷贝进该实例的 mods 目录,并刷新列表。"""

@@ -70,6 +70,7 @@ from modpack import heal_instance_json  # 旧版导入的整合包 json id 修�
 from modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
 import paths  # 游戏目录(可配置,设置/引导里可改)
 from paths import GAME_DIR, RUNTIME_DIR  # 兼容旧引用(测试用);内部统一用 paths.GAME_DIR
+from os_platform.openpath import open_path  # 跨平台打开文件/文件夹(替代 os.startfile)
 from settings import load_settings, save_settings  # 启动器配置
 from skill_manager import SkillManager, SkillManagerDialog  # 技能(运行时辅助)系统
 from version_tree import fill_version_tree  # 版本树构建(与下载选项卡共用)
@@ -571,7 +572,7 @@ class MainWindow(QMainWindow):
     def open_game_dir(self):
         """打开游戏目录(所有版本共用文件的根目录)"""
         os.makedirs(paths.GAME_DIR, exist_ok=True)
-        os.startfile(paths.GAME_DIR)
+        open_path(paths.GAME_DIR)
 
     def clear_instances(self):
         """清空所有实例(versions 目录),共用文件(依赖库/资源/Java)保留"""
@@ -1756,10 +1757,10 @@ class MainWindow(QMainWindow):
         rcon_menu_item.setToolTip("临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放")
         menu.addAction("启动", self.launch_selected_instance)
         menu.addAction("备份实例", lambda: self.backup_current_instance(inst))
-        menu.addAction("打开实例目录", lambda: os.startfile(self.game_dir_for(inst["id"])))
+        menu.addAction("打开实例目录", lambda: open_path(self.game_dir_for(inst["id"])))
         mods_dir = os.path.join(self.game_dir_for(inst["id"]), "mods")
         if os.path.isdir(mods_dir):
-            menu.addAction("打开 mods 目录", lambda: os.startfile(mods_dir))
+            menu.addAction("打开 mods 目录", lambda: open_path(mods_dir))
         menu.addSeparator()
         menu.addAction("删除实例…", lambda: self._delete_instance(inst))
         menu.exec(self.instance_list.mapToGlobal(pos))

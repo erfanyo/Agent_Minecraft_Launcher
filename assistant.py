@@ -728,40 +728,14 @@ def _process_cpu_percent(pid: int, last: dict) -> float | None:
 
 
 def _cpu_temperature() -> float | None:
-    """采样 CPU/主板温度(°C)。psutil(若装了)优先;Windows 走 WMI 兜底。
-    若无 WMI 传感器 / 非 Windows / 取不到 → None(不干扰,宁可不提示)。"""
+    """采样 CPU/主板温度(°C)。委托给 platform.temperature 的跨平台可插拔实现
+    (Windows: psutil→WMI;Linux: psutil→sensors;macOS: psutil→powermetrics)。
+    取不到 → None(不干扰,宁可不提示)。"""
     try:
-        import psutil
-        temps = psutil.sensors_temperatures()
-        if temps:
-            for key in ("coretemp", "k10temp", "cpu_thermal", "acpitz",
-                        "soc_thermal", "k8temp", "zenpower"):
-                for rec in temps.get(key, []):
-                    if rec.current is not None:
-                        return float(rec.current)
-        return None
+        from os_platform.temperature import cpu_temperature
+        return cpu_temperature()
     except Exception:
-        pass
-    if os.name == "nt":
-        # WMI 热区:部分笔记本/台式才有,读取失败会静默
-        try:
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "(Get-CimInstance MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue "
-                 "| ForEach-Object { ($_.CurrentTemperature / 10.0) - 273.15 }) "
-                 "| Sort-Object -Descending | Select-Object -First 1"],
-                capture_output=True, text=True, timeout=2)
-            for line in (out.stdout or "").splitlines():
-                line = line.strip()
-                try:
-                    v = float(line)
-                except ValueError:
-                    continue
-                if 0.0 < v < 120.0:
-                    return v
-        except Exception:
-            pass
-    return None
+        return None
 
 
 def _system_available_memory_mb() -> float | None:

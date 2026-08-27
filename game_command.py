@@ -17,8 +17,12 @@ import socket
 import struct
 import time
 
-import ctypes
-from ctypes import wintypes
+import ctypes  # Windows 专属模拟按键用;wintypes 在用到时延迟导入(非 Windows 无此子模块)
+
+
+def _is_windows() -> bool:
+    import sys
+    return sys.platform.startswith("win")
 
 # ================= RCON 协议(纯 socket,无第三方依赖) =================
 # 包格式: [len:4][request_id:4][type:4][payload...][0x00][0x00]
@@ -87,9 +91,12 @@ def read_rcon_config(inst_dir: str) -> dict | None:
     return {"port": port, "password": props.get("rcon.password", "")}
 
 
-# ================= 模拟按键(Windows,通用兜底) =================
+# ================= 模拟按键(Windows 专属,通用兜底) =================
 def find_game_window(pid: int):
-    """按进程 pid 找它的主窗口句柄(可见窗口)"""
+    """按进程 pid 找它的主窗口句柄(可见窗口)。仅 Windows;其它平台返回 None。"""
+    if not _is_windows():
+        return None
+    from ctypes import wintypes
     result = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -105,28 +112,37 @@ def find_game_window(pid: int):
 
 
 def _key(vk: int, up: bool = False):
-    ctypes.windll.user32.keybd_event(vk, 0, 2 if up else 0, 0)
+    if not _is_windows():
+        return
+    try:
+        ctypes.windll.user32.keybd_event(vk, 0, 2 if up else 0, 0)
+    except Exception:
+        pass
 
 
 def send_keys_to_game(hwnd, command: str):
-    """把命令"打"进游戏:置前 → 开聊天框 → Ctrl+V 粘贴 → 回车。
-    调用前需已把命令文本放进剪贴板(支持中文)。"""
+    """把命令"打"进游戏:置前 → 开聊天框 → Ctrl+V 粘贴 → 回车。仅 Windows;其它平台无操作。"""
+    if not _is_windows():
+        return
     user32 = ctypes.windll.user32
-    user32.SetForegroundWindow(hwnd)
-    time.sleep(0.35)
-    # 打开聊天框:按 /
-    _key(0xBF)          # VK_OEM_2 = /
-    _key(0xBF, up=True)
-    time.sleep(0.25)
-    # Ctrl+V 粘贴命令(含开头的 / 或直接命令文本)
-    _key(0x11)          # Ctrl down
-    _key(0x56)          # V
-    _key(0x56, up=True)
-    _key(0x11, up=True)
-    time.sleep(0.15)
-    # 回车发送
-    _key(0x0D)          # Enter
-    _key(0x0D, up=True)
+    try:
+        user32.SetForegroundWindow(hwnd)
+        time.sleep(0.35)
+        # 打开聊天框:按 /
+        _key(0xBF)          # VK_OEM_2 = /
+        _key(0xBF, up=True)
+        time.sleep(0.25)
+        # Ctrl+V 粘贴命令(含开头的 / 或直接命令文本)
+        _key(0x11)          # Ctrl down
+        _key(0x56)          # V
+        _key(0x56, up=True)
+        _key(0x11, up=True)
+        time.sleep(0.15)
+        # 回车发送
+        _key(0x0D)          # Enter
+        _key(0x0D, up=True)
+    except Exception:
+        pass
 
 
 # ================= 日志增量反馈(命令执行结果) =================
@@ -278,8 +294,11 @@ def send_command(command: str, main_window) -> str:
             except Exception as e:
                 sent = f"RCON 失败({e}),改用模拟按键…"
 
-    # 2) 模拟按键(通用)
+    # 2) 模拟按键(Windows 通用兜底;其它平台 RCON 失败时给说明)
     if sent is None:
+        if not _is_windows():
+            return ("当前平台不支持模拟按键发指令(仅 Windows)。\n"
+                    "请用 RCON:装上 lan-server-properties mod 后进世界 → ESC → 对局域网开放。")
         pid = game.pid
         hwnd = find_game_window(pid)
         if not hwnd:

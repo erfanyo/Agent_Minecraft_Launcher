@@ -80,6 +80,8 @@ def suggested_memory_gb() -> int:
     - 物理内存 ≥ 32G → 8G(放开,可再手动调)
     读不到内存就回退 4G(默认值)。"""
     try:
+        if os.name != "nt":
+            return 4   # 非 Windows:读物理内存走 psutil 等,这里给保守默认
         import ctypes
         class MEMORYSTATUSEX(ctypes.Structure):
             _fields_ = [
