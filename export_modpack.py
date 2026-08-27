@@ -91,13 +91,15 @@ class PackExportDialog(QDialog):
                                          "关:只导整合包内容(适合已装启动器的人)")
         layout.addWidget(self.include_launcher)
 
-        # ①b 导出格式:扁平 .zip / Modrinth .mrpack(拖回启动器/Modrinth 可导入)
+        # ①b 导出格式:扁平 .zip / Modrinth .mrpack / CurseForge .zip(拖回启动器/平台可导入)
         fmt_row = QHBoxLayout()
         fmt_label = QLabel("导出格式:")
         self.fmt_combo = QComboBox()
         self.fmt_combo.addItem("Modrinth .mrpack(可直接导入本启动器/Modrinth,推荐)", "mrpack")
+        self.fmt_combo.addItem("CurseForge .zip(manifest.json,可导入 CurseForge/多数启动器)", "curseforge")
         self.fmt_combo.addItem("扁平 .zip(纯文件,不含清单)", "zip")
-        self.fmt_combo.setToolTip(".mrpack 含 modrinth.index.json + overrides/,导入时自动装加载器;"
+        self.fmt_combo.setToolTip(".mrpack 含 modrinth.index.json + overrides/;"
+                                  "CurseForge 含 manifest.json + overrides/(可导入 CurseForge 与常见启动器);"
                                   ".zip 只打包勾选的文件(不带清单)")
         fmt_row.addWidget(fmt_label)
         fmt_row.addWidget(self.fmt_combo, 1)
@@ -268,6 +270,8 @@ class PackExportDialog(QDialog):
         try:
             if fmt == "mrpack":
                 self._write_mrpack(out, files, progress)
+            elif fmt == "curseforge":
+                self._write_cfzip(out, files, progress)
             else:
                 self._write_flat_zip(out, files, progress)
         except Exception as e:
@@ -284,6 +288,39 @@ class PackExportDialog(QDialog):
                 progress.setLabelText(f"打包: {rel}")
                 if os.path.isfile(disk):
                     zf.write(disk, "instance/" + rel.replace(os.sep, "/"))
+                progress.setValue(idx + 1)
+            if self.include_launcher.isChecked():
+                exe = self._find_launcher_exe()
+                if exe:
+                    zf.write(exe, "AgentMinecraftLauncher.exe")
+
+    def _write_cfzip(self, out, files, progress):
+        """写 CurseForge .zip:manifest.json + overrides/ 下的勾选文件。
+
+        v1:勾选文件全放 overrides/(导入时覆盖进实例);files[] 留空(不做 CurseForge 哈希回填,
+        避免联网/缺失 API key —— 与 mrpack 一致的保守策略,可导入但模组走 overrides)。
+        manifestType=minecraftModpack / manifestVersion=1,CurseForge 与多数启动器可识别。"""
+        import json as _json
+        manifest = {
+            "minecraft": {
+                "version": self.base,
+                "modLoaders": [{"id": f"{self.loader}-{self.loader_version}", "primary": True}] if self.loader and self.loader_version else [],
+            },
+            "manifestType": "minecraftModpack",
+            "manifestVersion": 1,
+            "name": self.inst_id,
+            "version": "1.0.0",
+            "author": "Agent Minecraft Launcher",
+            "files": [],
+            "overrides": "overrides",
+        }
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", _json.dumps(manifest, ensure_ascii=False, indent=2))
+            for idx, (disk, rel) in enumerate(files):
+                progress.setValue(idx)
+                progress.setLabelText(f"打包: {rel}")
+                if os.path.isfile(disk):
+                    zf.write(disk, "overrides/" + rel.replace(os.sep, "/"))
                 progress.setValue(idx + 1)
             if self.include_launcher.isChecked():
                 exe = self._find_launcher_exe()

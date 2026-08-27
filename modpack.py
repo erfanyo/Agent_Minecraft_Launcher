@@ -173,14 +173,28 @@ def _cf_loader(manifest: dict):
 
 
 def detect_modpack_format(path: str) -> str | None:
-    """识别 .zip/.mrpack 是哪种整合包:'modrinth'/'curseforge'/'flat'/None(无法识别)。"""
+    """识别 .zip/.mrpack 是哪种整合包:'modrinth'/'curseforge'/'ftb'/'flat'/None(无法识别)。
+
+    CurseForge 与 FTB 的 zip 都含 manifest.json,需靠字段区分:
+    - CurseForge:minecraft.modLoaders(数组)+ files(每项含 projectID/fileID)
+    - FTB:结构不同(通常用 minecraft.version + 扁平 mods,或含 'ftb' 相关字段)"""
     try:
         with zipfile.ZipFile(path) as z:
             names = z.namelist()
             if "modrinth.index.json" in names:
                 return "modrinth"
             if "manifest.json" in names:
-                return "curseforge"
+                mf = json.loads(z.read("manifest.json"))
+                # CurseForge 特征:minecraft.modLoaders 存在 且 files 是带 projectID/fileID 的数组
+                minecraft = mf.get("minecraft") or {}
+                modloaders = minecraft.get("modLoaders")
+                files = mf.get("files")
+                cf_files = isinstance(files, list) and any(
+                    isinstance(f, dict) and ("projectID" in f or "fileID" in f) for f in files)
+                if cf_files and modloaders:
+                    return "curseforge"
+                # 无 CurseForge 特征但有 manifest.json → 判为 FTB(或未知清单),避免误当成 CurseForge
+                return "ftb"
             if _looks_like_instance_folder(names):
                 return "flat"
     except Exception:
@@ -330,6 +344,10 @@ def import_modpack(path: str, game_dir: str,
     fmt = detect_modpack_format(path)
     if fmt is None:
         raise ValueError("无法识别的整合包格式(既不是 Modrinth/CurseForge,也不像实例文件夹)")
+    if fmt == "ftb":
+        raise ValueError(
+            "检测到 FTB 整合包(manifest.json)。当前版本尚未支持自动导入 FTB 格式;\n"
+            "可先解压后用官方工具导入,或联系作者扩展。")
 
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
@@ -363,7 +381,6 @@ def import_modpack(path: str, game_dir: str,
             index = None
             deps = {}
             cf = None
-
     if not mc:
         raise ValueError("整合包缺少 minecraft 版本")
     instance_id = instance_id or _safe_name(name)
