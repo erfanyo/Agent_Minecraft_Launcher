@@ -8,7 +8,8 @@
 """
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+# 延迟导入 Qt:import os_platform.notify 不应拉 Qt 图形依赖(Linux 无头缺 libEGL 等会崩)。
+# 只在真正发通知时才 import PySide6。
 
 _TRAY: "QSystemTrayIcon | None" = None  # 模块级持引用,防 GC
 
@@ -20,6 +21,7 @@ def notify(title: str, message: str, timeout_ms: int = 4000) -> bool:
     - macOS/Linux:同走 Qt 托盘 showMessage(对 macOS 是原生通知,Linux 视桌面环境)
     """
     try:
+        from PySide6.QtWidgets import QApplication, QSystemTrayIcon
         if QApplication.instance() is None or not QSystemTrayIcon.isSystemTrayAvailable():
             return False
         if _tray() is None:
