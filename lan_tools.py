@@ -61,7 +61,7 @@ def _bin_name() -> str:
 def _easytier_dir() -> str:
     """EasyTier 运行时目录(AMCL/online/easytier/,被 .gitignore,二进制不进 git)。"""
     import paths
-    return os.path.join(paths.CONFIG_DIR, "online", "easytier")
+    return os.path.join(paths.data_dir("online"), "easytier")
 
 
 def _core_path() -> str:

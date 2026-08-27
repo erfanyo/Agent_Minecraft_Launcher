@@ -19,9 +19,9 @@ import os
 import sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-from paths import CONFIG_DIR
+from paths import model_dir
 
-MODELS_DIR = os.path.join(CONFIG_DIR, "models")
+MODELS_DIR = model_dir()
 
 
 class ModelHandler(SimpleHTTPRequestHandler):

@@ -26,9 +26,9 @@ import time
 
 import requests
 
-from paths import CONFIG_DIR  # noqa: E402
+from paths import runtime_llama_dir  # noqa: E402
 
-LLAMA_DIR = os.path.join(CONFIG_DIR, "runtime", "llama-cpp")
+LLAMA_DIR = runtime_llama_dir()
 SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server.exe")
 
 

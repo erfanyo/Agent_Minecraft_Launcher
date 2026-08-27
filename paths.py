@@ -101,3 +101,54 @@ def looks_like_game_dir(path: str) -> bool:
         if os.path.isdir(os.path.join(path, sub)):
             return True
     return False
+
+
+# ================= 统一路径访问层(收口散落在各模块的 AMCL 子路径) =================
+# 之前各模块各自 os.path.join(CONFIG_DIR, "cache", "xxx"),分散难维护。
+# 这里提供稳定的 getter,集中管理 + 自动建目录;不改动任何现有目录结构(仍便携式)。
+#
+# 缓存子目录(cache/ 下):
+#   icons/desc/avatars/item_names/translations/recipes-jar/glossary_hit + ai_quota.json
+# 数据子目录(AMCL/ 下):models/runtime/online/chat_archive/languages
+
+_AMCL_SUBDIRS = {"models", "runtime", "online", "chat_archive", "languages"}
+_CACHE_SUBDIRS = {"icons", "desc", "avatars", "item_names", "translations",
+                  "recipes-jar", "glossary_hit"}
+
+
+def _ensure(path: str) -> str:
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
+def data_dir(sub: str = "") -> str:
+    """AMCL 数据子目录(如 models/runtime/online/chat_archive/languages)。自动创建。"""
+    if sub:
+        return _ensure(os.path.join(CONFIG_DIR, sub))
+    return _ensure(CONFIG_DIR)
+
+
+def cache_dir(sub: str = "") -> str:
+    """缓存子目录(ex: cache/icons / cache/translations)。自动创建。"""
+    base = os.path.join(CONFIG_DIR, "cache")
+    if sub:
+        return _ensure(os.path.join(base, sub))
+    return _ensure(base)
+
+
+def model_dir() -> str:
+    """本地模型文件目录(AMCL/models)。"""
+    return data_dir("models")
+
+
+def runtime_llama_dir() -> str:
+    """llama.cpp runtime(AMCL/runtime/llama-cpp)。"""
+    return _ensure(os.path.join(CONFIG_DIR, "runtime", "llama-cpp"))
+
+
+# 兼容旧引用:image_cache 用 CACHE_ROOT;mc_names 等用 cache/xxx
+CACHE_ROOT = cache_dir()
+

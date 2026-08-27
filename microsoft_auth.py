@@ -243,8 +243,9 @@ def download_player_avatar(uuid_str: str, size: int = 64, use_cache: bool = True
         return None
     try:
         import os as _os
-        cache_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "AMCL", "cache", "avatars")
-        cache_path = _os.path.join(cache_dir, "%s_%d.png" % (uuid_str.replace("-", ""), size))
+        from paths import cache_dir as _cache_dir
+        d = _cache_dir("avatars")
+        cache_path = _os.path.join(d, "%s_%d.png" % (uuid_str.replace("-", ""), size))
         if use_cache and _os.path.isfile(cache_path):
             with open(cache_path, "rb") as f:
                 return f.read()
@@ -255,7 +256,7 @@ def download_player_avatar(uuid_str: str, size: int = 64, use_cache: bool = True
             data = resp.read()
         if data and len(data) > 100:
             try:
-                _os.makedirs(cache_dir, exist_ok=True)
+                _os.makedirs(d, exist_ok=True)
                 with open(cache_path, "wb") as f:
                     f.write(data)
             except OSError:

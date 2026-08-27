@@ -21,10 +21,10 @@ import time
 
 import paths
 
-# 缓存根目录:AMCL/cache/{icons,desc}
-CACHE_ROOT = os.path.join(paths.CONFIG_DIR, "cache")
-ICON_DIR = os.path.join(CACHE_ROOT, "icons")
-DESC_DIR = os.path.join(CACHE_ROOT, "desc")
+# 缓存根目录:AMCL/cache/{icons,desc}(经统一路径访问层)
+CACHE_ROOT = paths.cache_dir()
+ICON_DIR = paths.cache_dir("icons")
+DESC_DIR = paths.cache_dir("desc")
 
 _ICON_LOCK = threading.Lock()
 _DESC_LOCK = threading.Lock()

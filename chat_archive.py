@@ -12,9 +12,9 @@ import json
 import os
 import time
 
-from paths import CONFIG_DIR
+from paths import data_dir
 
-ARCHIVE_DIR = os.path.join(CONFIG_DIR, "chat_archive")
+ARCHIVE_DIR = data_dir("chat_archive")
 
 
 def _ensure_dir():

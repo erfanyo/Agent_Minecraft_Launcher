@@ -26,9 +26,9 @@ import threading
 
 import requests
 
-from paths import CONFIG_DIR  # AMCL 目录(与配置同根,便携)
+from paths import model_dir  # 统一路径访问层
 
-MODELS_DIR = os.path.join(CONFIG_DIR, "models")
+MODELS_DIR = model_dir()
 MANIFEST_PATH = os.path.join(MODELS_DIR, "manifest.json")
 CHUNK_SIZE = 1024 * 256
 

@@ -16,9 +16,9 @@ import os
 import threading
 import time
 
-from paths import CONFIG_DIR  # AMCL 目录
+from paths import cache_dir  # 统一路径访问层
 
-_CACHE_FILE = os.path.join(CONFIG_DIR, "cache", "ai_quota.json")
+_CACHE_FILE = os.path.join(cache_dir(), "ai_quota.json")
 _LOCK = threading.Lock()
 
 # 读取配置键(从 settings.DEFAULTS 兜底,见 _get_setting)

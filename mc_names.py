@@ -395,9 +395,8 @@ def resolve_for_wiki(query: str, wiki_lang: str = "en", game_dir: str = None,
 
 def _inst_name_index_path(game_dir: str, instance: str) -> str:
     try:
-        from paths import CONFIG_DIR
-        d = os.path.join(CONFIG_DIR, "cache", "item_names")
-        os.makedirs(d, exist_ok=True)
+        from paths import cache_dir
+        d = cache_dir("item_names")
         safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in (instance or "root"))
         return os.path.join(d, f"{safe}.json")
     except Exception:

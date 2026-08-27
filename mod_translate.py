@@ -22,9 +22,9 @@ import json
 import os
 import threading
 
-from paths import CONFIG_DIR  # AMCL 目录
+from paths import cache_dir  # 统一路径访问层
 
-CACHE_DIR = os.path.join(CONFIG_DIR, "cache", "translations")
+CACHE_DIR = cache_dir("translations")
 CACHE_FILE = os.path.join(CACHE_DIR, "translations.json")
 MAX_ENTRIES = 2000            # 缓存条目上限,超出丢最旧的(防无限膨胀)
 SHORT_TEXT_LEN = 240          # ≤ 此长度视为短文本 → 高置信度

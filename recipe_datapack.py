@@ -20,9 +20,9 @@ import os
 import time
 import zipfile
 
-from paths import CONFIG_DIR  # AMCL(启动器私有数据目录,见 AI规划 §11)
+from paths import cache_dir  # 统一路径访问层
 
-CACHE_DIR = os.path.join(CONFIG_DIR, "cache", "recipes-jar")
+CACHE_DIR = cache_dir("recipes-jar")
 CACHE_SCHEMA = 2   # 缓存格式版本:解析逻辑升级时 +1,旧缓存自动作废重扫
 
 # 需要"单原料"的烧炼/加工类型

@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
             _bundle_dir = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "languages")
             _n += _i18n.load_packs_from_dir(_bundle_dir)
             # ② 用户第三方语言包(AMCL/languages/)
-            _user_dir = _os.path.join(paths.CONFIG_DIR, "languages")
+            _user_dir = paths.data_dir("languages")
             _n += _i18n.load_packs_from_dir(_user_dir)
             _lang = self.settings.get("language", "auto")
             if _lang in _i18n.list_packs():
