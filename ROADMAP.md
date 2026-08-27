@@ -129,3 +129,10 @@
 - [ ] **整合包作者辅助**:把启动器做成整合包作者的工具——
       导入/导出/编辑 .mrpack、依赖检查(缺前置自动提示/补齐)、
       本地试装验证、一键打包上传 Modrinth 发布
+- [ ] **发版时跑完整 GPG 打包流程(build_release.ps1)** — 2026-08-28
+  - GPG 签名已集成(见 commit a196158),但**完整"打包+签名"端到端未跑过**(只单独验证了签名命令)。
+  - **下次发版时**在项目根运行 `.\build_release.ps1`(需 gpg 已在 PATH / 便携版 `D:\programs\Git` 之外,
+    用独立 GnuPG 2.5.x),确认:PyInstaller 打包 → 对 exe 生成 `.sig` → SHA256;
+    产物附 release:`AgentMinecraftLauncher.exe` + `.sig` + `erfanyo.asc`。
+  - 前提:gpg bin 已在用户 PATH;密钥 erfanyo(ed25519,无口令)已生成,指纹
+    `D2D1 0D7F 7FC3 E2AF FA76  88E9 1A89 9932 9DC6 5331`。
