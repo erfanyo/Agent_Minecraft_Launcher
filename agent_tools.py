@@ -6,6 +6,8 @@ Agent 工具层:CLI 命令与 AI 工具调用共用的函数实现。
 也被 `assistant.py` 的工具调用(tool calling)当作工具执行体。
 权限不在这一层——由调用方(assistant 的执行器)按只读/工作区可写拦截。
 """
+from typing import Callable
+
 import os
 
 import paths
@@ -26,19 +28,19 @@ OPTIMIZE_MODS = {
 
 
 # ---------------- 读取类(只读) ----------------
-def _gd(game_dir):
+def _gd(game_dir: str | None) -> str:
     """game_dir 缺省时用当前生效的游戏目录(设置里可改)"""
     return game_dir if game_dir is not None else paths.GAME_DIR
 
 
-def list_instances(game_dir: str = None) -> str:
+def list_instances(game_dir: str | None = None) -> str:
     insts = scan_instances(_gd(game_dir))
     if not insts:
         return "(还没有实例)"
     return "\n".join(f"{i['id']}  ({i['loader'] or '原版'} ← {i['base']})" for i in insts)
 
 
-def list_mods(instance: str, game_dir: str = None) -> str:
+def list_mods(instance: str, game_dir: str | None = None) -> str:
     mods_dir = os.path.join(_gd(game_dir), "versions", instance, "mods")
     if not os.path.isdir(mods_dir):
         return f"({instance} 没有 mods 目录)"
@@ -55,7 +57,7 @@ def search_mods(query: str, game_version: str = "", loader: str = "") -> str:
                      for h in hits[:15])
 
 
-def resolve_mod_concept(requirement: str, candidates: list = None,
+def resolve_mod_concept(requirement: str, candidates: list[str] | None = None,
                         game_version: str = "", loader: str = "",
                         top_n: int = 8) -> str:
     """按"功能/模糊描述"解析出候选 Mod,给用户挑选(核心:猜名→校验→过滤→排序)。
@@ -113,7 +115,7 @@ def resolve_mod_concept(requirement: str, candidates: list = None,
     #   强命中(如候选词 "draconic" 精确落在 title/slug 里)远优先于搜索顺带命中的无关 mod。
     # 下载量只做 +分(同契合度下热门的靠前),但权重压不过契合度,避免热门无关 mod 淹没。
     import math
-    def _fit_score(it):
+    def _fit_score(it: dict) -> float:
         title = (it.get("title") or "").lower()
         slug = (it.get("slug") or "").lower()
         # 该 slug 是被哪些候选词命中的?取命中里最"像"的候选词做契合信号
@@ -167,7 +169,7 @@ def search_modpacks(query: str, game_version: str = "", loader: str = "") -> str
                      for h in hits[:12])
 
 
-def read_instance_log(instance: str, tail: int = 80, game_dir: str = None) -> str:
+def read_instance_log(instance: str, tail: int = 80, game_dir: str | None = None) -> str:
     log = os.path.join(_gd(game_dir), "versions", instance, "logs", "latest.log")
     if not os.path.isfile(log):
         return f"({instance} 还没有日志文件)"
@@ -178,7 +180,7 @@ def read_instance_log(instance: str, tail: int = 80, game_dir: str = None) -> st
     return "\n".join(lines[-tail:])
 
 
-def read_crash_report(instance: str, game_dir: str = None) -> str:
+def read_crash_report(instance: str, game_dir: str | None = None) -> str:
     cr_dir = os.path.join(_gd(game_dir), "versions", instance, "crash-reports")
     if not os.path.isdir(cr_dir):
         return f"({instance} 没有崩溃报告目录)"
@@ -200,7 +202,8 @@ def get_settings() -> str:
 
 # ---------------- 写操作类(需要工作区写权限) ----------------
 def install_mod(slug: str, instance: str, version: str = "",
-                game_dir: str = None, progress_callback=None) -> str:
+                game_dir: str | None = None,
+                progress_callback: Callable | None = None) -> str:
     """给某实例安装 Mod(按实例的加载器 + 基础版本过滤)"""
     game_dir = _gd(game_dir)
     inst = next((i for i in scan_instances(game_dir) if i["id"] == instance), None)
@@ -232,8 +235,8 @@ def _resolve_slug(name: str) -> str:
     return name
 
 
-def install_mods(slugs, instance: str, game_dir: str = None,
-                 progress_callback=None) -> str:
+def install_mods(slugs: list[str] | str, instance: str, game_dir: str | None = None,
+                 progress_callback: Callable | None = None) -> str:
     """批量给实例安装多个 Mod(一次调用装完,省 AI 工具轮数)。
     slugs 支持中文名(如 钠/锂/玉/JEI)或英文 slug;可传 list,也可传逗号分隔字符串。
     逐项报告成功/失败,返回汇总。"""
@@ -252,7 +255,7 @@ def install_mods(slugs, instance: str, game_dir: str = None,
     gv = inst["base"]
     mods_dir = os.path.join(game_dir, "versions", instance, "mods")
 
-    def dl_one(s):
+    def dl_one(s: str) -> str:
         slug = _resolve_slug(str(s))
         filename = download_mod(slug, gv, loader, mods_dir, progress_callback=progress_callback)
         if filename:
@@ -282,8 +285,8 @@ def install_mods(slugs, instance: str, game_dir: str = None,
 def install_instance(version: str, loader: str = "", loader_version: str = "",
                      shader: bool = False, optimize: bool = False,
                      fabric_api_version: str | None = None,
-                     game_dir: str = None, status=print,
-                     progress_callback=None) -> str:
+                     game_dir: str | None = None, status: Callable = print,
+                     progress_callback: Callable | None = None) -> str:
     """创建实例:原版本体 + (可选)加载器 + (可选)Fabric API/光影/优化 Mod。
     加载器版本留空 = 自动用最新。成功返回实例 id。"""
     version = (version or "").strip()
@@ -327,7 +330,8 @@ def install_instance(version: str, loader: str = "", loader_version: str = "",
 
 
 def install_modpack(slug_or_url: str, instance_name: str = "",
-                    game_dir: str = None, progress_callback=None) -> str:
+                    game_dir: str | None = None,
+                    progress_callback: Callable | None = None) -> str:
     """下载并导入整合法包(Modrinth 项目类型 modpack,即 .mrpack)。
 
     用法/时机:用户想"装一个整合包"且给的是 Modrinth 链接/slug 时直接下载导入成新实例
@@ -389,12 +393,12 @@ def install_modpack(slug_or_url: str, instance_name: str = "",
     return f"✅ 整合包导入完成:{inst}({info.get('version_number', '最新')}, {proj.get('title')})"
 
 
-def backup_instance(instance: str, game_dir: str = None) -> str:
+def backup_instance(instance: str, game_dir: str | None = None) -> str:
     """备份某实例(存档 zip + 模组列表 txt),返回备份位置"""
     return f"已备份到:{_backup_impl(instance, _gd(game_dir))}"
 
 
-def launch_game(instance: str, game_dir: str = None) -> str:
+def launch_game(instance: str, game_dir: str | None = None) -> str:
     """启动某实例的游戏(写操作,需要工作区写权限)。
     注意:这样启动的进程启动器不跟踪日志/退出,关闭游戏窗口即退出。"""
     import os as _os
@@ -438,7 +442,7 @@ def launch_game(instance: str, game_dir: str = None) -> str:
             f"注意:这样启动的进程启动器不跟踪日志,关闭游戏窗口即退出。")
 
 
-def send_game_command(instance: str, command: str, game_dir: str = None) -> str:
+def send_game_command(instance: str, command: str, game_dir: str | None = None) -> str:
     """向运行中的游戏发送指令(如 /summon zombie)。
 
     优先走 bridge-mod 本地指令口(正式方案,100% 精确反馈);
@@ -459,7 +463,7 @@ def get_command_guide(mc_version: str) -> str:
     return version_guide(mc_version)
 
 
-def get_key_bindings(instance: str, query: str, game_dir: str = None) -> str:
+def get_key_bindings(instance: str, query: str, game_dir: str | None = None) -> str:
     """查询按键绑定(bridge-mod 导出):
     - 输入按键(如 空格/左Shift/W/32) → 返回该键绑了哪些操作(含 mod,一键多操作全列出)
     - 输入功能(如 前进/攻击/背包/JEI) → 返回对应按键
@@ -468,8 +472,8 @@ def get_key_bindings(instance: str, query: str, game_dir: str = None) -> str:
     return query_keybindings(_gd(game_dir), instance, query)
 
 
-def get_recipe_path(item: str, count: int = 1, instance: str = None,
-                    game_dir: str = None, brief: bool = True,
+def get_recipe_path(item: str, count: int = 1, instance: str | None = None,
+                    game_dir: str | None = None, brief: bool = True,
                     recipe_index: int = 0) -> str:
     """查询合成配方。默认返回精简版(只列直接配方一层,省 token);
     brief=False 时返回 EMI 风格完整配方:先列出该物品全部合成方式
@@ -499,7 +503,7 @@ def get_recipe_path(item: str, count: int = 1, instance: str = None,
     return head + rd.describe_recipe(item, count, recipe_index=recipe_index)
 
 
-def compare_items(attribute: str, top_n: int = 10, game_dir: str = None) -> str:
+def compare_items(attribute: str, top_n: int = 10, game_dir: str | None = None) -> str:
     """比较物品参数,返回最强的 N 个。
     attribute 支持:武器伤害 / 护甲 / 护甲韧性 / 攻速 / 挖掘等级 等。"""
     import recipe_graph
@@ -514,7 +518,7 @@ def compare_items(attribute: str, top_n: int = 10, game_dir: str = None) -> str:
     return "\n".join(f"{r['item']}  →  {key} = {r[key]}" for r in rows)
 
 
-def set_setting(key: str, value: str, game_dir: str = None) -> str:
+def set_setting(key: str, value: str, game_dir: str | None = None) -> str:
     s = load_settings()
     if key not in s:
         return f"错误:未知设置 {key}(可用 get_settings 查看)"
@@ -534,7 +538,7 @@ def set_setting(key: str, value: str, game_dir: str = None) -> str:
     return f"{key} = {s[key]}"
 
 
-def resolve_mc_name(query: str, instance: str = None, game_dir: str = None) -> str:
+def resolve_mc_name(query: str, instance: str | None = None, game_dir: str | None = None) -> str:
     """本地把物品/生物/效果/附魔的中文/口语/英文叫法解析成【规范英文名 + id】。
     用于查 wiki/资料库前先归一化(如 苦力怕 → Creeper/minecraft:creeper),检索命中更准。
     读实例 mods jar + 版本 jar 的 lang 文件(zh_cn/en_us),外置原版常见词表兜底。"""

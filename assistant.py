@@ -13,6 +13,7 @@ import os
 import tempfile
 import threading
 import time
+from typing import Any, Callable
 
 import requests
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
@@ -319,7 +320,7 @@ def available_tools(settings: dict) -> list:
     return _merge_plugin_tools() + mcp_tools_schemas(settings)
 
 
-def mount_tools_for(text: str, settings: dict | None = None) -> list:
+def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
     """云端按需挂载工具 schema:通用工具 + 请求文本命中关键词的组(按 TOOL_GROUPS)。
     返回 TOOLS 的子集(每轮请求固定,轮间稳定利于前缀缓存)。
     插件 + MCP 工具追加在截断之后(绝不砍掉)。本地路径不受影响(仍返回全量)。"""
@@ -359,7 +360,7 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list:
     return mounted
 
 
-def build_executor(settings: dict, progress_cb=None):
+def build_executor(settings: dict, progress_cb: Callable | None = None) -> Callable[[str, dict], str]:
     """构造工具执行器:LLM 只能"提议",真正执行在这里,权限检查也在这里。
     多余参数会被过滤(模型幻觉传错参数不报错,只调它真需要的)。
     progress_cb(done, total) 若提供,把底层下载(装 Mod 等)进度传给界面(左下角圆环)。"""
@@ -437,9 +438,11 @@ def build_executor(settings: dict, progress_cb=None):
     return executor
 
 
-def chat_with_tools(messages: list, settings: dict, tools: list,
-                    executor, max_rounds: int = 10, on_tool=None,
-                    on_user_ask=None, return_messages: bool = False):
+def chat_with_tools(messages: list, settings: dict, tools: list[dict] | None,
+                    executor: Callable[[str, dict], str], max_rounds: int = 10,
+                    on_tool: Callable | None = None,
+                    on_user_ask: Callable | None = None,
+                    return_messages: bool = False) -> str | tuple[str, list]:
     """带工具调用的对话循环:LLM 提议 → 执行 → 结果回传 → 直到完成。
 
     tools 为 None 时退化为普通对话。
@@ -554,7 +557,8 @@ def _cloud_chat(text: str, settings: dict, context: str = "", on_tool=None,
         return f"(AI 请求失败:{type(e).__name__})"
 
 
-def route_answer(text: str, settings: dict, context: str = "", on_tool=None,
+def route_answer(text: str, settings: dict, context: str = "",
+                 on_tool: Callable | None = None,
                  force_tools: list | None = None) -> str:
     """headless AI 路由:按 ai_strategy 用启动器 AI(规则 → 本地对话/工具 → 云端带工具)作答。
     复用 task_router 决策 + 启动器工具链;不依赖 GUI 信号。供游戏内 AI 等复用。
