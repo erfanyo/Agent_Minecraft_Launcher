@@ -47,10 +47,29 @@ _PLUGIN_META = {}     # name -> {default_enabled(bool), settings_build_fn(callab
 
 
 class PluginAPI:
-    """插件注册时拿到的 api,提供各注册点的登记函数。"""
+    """插件注册时拿到的 api,提供各注册点的登记函数。
+
+    v2(软沙箱)新增:
+    - data_dir():返回该插件【专属数据目录】(AMCL/plugins_data/<插件id>/),自动创建。
+      插件应该只读写这个目录,别写系统路径/安装目录外。启动器清理/迁移只动 plugins_data。
+    - data_path(name):该插件专属目录下某文件/子路径(等价 data_dir()/<name>)。
+    - 沙箱是"约定 + 受限 api"软约束(不硬做进程隔离;真沙箱观望 Win 容器化)。
+    """
 
     def __init__(self, plugin_id: str):
         self.plugin_id = plugin_id
+
+    # ---- 软沙箱:数据目录收口 ----
+    def data_dir(self) -> str:
+        """本插件专属数据目录(AMCL/plugins_data/<插件id>),自动创建。"""
+        import paths
+        return paths.data_dir(os.path.join("plugins_data", self.plugin_id))
+
+    def data_path(self, name: str) -> str:
+        """本插件专属目录下某文件/子路径。name 需为相对路径。"""
+        import os
+        d = self.data_dir()
+        return os.path.join(d, (name or "").lstrip("/\\") or "")
 
     def register_tool(self, name, description, parameters, handler):
         """AI 工具。name 会加前缀 <插件id>__ 防冲突。handler(args_dict)->str。"""
