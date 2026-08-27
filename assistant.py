@@ -940,10 +940,35 @@ class AISettingsForm(QWidget):
         av.addWidget(self.ai_in_game)
         ai_explain = QLabel(
             "开启后,玩家在游戏里敲 /ai(如「/ai 把天气改为雨天」),\n"
-            "启动器 AI 会按所选策略处理(云端/混合能真执行,结果回显到游戏聊天窗;本地为纯对话)。")
+            "启动器 AI 会按所选策略处理(云端/混合能真执行,结果回显到游戏聊天窗;本地为纯对话)。\n"
+            "下面的【额度/冷却】保护你的 AI API 额度:多人联机时游戏内玩家都能敲 /ai,\n"
+            "不设限会被刷、烧光你的 API 额度。")
         ai_explain.setWordWrap(True)
         ai_explain.setStyleSheet("color: #888888;")
         av.addWidget(ai_explain)
+
+        # 每日总额度 + 每玩家冷却(保护服主 API)
+        self.quota_spin = QSpinBox()
+        self.quota_spin.setRange(0, 100000)
+        self.quota_spin.setToolTip("游戏内 /ai 每日总发言次数上限(0=不限);用超提示玩家明天再试")
+        self.cool_spin = QSpinBox()
+        self.cool_spin.setRange(0, 3600)
+        self.cool_spin.setSuffix(" 秒")
+        self.cool_spin.setToolTip("同一玩家两次 /ai 的最小间隔(防单玩家狂刷)")
+        quota_row = QHBoxLayout()
+        quota_row.addWidget(QLabel("每日额度(次数):"))
+        quota_row.addWidget(self.quota_spin)
+        quota_row.addSpacing(16)
+        quota_row.addWidget(QLabel("每玩家冷却:"))
+        quota_row.addWidget(self.cool_spin)
+        quota_row.addStretch()
+        av.addLayout(quota_row)
+
+        # 特例豁免名单(逗号分隔)
+        self.quota_exempt_edit = QLineEdit()
+        self.quota_exempt_edit.setPlaceholderText("豁免每日额度的玩家(逗号分隔,如 Steve,Alex;留空=无)")
+        self.quota_exempt_edit.setToolTip("这些玩家不受每日额度限制(如服主自己);仍在冷却限制内")
+        av.addWidget(self.quota_exempt_edit)
 
         # ---------- 布局 ----------
         source_row = QHBoxLayout()
@@ -1003,6 +1028,9 @@ class AISettingsForm(QWidget):
         self.vision_check.setChecked(bool(s.get("ai_multimodal", False)))
         ig = str(s.get("ai_in_game", "off") or "off")
         self.ai_in_game.setChecked(ig.strip().lower() not in ("", "off"))
+        self.quota_spin.setValue(int(s.get("ai_in_game_quota", 50) or 50))
+        self.cool_spin.setValue(int(s.get("ai_in_game_cool", 5) or 5))
+        self.quota_exempt_edit.setText(str(s.get("ai_in_game_quota_exempt", "") or ""))
         self.blockSignals(False)
         self._apply_source_visibility()    # 按策略显示云端/本地块
         self._toggle_local_visibility()    # 仅切换子区显隐,不改用户已存值
@@ -1166,6 +1194,9 @@ class AISettingsForm(QWidget):
             "context_window": self.context_window.value(),
             "ai_multimodal": self.vision_check.isChecked(),
             "ai_in_game": "on" if self.ai_in_game.isChecked() else "off",
+            "ai_in_game_quota": int(self.quota_spin.value()),
+            "ai_in_game_cool": int(self.cool_spin.value()),
+            "ai_in_game_quota_exempt": self.quota_exempt_edit.text().strip(),
         }
 
 

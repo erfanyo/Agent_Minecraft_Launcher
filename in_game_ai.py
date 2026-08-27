@@ -89,6 +89,17 @@ class InGameAI:
                     seq = req.get("seq", 0)
                     self._seen_seq.add(seq)
                     text = req.get("text", "")
+                    player = req.get("player", "") or ""
+                    # 额度/冷却检查(启动器端,保护服主 API):超限直接回提示,不调 AI
+                    try:
+                        from ai_quota import check_and_consume
+                        gr = check_and_consume(player)
+                        if not gr.ok:
+                            _write_json(self._rep_path(),
+                                        {"seq": seq, "text": gr.reason, "ts": time.time()})
+                            continue
+                    except Exception:
+                        pass   # 额度模块异常不阻断主流程
                     reply = ""
                     try:
                         reply = self.answer_fn(text, self.instance_id) or ""
