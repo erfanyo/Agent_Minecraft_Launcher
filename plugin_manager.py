@@ -211,16 +211,97 @@ def validate_plugin_code(code: str) -> tuple:
     return True, {"name": None}
 
 
+# ---------------- 危险 import / 调用审计(安装时告诉安装者它 import/调用什么) ----------------
+# 不静默拒绝,而是"公开 + 标注",由安装者判断信任。
+_DANGEROUS_IMPORTS = {
+    "os": "文件系统操作(os.system/os.popen 等)",
+    "subprocess": "启动子进程",
+    "socket": "网络 socket",
+    "requests": "HTTP 请求(网络)",
+    "urllib": "网络请求",
+    "ctypes": "系统底层调用",
+    "winreg": "Windows 注册表",
+    "shutil": "文件/目录操作(复制/删除/移动)",
+    "pickle": "反序列化(可能执行恶意 payload)",
+    "importlib": "动态导入(潜在混淆/反编译规避)",
+}
+_DANGEROUS_CALLS = {
+    "os.system": "执行 shell 命令",
+    "os.popen": "执行 shell 命令",
+    "eval": "动态执行代码",
+    "exec": "动态执行代码",
+    "open": "写/读文件(需检查路径)",
+}
+
+
+def audit_plugin_code(code: str) -> dict:
+    """静态审计(AST)插件代码,返回:
+    {"imports": ["os", "requests", ...], "danger_calls": ["os.system", ...],
+     "dangers": str 列表(给人看的中文描述), "ok": bool(是否无可疑项)}
+    未执行代码。"""
+    import ast
+    out = {"imports": [], "danger_calls": [], "dangers": [], "ok": True}
+    if not code or not code.strip():
+        return out
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return out
+    # 收集 import
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                mod = a.name.split(".")[0]
+                if mod in _DANGEROUS_IMPORTS and mod not in out["imports"]:
+                    out["imports"].append(mod)
+        elif isinstance(n, ast.ImportFrom):
+            mod = (n.module or "").split(".")[0]
+            if mod in _DANGEROUS_IMPORTS and mod not in out["imports"]:
+                out["imports"].append(mod)
+        # 危险调用(os.system / eval / exec ...)
+        if isinstance(n, ast.Call):
+            fn = n.func
+            name = None
+            if isinstance(fn, ast.Name):
+                name = fn.id
+            elif isinstance(fn, ast.Attribute):
+                name = f"{__attr_base(fn.value)}.{fn.attr}"
+            if name in _DANGEROUS_CALLS:
+                if name not in out["danger_calls"]:
+                    out["danger_calls"].append(name)
+    # 组装给人看的中文描述
+    for m in out["imports"]:
+        out["dangers"].append(f"import {m} —— {_DANGEROUS_IMPORTS[m]}")
+    for c in out["danger_calls"]:
+        out["dangers"].append(f"调用 {c} —— {_DANGEROUS_CALLS[c]}")
+    out["ok"] = not (out["imports"] or out["danger_calls"])
+    return out
+
+
+def __attr_base(node) -> str:
+    """把 Attribute/value 简化成字符串基名(如 a.b.c → a)。"""
+    import ast
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+    return ".".join(reversed(parts)) if parts else ""
+
+
 def save_plugin(name: str, code: str) -> dict:
     """把 AI 生成的插件代码落盘到 plugins/<name>.py。
     - 校验语法 + register 存在;
     - 文件名安全化(name 只留字母数字下划线);
-    - 写文件,返回 {ok, path, name, restart_needed:True}。"""
+    - 静态审计危险 import/调用(附到返回,供安装者判断);
+    - 写文件,返回 {ok, path, name, restart_needed:True, audit}。"""
     import re
     safe = re.sub(r"[^A-Za-z0-9_]", "_", (name or "").strip()) or "plugin"
     ok, info = validate_plugin_code(code)
     if not ok:
         return {"ok": False, "error": info.get("error", "校验失败")}
+    audit = audit_plugin_code(code)
     os.makedirs(PLUGIN_DIR, exist_ok=True)
     path = os.path.join(PLUGIN_DIR, safe + ".py")
     try:
@@ -228,7 +309,7 @@ def save_plugin(name: str, code: str) -> dict:
             f.write(code)
     except Exception as e:
         return {"ok": False, "error": f"写入失败:{type(e).__name__}: {e}"}
-    return {"ok": True, "path": path, "name": safe, "restart_needed": True}
+    return {"ok": True, "path": path, "name": safe, "restart_needed": True, "audit": audit}
 
 
 # ---------------- 插件商店(仓库注册 / 远程插件清单 / 安装) ----------------

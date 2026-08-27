@@ -386,8 +386,17 @@ def build_executor(settings: dict, progress_cb: Callable | None = None) -> Calla
             import plugin_manager
             r = plugin_manager.save_plugin(str(args.get("name", "")), str(args.get("code", "")))
             if r.get("ok"):
+                aud = r.get("audit") or {}
+                # 展示该插件 import/调用了什么(供判断是否恶意),让 AI 转告用户检查
+                note = ""
+                if aud.get("imports"):
+                    note += "\n⚠️ 该插件 import: " + ", ".join(aud["imports"])
+                if aud.get("danger_calls"):
+                    note += "\n⚠️ 该插件调用: " + ", ".join(aud["danger_calls"])
+                if note:
+                    note += "\n(请确认这些是合理用途再启用;AI 生成的插件默认未审核)"
                 return (f"✅ 已生成插件 {r['name']} → {r['path']}\n"
-                        "已在 plugins/ 落盘,【重启启动器】后生效。可在 设置→插件 里启用/停用。")
+                        "已在 plugins/ 落盘,【重启启动器】后生效。可在 设置→插件 里启用/停用。" + note)
             return f"❌ 插件生成失败:{r.get('error', '未知错误')}"
         # 插件注册的工具(plugin_manager.TOOLS)优先于内置 getattr 兜底
         try:
