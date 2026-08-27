@@ -10,10 +10,11 @@ import base64
 import json
 import mimetypes
 import os
+import subprocess
 import tempfile
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import requests
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
@@ -532,7 +533,8 @@ def _local_model_downloaded() -> bool:
         return False
 
 
-def _cloud_chat(text: str, settings: dict, context: str = "", on_tool=None,
+def _cloud_chat(text: str, settings: dict, context: str = "",
+                on_tool: Callable | None = None,
                 force_tools: list | None = None) -> str:
     """云端带工具对话(复用 chat_with_tools)。context = 给 AI 的系统提示(如游戏内实例上下文)。
     force_tools: 始终挂上的工具名(如游戏内必须的 send_game_command),不被按关键词裁剪。"""
@@ -552,7 +554,9 @@ def _cloud_chat(text: str, settings: dict, context: str = "", on_tool=None,
     msgs = [{"role": "system", "content": sys_text}, {"role": "user", "content": text}]
     exec_ = build_executor(cs)
     try:
-        return chat_with_tools(msgs, cs, tools, exec_, max_rounds=12, on_tool=on_tool)
+        # _cloud_chat 始终以 return_messages=False 调用 chat_with_tools → 返回 str
+        return cast(str, chat_with_tools(msgs, cs, tools, exec_, max_rounds=12,
+                                         on_tool=on_tool))
     except Exception as e:
         return f"(AI 请求失败:{type(e).__name__})"
 

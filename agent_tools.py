@@ -83,7 +83,7 @@ def resolve_mod_concept(requirement: str, candidates: list[str] | None = None,
 
     # ---- 逐个候选词检索,收集真实命中 ----
     # rec: slug -> {title, slug, downloads, description, loader_cn, hit_rank(最小位次)}
-    rec = {}
+    rec: dict = {}
     for ci, c in enumerate(cands):
         try:
             hits = _raw_search(c, game_version or None, loader or None, limit=5,
