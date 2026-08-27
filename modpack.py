@@ -172,6 +172,37 @@ def _cf_loader(manifest: dict):
     return typ, lid[idx + 1:]
 
 
+def _ftb_loader(manifest: dict):
+    """从 FTB manifest 取 (loader_type, loader_version)。字段名因 FTB 版本而异:
+    - minecraft.modLoaders(数组,id 形如 fabric-0.15.0) —— 同 CurseForge 变体
+    - 顶层 loaders / minecraft.loaders(数组或字符串)
+    取不到返回 (None, None)。"""
+    mc = manifest.get("minecraft") or {}
+    # 常见:minecraft.modLoaders[].id / minecraft.loaders
+    ml = mc.get("modLoaders") or mc.get("mods") or mc.get("loaders") or manifest.get("loaders") or []
+    if isinstance(ml, (str,)):
+        _id = ml
+    elif isinstance(ml, dict):
+        _id = ml.get("id") or ml.get("name") or ""
+    elif isinstance(ml, list) and ml:
+        if isinstance(ml[0], str):
+            _id = ml[0]
+        elif isinstance(ml[0], dict):
+            _id = ml[0].get("id") or ml[0].get("name") or ""
+        else:
+            _id = ""
+    else:
+        return None, None
+    if not _id:
+        return None, None
+    idx = str(_id).find("-")
+    if idx <= 0:
+        return None, None
+    typ = str(_id)[:idx].lower()
+    typ = {"quilt": "fabric"}.get(typ, typ)
+    return typ, str(_id)[idx + 1:]
+
+
 def detect_modpack_format(path: str) -> str | None:
     """识别 .zip/.mrpack 是哪种整合包:'modrinth'/'curseforge'/'ftb'/'flat'/None(无法识别)。
 
@@ -323,6 +354,38 @@ def _download_mods_parallel(files: list, inst_dir: str,
                 progress_callback(done, total)
 
 
+def _download_ftb_mods(manifest: dict, inst_dir: str,
+                       status_callback=None, progress_callback=None) -> None:
+    """下载 FTB manifest 里带可下载 url 的 mod(适配到 Modrinth files 格式,复用并行下载)。
+
+    FTB 的 mods/files 条目通常形如 {"name": "x.jar", "url": "...", "sha1"/"md5": "..."};
+    有些包把 mod 全打包在 overrides/ 内、此列表为空 → 无需下载。
+    overrides 解压已含 mod 时也会跳过已存在文件(_download_mods_parallel 会 skip)。
+    """
+    # FTB 常见字段:mods 或 files
+    mods = manifest.get("mods") or manifest.get("files") or []
+    norm = []
+    for m in mods:
+        if not isinstance(m, dict):
+            continue
+        name = m.get("path") or m.get("name") or m.get("filename") or ""
+        url = m.get("url") or (m.get("downloads") or [None])[0] or ""
+        if not name or not url:
+            continue
+        # 只处理要进 mods/ 的:path 已含 mods/ 用其 rel;否则(纯文件名 jar)默认放 mods/
+        if "mods/" in name.replace("\\", "/"):
+            rel = name
+        elif name.lower().endswith(".jar"):
+            rel = "mods/" + os.path.basename(name)
+        else:
+            continue   # 非 mods 且非 jar:跳过(配置等应走 overrides)
+        sha1 = (m.get("hashes") or {}).get("sha1") or m.get("sha1") or None
+        norm.append({"path": rel, "downloads": [url], "hashes": {"sha1": sha1} if sha1 else {}})
+    if not norm:
+        return
+    _download_mods_parallel(norm, inst_dir, status_callback, progress_callback)
+
+
 def import_modpack(path: str, game_dir: str,
                    mc_version: str | None = None,
                    loader: str | None = None,
@@ -344,10 +407,7 @@ def import_modpack(path: str, game_dir: str,
     fmt = detect_modpack_format(path)
     if fmt is None:
         raise ValueError("无法识别的整合包格式(既不是 Modrinth/CurseForge,也不像实例文件夹)")
-    if fmt == "ftb":
-        raise ValueError(
-            "检测到 FTB 整合包(manifest.json)。当前版本尚未支持自动导入 FTB 格式;\n"
-            "可先解压后用官方工具导入,或联系作者扩展。")
+    ftb = False   # FTB 标志:解压 overrides 且 mod 在 overrides 内置(不下载外部列表)
 
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
@@ -373,6 +433,24 @@ def import_modpack(path: str, game_dir: str,
             index = None
             deps = {}
             cf = True
+        elif fmt == "ftb":
+            # FTB 包:manifest.json + overrides/(mod/config 通常打包在 overrides 内)。
+            # 解析 MC 版本 + 加载器;mod 列表走 overrides 解压(不依赖外部下载)。
+            manifest = json.loads(z.read("manifest.json"))
+            name = manifest.get("name") or os.path.splitext(os.path.basename(path))[0]
+            mc = ((manifest.get("minecraft") or {}).get("version")
+                  or (manifest.get("minecraft") or {}).get("minecraft_version") or "")
+            if not mc:
+                raise ValueError("FTB 清单里缺少 minecraft 版本")
+            if not mc_version:
+                mc_version = mc
+            ltype, lver = _ftb_loader(manifest)
+            loader = loader or ltype
+            loader_version = loader_version or lver
+            index = None
+            deps = {}
+            cf = False   # cf 控制"解压 overrides",FTB 也要解压,这里下面单独处理
+            ftb = True
         else:   # flat
             name = os.path.splitext(os.path.basename(path))[0]
             mc = mc_version or ""
@@ -443,10 +521,17 @@ def import_modpack(path: str, game_dir: str,
             # Modrinth:并行下载清单里的文件(6 线程,逐文件报进度)
             _download_mods_parallel(index.get("files", []), inst_dir, status_callback, progress_callback)
 
-        # Modrinth + CurseForge 都解压 overrides / client-overrides(直接覆盖进实例的文件)
-        if index is not None or cf:
+        # Modrinth + CurseForge + FTB 都解压 overrides / client-overrides(直接覆盖进实例的文件)
+        if index is not None or cf or ftb:
             _extract_zip_to(path, inst_dir, "overrides/", status_callback, progress_callback)
             _extract_zip_to(path, inst_dir, "client-overrides/", status_callback, progress_callback)
+
+        if ftb:
+            if status_callback:
+                status_callback("FTB 包已解压 overrides(含 mods/配置/覆盖文件);"
+                                "mod 大多打包在包内,若 manifest 另有需外链下载的 mod 会提示")
+            # FTB 若 manifest 带可下载 mod 列表(url),尝试下载(可选,不阻塞)
+            _download_ftb_mods(manifest, inst_dir, status_callback, progress_callback)
 
         if cf:
             listed = len((manifest.get("files") or []))
@@ -457,7 +542,7 @@ def import_modpack(path: str, game_dir: str,
                 else:
                     status_callback("已解压 overrides(含 mods/配置/覆盖文件),无需 CurseForge 额外下载")
 
-        if index is None and not cf:
+        if index is None and not cf and not ftb:
             # 扁平:整个 zip 解压成实例(去掉可能存在的单一顶层文件夹)
             prefix = _flat_single_prefix(names)
             _extract_zip_to(path, inst_dir, prefix or "", status_callback, progress_callback)
