@@ -7,9 +7,12 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.phys.Vec3;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +53,17 @@ public final class AiChat {
         CommandSourceStack src = ctx.getSource();
         MinecraftServer server = src.getServer();
         String prompt = StringArgumentType.getString(ctx, "描述").trim();
+        // --console 前缀:仅 level 4 玩家可选(AI 执行指令用控制台身份);非 level4 忽略该标记
+        boolean console = false;
+        if (prompt.startsWith("--console")) {
+            if (src.hasPermissions(4)) {
+                console = true;
+                prompt = prompt.substring("--console".length()).trim();
+            } else {
+                // 非 level4:忽略标记,仍按玩家身份;给玩家一个说明
+                prompt = prompt.substring("--console".length()).trim();
+            }
+        }
         if (prompt.isEmpty()) {
             src.sendSystemMessage(Component.literal("用法: /ai <你的问题>"));
             return 1;
@@ -59,12 +73,41 @@ public final class AiChat {
         req.addProperty("seq", seq);
         req.addProperty("text", prompt);
         req.addProperty("ts", System.currentTimeMillis());
+
+        // ---- 上下文与权限上报(§3.1 协议字段)----
+        ServerPlayer playerEnt = (src.getEntity() instanceof ServerPlayer p) ? p : null;
+        String playerName = playerEnt != null
+                ? playerEnt.getGameProfile().getName() : "";
+        boolean isOp = src.hasPermissions(2);
+        req.addProperty("player", playerName);
+        req.addProperty("is_op", isOp);
+        req.addProperty("exec_mode", console ? "console" : "player");
+        if (playerEnt != null) {
+            try {
+                Vec3 pos = playerEnt.position();
+                req.addProperty("pos", String.format("%.1f,%.1f,%.1f", pos.x, pos.y, pos.z));
+            } catch (Exception ignored) { }
+            try {
+                String dim = playerEnt.level().dimension().location().toString();
+                req.addProperty("dim", dim);
+            } catch (Exception ignored) { }
+            try {
+                ItemStack held = playerEnt.getMainHandItem();
+                if (held != null && !held.isEmpty()) {
+                    req.addProperty("held", BuiltInRegistries.ITEM.getKey(held.getItem()).toString());
+                }
+            } catch (Exception ignored) { }
+        }
+        if (console) {
+            // 说明:仅日志记录,不额外提示(玩家已显式请求)
+            BridgeIO.log("/ai --console by " + playerName + " (level4)");
+        }
+
         BridgeIO.write(BridgeIO.bridgeDir(server).resolve("ai_request.json"),
                 new Gson().toJson(req) + System.lineSeparator());
         src.sendSystemMessage(Component.literal("已提交 AI 处理(seq=" + seq + "),思考中…"));
-        ServerPlayer requester = (src.getEntity() instanceof ServerPlayer p) ? p : null;
         Path replyPath = BridgeIO.bridgeDir(server).resolve("ai_reply.json");
-        Thread t = new Thread(() -> pollReply(server, seq, requester, replyPath), "bridge-ai-poll-" + seq);
+        Thread t = new Thread(() -> pollReply(server, seq, playerEnt, replyPath), "bridge-ai-poll-" + seq);
         t.setDaemon(true);
         t.start();
         return 1;
