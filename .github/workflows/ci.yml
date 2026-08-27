@@ -56,6 +56,9 @@ jobs:
       - name: Fetch llama.cpp runtime (spec datas 需要)
         run: python tools/fetch_llamacpp.py
 
+      - name: Fetch bridge-mod jars (spec datas 需要,不在 git)
+        run: python tools/fetch_bridge_mod_jars.py
+
       - name: Build exe (spec)
         run: python -m PyInstaller --noconfirm --clean AgentMinecraftLauncher.spec
       - name: Verify artifact
