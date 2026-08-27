@@ -724,6 +724,18 @@ def load_recipe_data(game_dir: str, instance_id: str | None = None,
     exported_disp = exported_at
     if not exported_disp and scan:
         exported_disp = scan.get("scanned_at", "")
+    # 合并按实例持久化的中文物品名索引(instance_zh_id_index,见 mc_names):
+    # 它覆盖全部名称类(item/block/entity/…),比进程内 build_zh_index 更全、跨实例通用,
+    # 让 resolve_item/display 查询中文名命中更准。持久化索引命中缓存,不重扫 jar。
+    try:
+        from mc_names import instance_zh_id_index
+        pzh, pidz = instance_zh_id_index(game_dir, inst)
+        for k, v in pzh.items():
+            zh_to_id.setdefault(k, v)
+        for k, v in pidz.items():
+            id_to_zh.setdefault(k, v)
+    except Exception:
+        pass
     rd = RecipeData(merged, items, source_instance=inst, exported_at=exported_disp,
                     zh_to_id=zh_to_id, en_to_id=en_to_id, id_to_zh=id_to_zh)
     rd.source_kind = source_kind
