@@ -29,7 +29,9 @@ import requests
 from paths import runtime_llama_dir  # noqa: E402
 
 LLAMA_DIR = runtime_llama_dir()
-SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server.exe")
+# 平台相关:Windows 下 llama 可执行带 .exe 后缀,mac/Linux 不带(否则找不到)
+_LLAMA_EXE_SUFFIX = ".exe" if sys.platform.startswith("win") else ""
+SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server" + _LLAMA_EXE_SUFFIX)
 
 
 def _ensure_llama_runtime():
