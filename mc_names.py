@@ -383,3 +383,142 @@ def resolve_for_wiki(query: str, wiki_lang: str = "en", game_dir: str = None,
                 "zh": zh, "en": en, "source": r.get("source", "none")}
     return {"query": query, "search_name": en or zh, "id": r.get("id", ""),
             "zh": zh, "en": en, "source": r.get("source", "none")}
+
+
+# ---------------- 按实例持久化的中文物品名索引 ----------------
+# 目的:把"该实例 mods 里所有 mod + 原版 jar 的中文物品/方块/实体名"解析成一张
+#   zh_to_id / id_to_zh 对照表,**持久化**到 AMCL/cache/item_names/<instance>.json,
+#   避免每次查攻略都重扫 jar。绑定实例:某个名字解析不出来 = 该实例没装对应 mod,
+#   或该 mod 没做中文翻译(两种都说明当前实例查不到)。
+#   (对比:resolve_mc_name 是"单点查询";本函数产"全量表",供攻略链路批量/统一用。)
+
+
+def _inst_name_index_path(game_dir: str, instance: str) -> str:
+    try:
+        from paths import CONFIG_DIR
+        d = os.path.join(CONFIG_DIR, "cache", "item_names")
+        os.makedirs(d, exist_ok=True)
+        safe = "".join(c if c.isalnum() or c in "_-" else "_" for c in (instance or "root"))
+        return os.path.join(d, f"{safe}.json")
+    except Exception:
+        return ""
+
+
+def _inst_signature(game_dir: str, instance: str) -> str:
+    """实例 mods jar + 版本 jar 的"文件名:修改时间"签名,判断是否需要重扫。"""
+    try:
+        base = os.path.join(game_dir, "versions", instance or "")
+        paths = []
+        if os.path.isdir(base):
+            for n in sorted(os.listdir(base)):
+                if n.endswith(".jar"):
+                    p = os.path.join(base, n)
+                    paths.append(f"{n}:{int(os.path.getmtime(p))}")
+        md = os.path.join(base, "mods")
+        if os.path.isdir(md):
+            for n in sorted(os.listdir(md)):
+                if n.endswith(".jar"):
+                    p = os.path.join(md, n)
+                    paths.append(f"m:{n}:{int(os.path.getmtime(p))}")
+        return "|".join(paths)
+    except Exception:
+        return ""
+
+
+# 覆盖物品/方块/实体/附魔/效果/药水/流体/生物群系——攻略查询用到的全部名称类别
+_INDEX_PREFIXES = ("item.", "block.", "entity.", "enchantment.", "effect.",
+                   "potion.", "fluid.", "biome.")
+
+
+def instance_zh_id_index(game_dir: str, instance: str | None) -> tuple[dict, dict]:
+    """按实例构建/读取(持久化)中文名↔id 对照表。
+
+    返回 (zh_to_id, id_to_zh):
+    - zh_to_id: 中文名(规整) → id("ns:path")
+    - id_to_zh: id → 中文名
+    结果落盘 AMCL/cache/item_names/<instance>.json;实例 jar 更新(签名变化)才重扫。
+
+    **绑定实例**:只解析该实例 mods + 版本 jar 的名字。某中文名解析不到,
+    说明该实例没装对应 mod,或该 mod 没做中文翻译——都代表"当前实例查不到"。
+    """
+    import paths
+    game_dir = game_dir or paths.GAME_DIR
+    cache_path = _inst_name_index_path(game_dir, instance)
+    sig = _inst_signature(game_dir, instance)
+    # 内置原版表作基座(minecraft 不在实例 jar 里)。注意 VANILLA_NAMES 是 {id: (zh, en)}。
+    zh_to_id = {}
+    id_to_zh = {}
+    for mcid, (zh, en) in VANILLA_NAMES.items():
+        if zh:
+            zh_to_id.setdefault(zh, mcid)
+        id_to_zh.setdefault(mcid, zh or en)
+
+    # ① 读磁盘缓存(签名匹配直接返回,不重扫 jar)
+    import json as _json
+    try:
+        if cache_path and os.path.isfile(cache_path):
+            with open(cache_path, encoding="utf-8") as f:
+                cached = _json.load(f)
+            if cached.get("_sig") == sig:
+                return cached.get("zh_to_id", {}), cached.get("id_to_zh", {})
+    except Exception:
+        pass
+
+    # ② 扫实例 jar(版本 jar + mods 目录),item./block./entity. 等
+    try:
+        base = os.path.join(game_dir, "versions", instance or "")
+        jars = []
+        if os.path.isdir(base):
+            jars += [os.path.join(base, f) for f in sorted(os.listdir(base)) if f.endswith(".jar")]
+        md = os.path.join(base, "mods")
+        if os.path.isdir(md):
+            jars += [os.path.join(md, f) for f in sorted(os.listdir(md)) if f.endswith(".jar")]
+        for path in jars:
+            try:
+                with zipfile.ZipFile(path) as z:
+                    entries = {e.filename for e in z.infolist()}
+                    for pre in _INDEX_PREFIXES:
+                        langfile = next((e for e in entries if e.endswith(f"/lang/zh_cn.json")), None)
+                        if langfile is None:
+                            continue
+                        data = _json.loads(z.read(langfile).decode("utf-8", "replace"))
+                        for key, val in (data or {}).items():
+                            if not isinstance(val, str) or not val.strip() or not key.startswith(pre):
+                                continue
+                            if len(val.strip()) > 40:
+                                continue
+                            item_id = _lang_key_to_id(key)
+                            if not item_id:
+                                continue
+                            zh = val.strip()
+                            zh_to_id.setdefault(zh, item_id)
+                            id_to_zh.setdefault(item_id, zh)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # ③ 落盘(带签名,下次命中缓存)
+    try:
+        if cache_path:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                _json.dump({"_sig": sig, "zh_to_id": zh_to_id, "id_to_zh": id_to_zh},
+                           f, ensure_ascii=False)
+    except Exception:
+        pass
+    return zh_to_id, id_to_zh
+
+
+def _lang_key_to_id(key: str) -> str | None:
+    """语言文件 key(item./block./entity./...)<ns>.<path>(可带 .name 尾巴)→ ns:path"""
+    for pre in _INDEX_PREFIXES:
+        if key.startswith(pre):
+            rest = key[len(pre):]
+            if rest.endswith(".name"):
+                rest = rest[:-5]
+            parts = rest.split(".")
+            # 兼容 item.minecraft.xxx 或 item.mekanism.xxx(2/3 段,ns 取第一段)
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                ns = parts[0]
+                return f"{ns}:{parts[1]}"
+    return None

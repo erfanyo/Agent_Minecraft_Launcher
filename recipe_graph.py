@@ -64,7 +64,8 @@ MACHINE_CN = {
 }
 
 # 语言 key 前缀 → 物品 id 解析(如 item.mekanism.alloy_atomic → mekanism:alloy_atomic)
-_LANG_PREFIXES = ("item.", "block.")
+# 含 entity.(生物/实体) — 用户查攻略也要生物名(掉落/打法等),不只 item/block
+_LANG_PREFIXES = ("item.", "block.", "entity.")
 
 # Minecraft 自带基础物品的中文名兜底表:minecraft.jar 不在实例 mods 目录,
 # 语言文件扫不到,这里内置一份常用表(mod 有翻译时会被覆盖)
