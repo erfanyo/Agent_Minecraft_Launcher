@@ -65,8 +65,11 @@ SCHEMES = [
     ]),
     ("联机 Mod(不想折腾网络时)", [
         ("Essential",
-         "免费联机 Mod,内置好友系统;朋友们都装上后,直接在游戏里邀请进世界,无需端口映射。",
+         "免费联机 Mod,内置好友系统;朋友们都装上后,直接在游戏里邀请进世界,无需端口映射。\n👉 到「我的版本 → 一键配置」选 Essential。",
          "https://essential.gg"),
+        ("e4mc",
+         "局域网一键联机 Mod:开服方装后进世界按个键即开放局域网,好友多人列表直接进。\n👉 到「我的版本 → 一键配置」选 e4mc。",
+         "https://modrinth.com/mod/e4mc"),
     ]),
     ("官方方案", [
         ("Minecraft Realms",
@@ -117,13 +120,19 @@ SCHEME_META = {
     },
     "Essential": {
         "name": "Essential(联机 Mod)",
-        "desc": "免费联机 Mod(需 Fabric/Forge),内置好友系统;朋友们都装上后在游戏里直接邀请进世界,\n无需端口映射。",
+        "desc": "免费联机 Mod(需 Fabric/Forge),内置好友系统;朋友们都装上后在游戏里直接邀请进世界,\n无需端口映射。\n👉 到「我的版本 → 一键配置」选 Essential,启动器会自动按你的版本装好。",
         "url": "https://essential.gg",
         "needs_genuine": True, "easytier": False,
     },
+    "e4mc": {
+        "name": "e4mc(局域网一键联机 Mod)",
+        "desc": "开服方装这个 Mod 后,进世界按一个键就能把服务器开放到局域网(无需手动对局域网开放);\n好友在游戏多人列表直接看到就能进。\n👉 到「我的版本 → 一键配置」选 e4mc,启动器会自动按你的版本装好。",
+        "url": "https://modrinth.com/mod/e4mc",
+        "needs_genuine": False, "easytier": False,
+    },
     "Mojang Realms": {
         "name": "Minecraft Realms(官方)",
-        "desc": "Mojang 官方租赁服:无需端口映射、无需公网 IP,适合不想折腾网络的玩家;需订阅。",
+        "desc": "Mojang 官方租赁服:无需端口映射、无需公网 IP,适合不想折腾网络的玩家;需订阅。\n👉 到「我的版本 → 一键配置」看看有没有支持的方案。",
         "url": "https://www.minecraft.net/realms",
         "needs_genuine": True, "easytier": False,
     },

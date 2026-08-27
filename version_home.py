@@ -484,6 +484,12 @@ class VersionHome(QWidget):
             t("一键配置 RCON(临时方案)", "One-click RCON (temporary)"),
             lambda: self.one_click_config_requested.emit("rcon"))
         rcon_item.setToolTip("临时方案:需要 Lan Server Properties,进世界后按 ESC → 对局域网开放")
+        # 联机 mod(Essential/e4mc):点击时由主窗口判断实例版本是否支持
+        for sslug, sname in [("essential", "Essential(联机 mod)"), ("e4mc", "e4mc(局域网联机 mod)")]:
+            it = cfg_menu.addAction(
+                t(f"一键配置 {sname}", f"One-click {sname}"),
+                lambda _c=False, s=sslug: self.one_click_config_requested.emit(s))
+            it.setToolTip(f"{sname}:按所选实例的版本+加载器判断是否支持,支持才安装")
         self.config_btn.setMenu(cfg_menu)
         tool_row.addWidget(self.config_btn, 1)
         lay.addLayout(tool_row)

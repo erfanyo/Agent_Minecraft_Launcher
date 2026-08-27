@@ -1755,6 +1755,8 @@ class MainWindow(QMainWindow):
         menu.addAction("一键配置 bridge-mod(推荐)…", lambda: self._one_click_bridge_for(inst))
         rcon_menu_item = menu.addAction("一键配置 RCON(临时方案)…", lambda: self._one_click_rcon_for(inst))
         rcon_menu_item.setToolTip("临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放")
+        # 联机 mod 一键配置:按实例版本+加载器判断支持才显示(不支持不出现)
+        self._add_online_mod_menu_items(menu, inst)
         menu.addAction("启动", self.launch_selected_instance)
         menu.addAction("备份实例", lambda: self.backup_current_instance(inst))
         menu.addAction("打开实例目录", lambda: open_path(self.game_dir_for(inst["id"])))
@@ -1782,6 +1784,8 @@ class MainWindow(QMainWindow):
             self._one_click_bridge_for(inst)
         elif kind == "rcon":
             self._one_click_rcon_for(inst)
+        elif kind in ("essential", "e4mc"):
+            self._one_click_online_mod_for(inst, kind)
         else:
             self._one_click_config_for(inst)
 
@@ -1884,6 +1888,67 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, f"一键配置 · {inst['id']}", msg)
         else:
             self.statusBar().showMessage(msg)
+
+    def _add_online_mod_menu_items(self, menu, inst):
+        """在实例右键菜单加「一键配置 <联机mod>」项——仅当该实例版本+加载器支持时才显示。"""
+        import lan_tools
+        gv = inst.get("base")
+        loader = inst.get("loader") or ""
+        if loader not in ("fabric", "forge", "neoforge"):
+            return
+        for slug, name in lan_tools.ONLINE_MODS.items():
+            try:
+                ok = lan_tools.mod_supported(slug, gv, loader)
+            except Exception:
+                continue
+            if ok:
+                it = menu.addAction(
+                    f"一键配置 {name}…",
+                    lambda _c=False, s=slug: self._one_click_online_mod_for(inst, s))
+                it.setToolTip(f"{name}:{gv}+{loader} 可用,自动下载安装")
+
+    def _one_click_online_mod_for(self, inst, slug: str):
+        """一键配置联机 mod(Essential / e4mc):按版本+加载器判断是否支持,支持才装。
+        已装 → 提示就绪;不支持 → 说明不支持;支持且未装 → 确认后后台下载。"""
+        import lan_tools
+        inst_dir = self.game_dir_for(inst["id"])
+        loader = inst.get("loader") or ""
+        gv = inst["base"]
+        name = lan_tools.ONLINE_MODS.get(slug, slug)
+        # 不支持 → 明确说明
+        if loader not in ("fabric", "forge", "neoforge"):
+            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+                                    f"该实例没有加载器(原版),{name} 是 mod 需要加载器。\n"
+                                    "先装个 Fabric/Forge 再回来。")
+            return
+        if not lan_tools.mod_supported(slug, gv, loader):
+            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+                                    f"{name} 暂不支持 {gv}+{loader}。\n"
+                                    "可以换个版本,或到「联机」看别的方案。")
+            return
+        # 已装?
+        mods_dir = os.path.join(inst_dir, "mods")
+        has = any(name and (slug in f.lower() or name.split("(")[0].strip().lower() in f.lower())
+                  for f in os.listdir(mods_dir) if f.endswith(".jar")) if os.path.isdir(mods_dir) else False
+        ret = QMessageBox.question(
+            self, f"一键配置 · {inst['id']}",
+            (f"✅ {name} 支持 {gv}+{loader}。\n\n"
+             f"{'已检测到,重装/更新吗?' if has else '自动从 Modrinth 下载并安装到该实例吗?'}"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        self.statusBar().showMessage(f"正在为 {inst['id']} 安装 {name}…")
+
+        def worker(status_cb, progress_cb):
+            try:
+                msg = lan_tools.install_online_mod(
+                    slug, gv, loader, mods_dir, progress_callback=progress_cb)
+            except Exception as e:
+                status_cb(f"安装失败:{type(e).__name__}: {e}")
+                return
+            status_cb(msg)
+
+        self._run_download(worker)
 
     def _one_click_config_for(self, inst):
         """对指定实例执行一键配置(自动:bridge-mod 优先,不兼容则提示走 RCON)。
