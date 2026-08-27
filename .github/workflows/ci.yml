@@ -52,6 +52,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
+
+      - name: Fetch llama.cpp runtime (spec datas 需要)
+        run: python tools/fetch_llamacpp.py
+
       - name: Build exe (spec)
         run: python -m PyInstaller --noconfirm --clean AgentMinecraftLauncher.spec
       - name: Verify artifact
