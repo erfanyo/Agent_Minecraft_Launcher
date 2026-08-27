@@ -6,6 +6,9 @@ requests>=2.31        # 网络请求(版本清单/Modrinth/微软认证/模型�
 # psutil —— CPU/温度采样,供「过热劝退」提示。可选:未装时自动走 Windows WMI 兜底。
 #   pip install psutil
 psutil>=5.9
+# cryptography —— 插件 ed25519 签名验签(溯源)。可选:未装时验签降级为"未审核"。
+#   pip install cryptography
+cryptography>=40
 
 # ===== 开发/打包依赖(仅在本地打包 exe 时需额外安装) =====
 # PyInstaller 用于把启动器打包成单文件 exe(开发机一次性):

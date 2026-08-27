@@ -116,17 +116,41 @@ def build_api(plugin_id: str) -> PluginAPI:
 
 
 def _read_plugin_meta(mod) -> dict:
-    """从插件模块读元数据:PLUGIN_NAME/PLUGIN_DESCRIPTION/PLUGIN_DEFAULT_ENABLED。"""
+    """从插件模块读元数据:PLUGIN_NAME/PLUGIN_DESCRIPTION/PLUGIN_DEFAULT_ENABLED + 签名溯源。"""
     try:
         default_enabled = bool(getattr(mod, "PLUGIN_DEFAULT_ENABLED", True))
     except Exception:
         default_enabled = True
-    return {
+    meta = {
         "name": getattr(mod, "PLUGIN_NAME", None),
         "description": getattr(mod, "PLUGIN_DESCRIPTION", ""),
         # 注意:register() 里的 register_settings_page 会写入 _PLUGIN_META[name]["settings_build_fn"]
         "default_enabled": default_enabled,
+        # 签名溯源:默认 unknown;验签通过=official,无签名/验签失败=ai_generated/unknown
+        "trust": "unknown", "author": "",
     }
+    # ---- 签名溯源(ed25519;见 plugin_sign.py)----
+    try:
+        import inspect, plugin_sign
+        sig = getattr(mod, "PLUGIN_SIGNATURE", None)
+        if sig:
+            src = inspect.getsource(mod)
+            ok, author = plugin_sign.verify_plugin(src, sig)
+            if ok:
+                meta["trust"] = "official"
+                meta["author"] = author
+            elif plugin_sign.is_crypto_available():
+                # cryptography 在但验签失败 → 签名无效(可能被改/非作者)
+                meta["trust"] = "signed_invalid"
+                meta["author"] = author or ""
+            else:
+                meta["trust"] = "unsigned"   # 无 cryptography → 无法验签
+        else:
+            # 无签名:本地/AI 生成
+            meta["trust"] = "unsigned"
+    except Exception:
+        meta["trust"] = "unsigned"
+    return meta
 
 
 def discover_plugins() -> list:

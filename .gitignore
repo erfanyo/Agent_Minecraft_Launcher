@@ -35,6 +35,13 @@ bridge-mod/dist/
 *.env
 .env
 
+# 插件签名/私钥(作者的私钥文档+密钥文件,绝不提交)
+私钥维护.md
+*key*.pem
+*.pem
+*.key
+private_key*
+
 # 用户配置(本地个性化设置)
 config.json
 AMCL/
