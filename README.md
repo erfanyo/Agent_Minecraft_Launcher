@@ -80,6 +80,28 @@ Get-FileHash .\AgentMinecraftLauncher.exe -Algorithm SHA256
 
 比对输出与 Release 说明里的哈希,**一致 = 文件完整未被篡改**。
 
+#### 🔏 GPG 签名验证(更强的来源证明)
+SHA256 只保证"文件没变",但如果下载渠道被劫持,哈希也能被一起替换。更稳的是用作者的
+**GPG 公钥**验证文件确实是作者签名、且未被篡改:
+
+1. **导入作者公钥**(仓库根 `erfanyo.asc`):
+   ```powershell
+   gpg --import erfanyo.asc
+   ```
+2. **验证 exe 签名**(每个 Release 附 `AgentMinecraftLauncher.exe.sig`):
+   ```powershell
+   gpg --verify AgentMinecraftLauncher.exe.sig AgentMinecraftLauncher.exe
+   ```
+   > 看到 `Good signature from "erfanyo <29330387076@qq.com>"` 即验证通过。
+
+**作者密钥指纹**(核对用,防止公钥本身被调包):
+```
+D2D1 0D7F 7FC3 E2AF FA76  88E9 1A89 9932 9DC6 5331
+```
+
+> 说明:GPG 签名是**来源/完整性证明**(给较真的人),**不能**消除 Windows SmartScreen 的
+> "是否保留"提示(那是另一回事,靠代码签名证书/信誉,见上方)。
+
 ### 方式二:从源码运行(给开发者)
 ```bash
 python -m venv .venv            # 创建虚拟环境
