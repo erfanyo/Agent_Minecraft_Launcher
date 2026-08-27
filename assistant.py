@@ -964,10 +964,11 @@ class AISettingsForm(QWidget):
         quota_row.addStretch()
         av.addLayout(quota_row)
 
-        # 特例豁免名单(逗号分隔)
+        # 特例豁免名单(=服主/管理员,逗号分隔)
         self.quota_exempt_edit = QLineEdit()
-        self.quota_exempt_edit.setPlaceholderText("豁免每日额度的玩家(逗号分隔,如 Steve,Alex;留空=无)")
-        self.quota_exempt_edit.setToolTip("这些玩家不受每日额度限制(如服主自己);仍在冷却限制内")
+        self.quota_exempt_edit.setPlaceholderText("豁免额度的服主/管理员(逗号分隔,如 Steve,Alex;留空=无)")
+        self.quota_exempt_edit.setToolTip("这些玩家(=服主/管理员)不受每日额度限制,可任意使用 /ai;"
+                                          "仍在每玩家冷却限制内。其他玩家用完额度会提示「去跟服主要」")
         av.addWidget(self.quota_exempt_edit)
 
         # ---------- 布局 ----------

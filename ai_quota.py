@@ -95,21 +95,24 @@ def check_and_consume(player: str) -> GuardResult:
             state = {"date": today, "total": 0, "last_time": {}}
 
         name = player or "匿名"
-        # ① 每玩家冷却
-        cool = int(_get("ai_in_game_cool", 5) or 5)
+        # ① 每玩家冷却(0 = 不限,保留合法 0,勿用 or 兜底)
+        cool = _get("ai_in_game_cool", 5)
+        cool = int(cool) if cool not in (None, "") else 5
         last = state["last_time"].get(name, 0)
         now = time.time()
         if cool > 0 and last and (now - last) < cool:
             wait = int(cool - (now - last)) + 1
             return GuardResult(False, f"[AI] 你发得太快了,请 {wait} 秒后再试")
 
-        # ② 每日额度(特例豁免)
-        quota = int(_get("ai_in_game_quota", 50) or 50)
+        # ② 每日额度(特例豁免;0 = 不限)
+        quota = _get("ai_in_game_quota", 50)
+        quota = int(quota) if quota not in (None, "") else 50
         is_exempt = name in _exempt_players() or _is_admin(name)
         if quota > 0 and not is_exempt:
             if state["total"] >= quota:
                 return GuardResult(False,
-                                   f"[AI] 今日游戏内 AI 额度已用完({quota} 次),明天再试")
+                                   f"[AI] 今日游戏内 AI 额度已用完({quota} 次)。"
+                                   "服主的 token 不是大风刮来的——想要更多?去跟服主要 😉")
 
         # ③ 通过 → 消耗(特例豁免不计入总额度,不挤压其它玩家)
         if not is_exempt:
