@@ -341,9 +341,10 @@ def _rcon_diagnosis(inst_dir: str) -> str:
 # 启动器读 token → 发 JSON 指令 → 收 JSON 结果(CommandSource 精确反馈)。
 
 def send_bridge_command(instance: str, command: str, game_dir: str,
-                        port: int = 26100) -> str:
+                        port: int = 26100, as_player: str = "") -> str:
     """走 bridge-mod 本地指令口发送指令(优先通道,100% 精确反馈)。
-    bridge 未装/未运行返回引导提示。port 默认 26100(与 mod 约定一致)。"""
+    port 默认 26100。as_player(可选):指定"以该在线玩家身份执行"(bridge-mod ≥ 协议 v2),
+    如传玩家名或 UUID;留空 = 服务端控制台身份(默认,能用高级指令)。"""
     import json
     import socket
     inst_dir = os.path.join(game_dir, "versions", instance)
@@ -369,8 +370,10 @@ def send_bridge_command(instance: str, command: str, game_dir: str,
                 "请先启动游戏并进入一个世界(单机集成服务器运行时才有指令口),\n"
                 "进入后立刻再让我发指令。")
     try:
-        conn.sendall((json.dumps({"seq": 1, "command": cmd, "token": token})
-                      + "\n").encode("utf-8"))
+        req = {"seq": 1, "command": cmd, "token": token}
+        if as_player:
+            req["as_player"] = as_player
+        conn.sendall((json.dumps(req) + "\n").encode("utf-8"))
         resp = conn.recv(65536).decode("utf-8", "replace")
     except Exception as e:
         return f"bridge 通信失败:{e}"

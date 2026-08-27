@@ -3,6 +3,7 @@ package com.agentmc.bridge;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.server.level.ServerPlayer;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -28,6 +29,10 @@ import java.util.UUID;
  *
  * 执行命令用 Commands.performPrefixedCommand(source, cmd) 并包一层
  * CommandBridgeSource 捕获 sendSuccess/sendFailure 的输出。
+ *
+ * 【可选:以玩家身份执行】请求可带 "as_player":"<玩家名或UUID>",
+ * 命中在线玩家时用该玩家身份构建 CommandSourceStack(位置/权限/@p 目标按玩家),
+ * 缺省仍为服务端控制台身份(权限 level 2)。玩家不在线则回退控制台并注记。
  */
 public class LocalBridgeServer {
 
@@ -103,15 +108,29 @@ public class LocalBridgeServer {
             }
             String command = req.has("command") ? req.get("command").getAsString() : "";
             long seq = req.has("seq") ? req.get("seq").getAsLong() : 0L;
-            BridgeIO.log("bridge got command: " + command);
+            String asPlayer = req.has("as_player") ? req.get("as_player").getAsString() : "";
+            BridgeIO.log("bridge got command: " + command
+                    + (asPlayer.isEmpty() ? "" : " (as_player=" + asPlayer + ")"));
             if (command.isBlank()) return;
 
             CommandBridgeSource sink = new CommandBridgeSource(seq, command, server);
             // 服务器线程执行命令(execute 在主线程跑,避免并发问题)
             server.execute(() -> {
                 try {
-                    CommandSourceStack source = server.createCommandSourceStack()
-                            .withSource(sink);
+                    // 默认:服务端控制台身份(权限 level 2,能用 /op 等高级指令)
+                    CommandSourceStack source = server.createCommandSourceStack();
+                    // 可选:以在线玩家身份执行(位置/权限/@p 按玩家)
+                    if (!asPlayer.isEmpty()) {
+                        ServerPlayer p = findPlayer(asPlayer);
+                        if (p != null) {
+                            source = source.withEntity(p).withSource(p);
+                        } else {
+                            sink.fail("as_player 指定的玩家不在线: " + asPlayer);
+                            sink.flushTo(out, server);
+                            return;
+                        }
+                    }
+                    source = source.withSource(sink);
                     Commands commands = server.getCommands();
                     commands.performPrefixedCommand(source, command);
                     sink.flushTo(out, server);
@@ -122,5 +141,27 @@ public class LocalBridgeServer {
             });
         } catch (IOException ignored) {
         }
+    }
+
+    /** 按玩家名(在线)或 UUID 查 ServerPlayer;查不到返回 null。 */
+    private ServerPlayer findPlayer(String nameOrUuid) {
+        if (nameOrUuid == null || nameOrUuid.isBlank()) return null;
+        try {
+            var playerList = server.getPlayerList();
+            // 先试名字
+            ServerPlayer byName = playerList.getPlayerByName(nameOrUuid);
+            if (byName != null) return byName;
+            // 再试 UUID
+            try {
+                UUID uuid = UUID.fromString(nameOrUuid);
+                return playerList.getPlayerByUUID(uuid);
+            } catch (Exception ignored) { }
+            // 大小写/别名兜底:在线玩家里找名字忽略大小写匹配
+            for (ServerPlayer p : playerList.getPlayers()) {
+                if (p.getGameProfile().getName().equalsIgnoreCase(nameOrUuid)) return p;
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 }
