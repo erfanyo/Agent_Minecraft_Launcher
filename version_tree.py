@@ -5,7 +5,7 @@
 """
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
 
@@ -101,7 +101,12 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
 
     tree.clear()
     for m, bucket in majors.items():   # majors 保持清单顺序 = 新的大版本在前
+        # 大版本节点本身可点(折叠时点它 → 选中推荐具体版;展开可精确选)。
+        # 用单独标记 {"__major__": m} 方便外部区分"大版本分组节点"与"具体版叶子"。
         root = make_tree_node(f"{m}.xx")
+        root.setFlags(root.flags() | Qt.ItemFlag.ItemIsSelectable)
+        rec = recommended_version(m, bucket["release"])
+        root.setData(0, Qt.ItemDataRole.UserRole, {"__major__": m, "recommended": rec})
         for v in bucket["release"]:
             _leaf(root, v)
         if bucket["snapshot"]:
@@ -134,3 +139,121 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
 
     return sum(len(b["release"]) for b in majors.values()), \
         sum(len(b["snapshot"]) for b in majors.values()), len(ancients), len(april_fools)
+
+
+def releases_grouped_by_major(manifest: dict) -> dict:
+    """把正式版按大版本分桶(releases_in_major,新→旧)。快照忽略(资源筛选只要正式版)。"""
+    grouped = {}
+    for v in manifest["versions"]:
+        if v["type"] != "release":
+            continue
+        m = major_version(v["id"])
+        if m is None:
+            continue
+        grouped.setdefault(m, []).append(v)
+    return grouped
+
+
+def recommended_version(major: str, release_list: list) -> str:
+    """给定某大版本的正式版列表(新→旧),返回推荐的具体版:
+    优先该大版本里的黄金版(GOLDEN_VERSIONS);没有黄金版 → 该大版本最新正式版。"""
+    for v in release_list:
+        if v["id"] in GOLDEN_VERSIONS:
+            return v["id"]
+    return release_list[0]["id"] if release_list else ""
+
+
+class GameVersionTree(QTreeWidget):
+    """可复用的「游戏版本」选择树(手动下载卡 / 资源筛选用):
+    顶层是「无(全部版本)」+ 各大版本,每个大版本下挂正式版明细;
+    点大版本(不展开)→ 自动选中它的推荐版(GOLDEN_VERSIONS 优先,否则最新);
+    展开可精确选某正式版。选中变化发 version_changed(带当前具体版 or "")。"""
+    version_changed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("filter_version")      # 教程定位复用(原顶部筛选的 objectName)
+        self.setColumnCount(1)
+        self.setHeaderHidden(True)
+        self.setAlternatingRowColors(False)
+        self.header().setStretchLastSection(True)
+        self.currentItemChanged.connect(self._on_current_changed)
+        self._none_item = None
+
+    def populate(self, manifest: dict, none_label: str = "无(全部版本)"):
+        """用版本清单填树。选中的版本值是 UserRole 里的具体版字符串;"" = 无(全部)。"""
+        self.clear()
+        self._none_item = QTreeWidgetItem([none_label])
+        self._none_item.setData(0, Qt.ItemDataRole.UserRole, "")
+        self.addTopLevelItem(self._none_item)
+        grouped = releases_grouped_by_major(manifest)
+        for major, releases in grouped.items():   # 新→旧
+            rec = recommended_version(major, releases)
+            root = QTreeWidgetItem([f"{major}.xx(推荐 {rec})"])
+            root.setData(0, Qt.ItemDataRole.UserRole, major)
+            self.addTopLevelItem(root)
+            for v in releases:
+                leaf = QTreeWidgetItem([v["id"]])
+                leaf.setData(0, Qt.ItemDataRole.UserRole, v["id"])
+                root.addChild(leaf)
+            root.setExpanded(False)
+        self.setCurrentItem(self._none_item)
+
+    def _on_current_changed(self, cur, _prev):
+        if cur is None:
+            return
+        v = cur.data(0, Qt.ItemDataRole.UserRole)
+        # 大版本节点被点中(未展开明细):自动选它的推荐具体版
+        if isinstance(v, str) and v:
+            # 找到该大版本下 = 推荐版 的叶子并选中(不发重复信号)
+            rec = self._recommended_of(cur)
+            leaf = self._find_leaf(cur, rec)
+            if leaf is not None:
+                self.blockSignals(True)
+                self.setCurrentItem(leaf)
+                self.blockSignals(False)
+                self.version_changed.emit(leaf.data(0, Qt.ItemDataRole.UserRole))
+                return
+        self.version_changed.emit(v or "")
+
+    @staticmethod
+    def _recommended_of(root) -> str:
+        # 解析 root 文本里的 "(推荐 x)" 或直接算
+        import re
+        m = re.search(r"推荐 ([^\s)]+)", root.text(0))
+        if m:
+            return m.group(1)
+        return ""
+
+    @staticmethod
+    def _find_leaf(root, version_str: str):
+        if not version_str:
+            return None
+        for i in range(root.childCount()):
+            ch = root.child(i)
+            if ch.data(0, Qt.ItemDataRole.UserRole) == version_str:
+                return ch
+        return None
+
+    def current_version(self) -> str:
+        """当前选中的具体版本字符串;"" = 无(全部版本)。"""
+        cur = self.currentItem()
+        if cur is None:
+            return ""
+        v = cur.data(0, Qt.ItemDataRole.UserRole)
+        return v or ""
+
+    def select_version(self, version_str: str):
+        """按具体版字符串选中对应叶子;找不到则回退到「无」。"""
+        if not version_str:
+            if self._none_item is not None:
+                self.setCurrentItem(self._none_item)
+            return
+        for i in range(self.topLevelItemCount()):
+            top = self.topLevelItem(i)
+            leaf = self._find_leaf(top, version_str)
+            if leaf is not None:
+                self.setCurrentItem(leaf)
+                return
+        if self._none_item is not None:
+            self.setCurrentItem(self._none_item)

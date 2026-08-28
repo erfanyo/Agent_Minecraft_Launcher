@@ -104,7 +104,20 @@ def load_packs_from_dir(directory: str) -> int:
 
 def t(zh: str, en: str = "") -> str:
     """取当前语言的文字;英文未提供时回退中文。
-    若激活了语言包,先查语言包有没有覆盖(用 zh 或 en 原文作 key)。"""
+    若激活了语言包,先查语言包有没有覆盖(用 zh 或 en 原文作 key)。
+
+    三种调用形态(向下兼容):
+      t("中文", "英文")      旧式两参
+      t(("中文", "英文"))    元组直传(zh=en 元组)
+      t("STRING_ID")        新式单项:若该字符串是 strings_table.STRINGS 的 key,
+                            则取对应 (中文, 英文) 再返回;否则当作中文原文返回。
+    """
+    # 懒加载集中的文案表(避免 i18n <-> strings_table 循环导入;表大时只在首用时加载)
+    from strings_table import STRINGS
+    if isinstance(zh, tuple):
+        zh, en = (zh[0], zh[1] if len(zh) > 1 else "")
+    elif isinstance(zh, str) and zh in STRINGS:
+        zh, en = STRINGS[zh]
     if _lang_pack:
         # 语言包覆盖优先(用中文原文或英文原文作 key)
         if zh in _lang_pack:

@@ -42,7 +42,7 @@ class UpdateDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(t("检查更新", "Check for Updates"))
+        self.setWindowTitle(t("CHECK_FOR_UPDATES_ALT"))
         self.setMinimumWidth(440)
         self.sig = _UpdateSignals()
         self.sig.checked.connect(self._refresh)
@@ -53,14 +53,14 @@ class UpdateDialog(QDialog):
 
         self.launcher_label = QLabel("AMCL 启动器: 正在检查...")
         self.bridge_label = QLabel("bridge-mod: 正在检查...")
-        self.launcher_btn = QPushButton(t("下载并更新", "Download & Update"))
+        self.launcher_btn = QPushButton(t("DOWNLOAD_UPDATE"))
         self.launcher_btn.setVisible(False)
         self.launcher_btn.clicked.connect(self._do_launcher_update)
-        self.bridge_btn = QPushButton(t("查看发布页", "Open Release Page"))
+        self.bridge_btn = QPushButton(t("OPEN_RELEASE_PAGE"))
         self.bridge_btn.setVisible(False)
         self.bridge_btn.clicked.connect(
             lambda: QDesktopServices.openUrl(QUrl(updater.RELEASES_API)))
-        close_btn = QPushButton(t("关闭", "Close"))
+        close_btn = QPushButton(t("CLOSE"))
         close_btn.clicked.connect(self.accept)
 
         row = QHBoxLayout()
@@ -68,11 +68,11 @@ class UpdateDialog(QDialog):
         row.addStretch()
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(t("AMCL 启动器", "AMCL Launcher")))
+        layout.addWidget(QLabel(t("AMCL_LAUNCHER")))
         layout.addWidget(self.launcher_label)
         layout.addWidget(self.launcher_btn)
         layout.addSpacing(10)
-        layout.addWidget(QLabel(t("bridge-mod(游戏内指令口 / 数据导出)", "bridge-mod")))
+        layout.addWidget(QLabel(t("BRIDGE_MOD")))
         layout.addWidget(self.bridge_label)
         layout.addWidget(self.bridge_btn)
         layout.addSpacing(10)
@@ -148,12 +148,12 @@ class UpdateDialog(QDialog):
 
     def _on_downloaded(self):
         QMessageBox.information(
-            self, t("更新", "Update"),
-            t("新版本已下载,程序将退出并自动替换重启。", "Update downloaded; the app will restart."))
+            self, t("UPDATE"),
+            t("UPDATE_DOWNLOADED_THE_APP_WILL_RESTART"))
         QTimer.singleShot(300, QApplication.instance().quit)
 
     def _on_failed(self, msg):
         self.launcher_btn.setEnabled(True)
-        self.launcher_btn.setText(t("下载并更新", "Download & Update"))
-        QMessageBox.warning(self, t("更新失败", "Update Failed"),
+        self.launcher_btn.setText(t("DOWNLOAD_UPDATE"))
+        QMessageBox.warning(self, t("UPDATE_FAILED"),
                             f"下载/替换失败:{msg[:200]}")

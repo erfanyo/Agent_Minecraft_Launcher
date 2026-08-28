@@ -176,27 +176,27 @@ class MainWindow(QMainWindow):
         self.main_tabs = QTabWidget()
         from ui_style import tab_style, set_style
         set_style(self.main_tabs, tab_style)   # 外层标签页:圆角+字体放大(14px)
-        self.main_tabs.addTab(tab_a, t("我的实例", "My Instances"))
+        self.main_tabs.addTab(tab_a, t("MY_INSTANCES"))
         self._my_inst_tab_idx = 0   # 「我的实例」= 主标签第 0 页(拖入文件 → 当作整合包安装)
         # 实例详情:放在「我的版本」右边;未选择实例时隐藏,选择后出现(带滑入/淡入动画)
         from instance_manager import InstanceManagerDialog
         self.instance_details = InstanceManagerDialog()
         self.instance_details.setObjectName("instance_details")
         self._inst_details_tab_idx = self.main_tabs.addTab(
-            self.instance_details, t("实例详情", "Instance Details"))
+            self.instance_details, t("INSTANCE_DETAILS"))
         self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
         tab_a.instance_selected.connect(self._on_instance_selected)
-        self.main_tabs.addTab(self.resource_center, t("下载新资源", "Resources"))
+        self.main_tabs.addTab(self.resource_center, t("RESOURCES"))
         # 联机方案中心:改为「下载新资源」右侧的标签卡(卡片形式)
         from online_center import OnlineCenter
         self.online_center = OnlineCenter()
         self.online_center.setObjectName("online_center")
-        self._online_tab_idx = self.main_tabs.addTab(self.online_center, t("联机", "Multiplayer"))
+        self._online_tab_idx = self.main_tabs.addTab(self.online_center, t("MULTIPLAYER"))
         # 设置:改成"和下载新资源平级的标签卡",左菜单(游戏/界面/AI/镜像源)+ 右面板(非模态,引导遮罩可用)
         from settings_center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
         self.settings_center.applied.connect(self._on_settings_applied)
-        self.main_tabs.addTab(self.settings_center, t("设置", "Settings"))
+        self.main_tabs.addTab(self.settings_center, t("SETTINGS"))
 
         # ---- 插件注册的主标签页(与 下载新资源/联机/设置 平级)----
         try:
@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.main_tabs.setCurrentIndex(idx)
             if tab == "mirror":
-                self.settings_center.shell.switch_by_label(t("镜像源", "Mirror"))
+                self.settings_center.shell.switch_by_label(t("MIRROR"))
             return
         # 兜底:兼容未挂tab的旧路径(一般不会走到)
         dlg = SettingsDialog(self.settings, self, tab=tab)
@@ -501,7 +501,7 @@ class MainWindow(QMainWindow):
         sv.addWidget(lbl)
         sv.addWidget(expand_btn)
         sv.addStretch()
-        self.ai_strip_dock = QDockWidget(t("AI 助手", "AI Assistant"), self)
+        self.ai_strip_dock = QDockWidget(t("AI_ASSISTANT"), self)
         self.ai_strip_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
         self.ai_strip_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.ai_strip_dock.setWidget(self.ai_strip)
@@ -828,7 +828,7 @@ class MainWindow(QMainWindow):
         ov.setStyleSheet("background: rgba(255,255,255,0.90);")
         lay = QVBoxLayout(ov)
         lay.setContentsMargins(20, 20, 20, 20)
-        lbl = QLabel(t("🖐 松手 → 尝试作为整合包安装", "Release to install as modpack"))
+        lbl = QLabel(t("RELEASE_TO_INSTALL_AS_MODPACK"))
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lbl.setWordWrap(True)
         lbl.setStyleSheet("color:#222; font-size:17px; font-weight:bold; background: transparent;")
@@ -1011,12 +1011,9 @@ class MainWindow(QMainWindow):
                                                  manifest['latest']['snapshot'])
         self.download_tab._load_tree()
 
-        # 填充筛选下拉(最近的一些正式版):各资源浏览器
-        recent = [v["id"] for v in manifest["versions"]
-                  if v["type"] == "release"][:40]
+        # 填充各资源浏览器的全局游戏版本树(按大版本分组)
         for br in self.resource_center.browsers.values():
-            if br.filter_version.count() == 0:
-                br.filter_version.addItems(recent)
+            br.populate_game_versions(manifest)
 
         self.statusBar().showMessage(f"加载完成(最新正式版 {manifest['latest']['release']})")
 
@@ -2063,9 +2060,8 @@ class MainWindow(QMainWindow):
 
         没选中实例就提示,避免打开一个空管理界面让人困惑。"""
         if inst is None:
-            QMessageBox.information(self, t("实例设置", "Instance settings"),
-                                    t("请先在右侧「版本」里选中一个实例。",
-                                      "Select an instance on the right first."))
+            QMessageBox.information(self, t("INSTANCE_SETTINGS"),
+                                    t("SELECT_AN_INSTANCE_ON_THE_RIGHT_FIRST"))
             return
         self.open_instance_manager(inst)
 
@@ -2073,7 +2069,7 @@ class MainWindow(QMainWindow):
         """首页登录卡片改了离线昵称 → 重读设置,刷新登录显示。"""
         self.settings = load_settings()
         self.home_panel.refresh_login()
-        self.statusBar().showMessage(t("登录信息已更新", "Login info updated"))
+        self.statusBar().showMessage(t("LOGIN_INFO_UPDATED"))
 
     def backup_current_instance(self, inst):
         """GUI 备份按钮(灵感 #6 补齐):手动备份一个实例"""

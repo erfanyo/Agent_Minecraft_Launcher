@@ -290,16 +290,16 @@ class RecommendWizard(QWidget):
     QUESTIONS = [
         ("① 需要跨平台吗?",
          "朋友用的是 Windows / Mac / Linux / 手机等不同系统吗?",
-         t("是", "Yes"), t("否", "No")),
+         t("YES"), t("NO")),
         ("② 想最省事、不想注册账号/不想自己开服务器吗?",
          "少折腾:最好不用注册账号、不用自己租服务器/开服?",
-         t("是", "Yes"), t("否", "No")),
+         t("YES"), t("NO")),
         ("③ 你有正版 Minecraft 账号吗?",
          "已经购买正版(微软账号)了吗?盗版/离线账号不能用于官方联机、Essential 等。",
-         t("是", "Yes"), t("否", "No")),
+         t("YES"), t("NO")),
         ("④ 想开服给「不在同一网络/全网」的朋友吗?",
          "不只是同 WiFi/局域网,想开放给更远、更多朋友?",
-         t("是", "Yes"), t("否", "No")),
+         t("YES"), t("NO")),
     ]
 
     def __init__(self, on_view_tutorial, parent=None):
@@ -331,8 +331,8 @@ class RecommendWizard(QWidget):
         lay.addWidget(self.q_prompt)
         lay.addWidget(self.q_hint)
         lay.addSpacing(8)
-        yes = QPushButton(t("是", "Yes"))
-        no = QPushButton(t("否", "No"))
+        yes = QPushButton(t("YES"))
+        no = QPushButton(t("NO"))
         yes.setMinimumHeight(36)
         no.setMinimumHeight(36)
         yes.clicked.connect(lambda: self._answer(True))
@@ -343,7 +343,7 @@ class RecommendWizard(QWidget):
         row.addStretch()
         lay.addLayout(row)
         lay.addSpacing(8)
-        back = QPushButton(t("← 上一步", "← Back"))
+        back = QPushButton(t("BACK"))
         back.clicked.connect(self._back_question)
         lay.addWidget(back)
         lay.addStretch()
@@ -370,8 +370,8 @@ class RecommendWizard(QWidget):
         lay.addWidget(self.res_genuine)
         lay.addSpacing(10)
 
-        self.res_open = QPushButton(t("打开官网", "Open website"))
-        self.res_tut = QPushButton(t("查看教程", "View tutorial"))
+        self.res_open = QPushButton(t("OPEN_WEBSITE"))
+        self.res_tut = QPushButton(t("VIEW_TUTORIAL"))
         self.res_open.clicked.connect(self._open_recommended_site)
         self.res_tut.clicked.connect(self._view_tutorial)
         row = QHBoxLayout()
@@ -388,23 +388,23 @@ class RecommendWizard(QWidget):
         self.et_status = QLabel()
         self.et_status.setWordWrap(True)
         self.et_status.setStyleSheet("color: #666666;")
-        self.et_gen = QPushButton(t("一键生成房间并分享", "Generate room & share"))
+        self.et_gen = QPushButton(t("GENERATE_ROOM_SHARE"))
         self.et_gen.clicked.connect(self._easytier_gen)
         et.addWidget(self.et_status)
         et.addWidget(self.et_gen)
         self.et_key = QLineEdit()
         self.et_key.setReadOnly(True)
-        self.et_key.setPlaceholderText(t("房间钥匙(name + secret)", "Room key (name + secret)"))
+        self.et_key.setPlaceholderText(t("ROOM_KEY_NAME_SECRET"))
         self.et_vip = QLineEdit()
         self.et_vip.setReadOnly(True)
-        self.et_vip.setPlaceholderText(t("虚拟 IP", "Virtual IP"))
+        self.et_vip.setPlaceholderText(t("VIRTUAL_IP"))
         et.addWidget(self.et_key)
         et.addWidget(self.et_vip)
         self.easytier_widget.setVisible(False)
         lay.addWidget(self.easytier_widget)
         lay.addStretch()
 
-        restart = QPushButton(t("重新开始", "Restart"))
+        restart = QPushButton(t("RESTART"))
         restart.clicked.connect(self._restart)
         lay.addWidget(restart)
         return w
@@ -439,12 +439,11 @@ class RecommendWizard(QWidget):
         q = self._answers
         scheme = recommend(*(q + [False] * (4 - len(q)))) if q else "EasyTier"
         meta = SCHEME_META[scheme]
-        self.res_title.setText(t("推荐方案:", "Recommended:") + " " + meta["name"])
+        self.res_title.setText(t("RECOMMENDED") + " " + meta["name"])
         self.res_desc.setText(meta["desc"])
         # 需正版提示
         if meta.get("needs_genuine"):
-            self.res_genuine.setText(t("⚠️ 该方案需要正版 Minecraft(微软)账号,盗版/离线账号无法使用。",
-                                       "⚠️ This option needs a genuine (Microsoft) Minecraft account; offline/pirated accounts won't work."))
+            self.res_genuine.setText(t("NEEDS_GENUINE_MS_ACCOUNT"))
             self.res_genuine.setVisible(True)
         else:
             self.res_genuine.setVisible(False)
@@ -461,8 +460,7 @@ class RecommendWizard(QWidget):
     def _refresh_easytier(self):
         lt = _lan_tools()
         if lt is None:
-            self.et_status.setText(t("自动配置未就绪:后端接口暂不可用。请先「打开官网」下载,或手动按教程安装。",
-                                     "Auto-setup not ready: backend unavailable. Open the website to download, or follow the tutorial."))
+            self.et_status.setText(t("AUTO_SETUP_NOT_READY_BACKEND_UNAVAILABLE_OPEN_THE_WEBSITE_TO_DOWNLOAD_OR_FOLLOW_THE_TUTORIAL"))
             self.et_gen.setVisible(False)
             return
         self.et_gen.setVisible(True)
@@ -471,18 +469,16 @@ class RecommendWizard(QWidget):
         except Exception:
             st = {}
         if st.get("installed"):
-            self.et_status.setText(t("EasyTier 已就绪,可一键生成房间。", "EasyTier ready — generate a room."))
-            self.et_gen.setText(t("一键生成房间并分享", "Generate room & share"))
+            self.et_status.setText(t("EASYTIER_READY_GENERATE_A_ROOM"))
+            self.et_gen.setText(t("GENERATE_ROOM_SHARE"))
         else:
-            self.et_status.setText(t("自动配置需联网:首次使用请点击下载/安装(或手动按教程装)。",
-                                     "Auto-setup needs internet: click to download/install first (or install manually)."))
-            self.et_gen.setText(t("下载/安装并生成房间", "Download/install & generate room"))
+            self.et_status.setText(t("AUTO_SETUP_NEEDS_INTERNET_CLICK_TO_DOWNLOAD_INSTALL_FIRST_OR_INSTALL_MANUALLY"))
+            self.et_gen.setText(t("DOWNLOAD_INSTALL_GENERATE_ROOM"))
 
     def _easytier_gen(self):
         lt = _lan_tools()
         if lt is None:
-            self.et_status.setText(t("后端未就绪,请先「打开官网」下载或手动按教程安装。",
-                                     "Backend not ready — open the website or install manually."))
+            self.et_status.setText(t("BACKEND_NOT_READY_OPEN_THE_WEBSITE_OR_INSTALL_MANUALLY"))
             return
         name = _random_room_name()
         secret = _random_secret()
@@ -495,8 +491,7 @@ class RecommendWizard(QWidget):
             vip = res.get("virtual_ip") or ""
             self.et_key.setText(key)
             self.et_vip.setText(vip)
-            self.et_status.setText(t("✅ 房间已生成;把房间钥匙与虚拟 IP 发给朋友即可。",
-                                     "✅ Room created — send the room key & virtual IP to your friends."))
+            self.et_status.setText(t("ROOM_CREATED_SEND_THE_ROOM_KEY_VIRTUAL_IP_TO_YOUR_FRIENDS"))
         else:
             err = (res or {}).get("error") or ""
             self.et_status.setText(t("自动配置失败:需联网,首次使用请点击下载;或手动按教程装。" if not err
@@ -538,7 +533,7 @@ def build_tutorials_tab() -> QWidget:
         body.setWordWrap(True)
         body.setStyleSheet("color: #666666;")
         lay.addWidget(body)
-        open_btn = QPushButton(t("查看官网/教程", "Open official tutorial"))
+        open_btn = QPushButton(t("OPEN_OFFICIAL_TUTORIAL"))
         open_btn.setFixedWidth(140)
         open_btn.clicked.connect(lambda _c, u=tut["url"]: QDesktopServices.openUrl(QUrl(u)))
         row = QHBoxLayout()
@@ -567,16 +562,16 @@ class OnlineCenter(QWidget):
         from center_shell import CenterShell
         self.shell = CenterShell(self, menu_width=150)
         # 首页:总览描述 + 「开始推荐」(T/F 选择入口)
-        self.shell.add_section(t("首页", "Home"), self._build_home)
+        self.shell.add_section(t("HOME"), self._build_home)
         # 帮我推荐(第二步最常用,方便拿不准的玩家)
-        self.shell.add_section(t("帮我推荐", "Recommend"),
+        self.shell.add_section(t("RECOMMEND"),
                                lambda: RecommendWizard(self._view_tutorial))
         # 各方案分类(左菜单一列)
         for title, items in SCHEMES:
             self.shell.add_section(title.split("(")[0].strip(),
                                    lambda ti=title, ii=items: self._build_tab(ti, ii))
         # 教程与资料
-        self.shell.add_section(t("教程与资料", "Tutorials"), build_tutorials_tab)
+        self.shell.add_section(t("TUTORIALS"), build_tutorials_tab)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -602,11 +597,11 @@ class OnlineCenter(QWidget):
         desc.setWordWrap(True)
         v.addWidget(title)
         v.addWidget(desc)
-        start_btn = QPushButton(t("开始推荐(答是 / 否)", "Start recommend (yes/no)"))
+        start_btn = QPushButton(t("START_RECOMMEND_YES_NO"))
         start_btn.setMinimumHeight(40)
         set_style(start_btn, launch_btn_style)
         start_btn.clicked.connect(
-            lambda: self.shell.switch_by_label(t("帮我推荐", "Recommend")))
+            lambda: self.shell.switch_by_label(t("RECOMMEND")))
         v.addWidget(start_btn)
         v.addStretch()
         return w
@@ -614,7 +609,7 @@ class OnlineCenter(QWidget):
     def _view_tutorial(self, scheme_name: str = ""):
         """切到「教程与资料」(左菜单右侧面板)。"""
         if hasattr(self, "shell"):
-            self.shell.switch_by_label(t("教程与资料", "Tutorials"))
+            self.shell.switch_by_label(t("TUTORIALS"))
 
     def _card(self, name: str, desc: str, url: str) -> QWidget:
         """方案卡片:名称 + 描述 + 打开官网,点击卡片也可打开。"""
@@ -627,7 +622,7 @@ class OnlineCenter(QWidget):
         desc_label = QLabel(desc)
         desc_label.setWordWrap(True)
         desc_label.setStyleSheet(f"color: {muted_color()};")
-        open_btn = QPushButton(t("打开官网", "Open website"))
+        open_btn = QPushButton(t("OPEN_WEBSITE"))
         open_btn.setFixedWidth(90)
         set_style(open_btn, card_btn_style)
         open_btn.clicked.connect(lambda _c, u=url: _open_url(u))

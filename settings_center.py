@@ -118,11 +118,11 @@ class SettingsCenter(QWidget):
         self._dl_finished.connect(self._on_model_dl_finished)
 
         self.shell = CenterShell(self, menu_width=150)
-        self.shell.add_section(t("游戏", "Game"), self._build_game)
-        self.shell.add_section(t("界面", "UI"), self._build_ui)
-        self.shell.add_section(t("AI 助手", "AI"), self._build_ai)
-        self.shell.add_section(t("镜像源", "Mirror"), self._build_mirror)
-        self.shell.add_section(t("插件", "Plugins"), self._build_plugins)
+        self.shell.add_section(t("GAME"), self._build_game)
+        self.shell.add_section(t("UI"), self._build_ui)
+        self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
+        self.shell.add_section(t("MIRROR"), self._build_mirror)
+        self.shell.add_section(t("PLUGINS"), self._build_plugins)
         # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)。
         # 只在插件【启用】时才加(关闭/默认关未启用的插件不占菜单);可用齿轮从插件页进入,或启用后出现。
         self._plugin_settings_rows = []
@@ -148,7 +148,7 @@ class SettingsCenter(QWidget):
         if initial_tab:
             self.shell.switch_by_label(initial_tab)
 
-        save_btn = QPushButton(t("保存设置", "Save settings"))
+        save_btn = QPushButton(t("SAVE_SETTINGS"))
         set_style(save_btn, card_btn_style)
         save_btn.setMinimumHeight(38)
         save_btn.clicked.connect(self.apply)
@@ -222,8 +222,8 @@ class SettingsCenter(QWidget):
         self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
         self.ui_mode_combo = QComboBox()
-        for label, value in ((t("全面(显示更多提示与科普)", "Full (more tips & guides)"), "beginner"),
-                             (t("摘要(精简提示)", "Summary (concise)"), "expert")):
+        for label, value in ((t("FULL_MORE_TIPS_GUIDES"), "beginner"),
+                             (t("SUMMARY_CONCISE"), "expert")):
             self.ui_mode_combo.addItem(label, value)
         idx = self.ui_mode_combo.findData(self.settings.get("ui_mode", "beginner"))
         self.ui_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -249,8 +249,8 @@ class SettingsCenter(QWidget):
             l.addLayout(row)
         # 检查更新 / 重播引导教程(原在菜单栏,现并入设置 → 界面;重播按钮不放在最外层)
         l.addSpacing(8)
-        upd_btn = QPushButton(t("检查更新…", "Check for Updates…"))
-        tut_btn = QPushButton(t("重播引导教程", "Replay guided tutorial"))
+        upd_btn = QPushButton(t("CHECK_FOR_UPDATES"))
+        tut_btn = QPushButton(t("REPLAY_GUIDED_TUTORIAL"))
         for b in (upd_btn, tut_btn):
             set_style(b, card_btn_style); b.setMinimumHeight(32)
         upd_btn.clicked.connect(self._open_update)
@@ -463,7 +463,7 @@ class SettingsCenter(QWidget):
         self.ai_form = AISettingsForm(self.settings)
         self.mod_translate_check = QCheckBox("Mod 描述本地 AI 翻译(英→中)")
         self.mod_translate_check.setChecked(bool(self.settings.get("ai_mod_translate", True)))
-        self.model_dl_btn = QPushButton(t("下载本地模型", "Download local model"))
+        self.model_dl_btn = QPushButton(t("DOWNLOAD_LOCAL_MODEL"))
         self.model_dl_status = QLabel(""); self.model_dl_status.setWordWrap(True)
         self.model_dl_status.setStyleSheet("color: #888888;")
         self.model_dl_btn.clicked.connect(self._start_model_download)
@@ -493,15 +493,13 @@ class SettingsCenter(QWidget):
     def _init_model_dl_button(self):
         ready = self._is_model_downloaded()
         if ready:
-            self.model_dl_btn.setText(t("已就绪", "Ready"))
+            self.model_dl_btn.setText(t("READY"))
             self.model_dl_btn.setEnabled(False)
-            self.model_dl_status.setText(t("本地模型已下载,可直接使用",
-                                           "Local model downloaded, ready"))
+            self.model_dl_status.setText(t("LOCAL_MODEL_DOWNLOADED_READY"))
         else:
-            self.model_dl_btn.setText(t("下载本地模型", "Download local model"))
+            self.model_dl_btn.setText(t("DOWNLOAD_LOCAL_MODEL"))
             self.model_dl_btn.setEnabled(True)
-            self.model_dl_status.setText(t("未下载(约 500MB,点按钮开始)",
-                                           "Not downloaded (~500MB, click to start)"))
+            self.model_dl_status.setText(t("NOT_DOWNLOADED_500MB_CLICK_TO_START"))
 
     def _start_model_download(self):
         if self._model_downloading:
@@ -511,9 +509,8 @@ class SettingsCenter(QWidget):
             return
         self._model_downloading = True
         self.model_dl_btn.setEnabled(False)
-        self.model_dl_btn.setText(t("下载中 0%…", "Downloading 0%…"))
-        self.model_dl_status.setText(t("正在后台下载本地模型(镜像优先)…",
-                                       "Downloading local model (mirror first)…"))
+        self.model_dl_btn.setText(t("DOWNLOADING_0"))
+        self.model_dl_status.setText(t("DOWNLOADING_LOCAL_MODEL_MIRROR_FIRST"))
         host = self.window()
         if host is not None and hasattr(host, "model_download_progress"):
             host.model_download_progress("正在下载本地模型(约500MB,镜像优先)…", 0, 1)
@@ -545,10 +542,10 @@ class SettingsCenter(QWidget):
         if host is not None and hasattr(host, "model_download_done"):
             host.model_download_done(ok, msg)
         if ok:
-            self.model_dl_btn.setText(t("已就绪", "Ready"))
+            self.model_dl_btn.setText(t("READY"))
             self.model_dl_btn.setEnabled(False)
         else:
-            self.model_dl_btn.setText(t("下载本地模型", "Download local model"))
+            self.model_dl_btn.setText(t("DOWNLOAD_LOCAL_MODEL"))
             self.model_dl_btn.setEnabled(True)
 
     # ================= 镜像源 =================
@@ -605,7 +602,7 @@ class SettingsCenter(QWidget):
         head_row = QHBoxLayout()
         head_row.addWidget(head, 1)
         # 右上角:重启启动器(生成/禁用插件后手动重启生效)
-        restart_btn = QPushButton(t("重启启动器生效", "Restart to apply"))
+        restart_btn = QPushButton(t("RESTART_TO_APPLY"))
         set_style(restart_btn, card_btn_style); restart_btn.setMinimumHeight(32)
         restart_btn.setToolTip("插件启停/新增后需重启启动器才生效。")
         restart_btn.clicked.connect(self._restart_launcher)

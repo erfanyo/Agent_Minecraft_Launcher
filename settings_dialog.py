@@ -153,15 +153,13 @@ class SettingsDialog(QDialog):
         # 界面模式(全面:多提示/科普;摘要:精简) —— 对外叫「全面 / 摘要」,
         # 不用「新手 / 专家」(免得显得看不起新手)。值保持 beginner/expert 兼容旧配置。
         self.ui_mode_combo = QComboBox()
-        for label, value in ((t("全面(显示更多提示与科普)", "Full (more tips & guides)"), "beginner"),
-                             (t("摘要(精简提示)", "Summary (concise)"), "expert")):
+        for label, value in ((t("FULL_MORE_TIPS_GUIDES"), "beginner"),
+                             (t("SUMMARY_CONCISE"), "expert")):
             self.ui_mode_combo.addItem(label, value)
         mode = self.settings.get("ui_mode", "beginner")
         idx = self.ui_mode_combo.findData(mode)
         self.ui_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        mode_hint = QLabel(t(
-            "全面:首页显示资源结构科普、更详细的状态提示;摘要:隐藏科普、精简提示。",
-            "Full: shows resource guide & detailed hints; Summary: hides them (concise)."))
+        mode_hint = QLabel(t("FULL_SHOWS_RESOURCE_GUIDE_DETAILED_HINTS_SUMMARY_HIDES_THEM_CONCISE"))
         mode_hint.setWordWrap(True)
         mode_hint.setStyleSheet("color: #888888;")
         mode_hint.setWordWrap(True)
@@ -233,7 +231,7 @@ class SettingsDialog(QDialog):
         mod_ai_row.addStretch()
 
         # 下载本地模型按钮(三态):主动点击触发后台下载,进度同步到左下角环形指示器
-        self.model_dl_btn = QPushButton(t("下载本地模型", "Download local model"))
+        self.model_dl_btn = QPushButton(t("DOWNLOAD_LOCAL_MODEL"))
         self.model_dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.model_dl_btn.clicked.connect(self._start_model_download)
         self.model_dl_status = QLabel("")
@@ -427,15 +425,13 @@ class SettingsDialog(QDialog):
         """根据当前下载状态初始化按钮三态。"""
         ready = self._is_model_downloaded()
         if ready:
-            self.model_dl_btn.setText(t("已就绪", "Ready"))
+            self.model_dl_btn.setText(t("READY"))
             self.model_dl_btn.setEnabled(False)
-            self.model_dl_status.setText(t("本地模型已下载,可直接使用",
-                                           "Local model downloaded, ready"))
+            self.model_dl_status.setText(t("LOCAL_MODEL_DOWNLOADED_READY"))
         else:
-            self.model_dl_btn.setText(t("下载本地模型", "Download local model"))
+            self.model_dl_btn.setText(t("DOWNLOAD_LOCAL_MODEL"))
             self.model_dl_btn.setEnabled(True)
-            self.model_dl_status.setText(t("未下载(约 500MB,点按钮开始)",
-                                           "Not downloaded (~500MB, click to start)"))
+            self.model_dl_status.setText(t("NOT_DOWNLOADED_500MB_CLICK_TO_START"))
 
     def _start_model_download(self):
         """点击「下载本地模型」:后台线程下载(镜像优先),进度同步到左下角环形指示器。"""
@@ -446,9 +442,8 @@ class SettingsDialog(QDialog):
             return
         self._model_downloading = True
         self.model_dl_btn.setEnabled(False)
-        self.model_dl_btn.setText(t("下载中 0%…", "Downloading 0%…"))
-        self.model_dl_status.setText(t("正在后台下载本地模型(镜像优先)…",
-                                       "Downloading local model (mirror first)…"))
+        self.model_dl_btn.setText(t("DOWNLOADING_0"))
+        self.model_dl_status.setText(t("DOWNLOADING_LOCAL_MODEL_MIRROR_FIRST"))
 
         # 左下角环形指示器开始读条(优先经宿主 MainWindow 写日志,详情对话框可见进度)
         host = self.parent()
@@ -502,9 +497,9 @@ class SettingsDialog(QDialog):
                 from PySide6.QtCore import QTimer
                 QTimer.singleShot(2000, ring.hide)
         if ok:
-            self.model_dl_btn.setText(t("已就绪", "Ready"))
+            self.model_dl_btn.setText(t("READY"))
             self.model_dl_btn.setEnabled(False)
         else:
             # 失败 → 可重试
-            self.model_dl_btn.setText(t("下载本地模型", "Download local model"))
+            self.model_dl_btn.setText(t("DOWNLOAD_LOCAL_MODEL"))
             self.model_dl_btn.setEnabled(True)

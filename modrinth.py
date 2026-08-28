@@ -160,11 +160,12 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
     } for h in hits]
 
 
-def list_mod_versions(slug: str, game_version: str, loader: str) -> list:
-    """某 Mod 在指定"游戏版本+加载器"下可用的版本号列表(新的在前)"""
+def list_mod_versions(slug: str, game_version: str | None, loader: str | None) -> list:
+    """某 Mod 在指定"游戏版本+加载器"下可用的版本号列表(新的在前)。
+    game_version/loader 为 None 表示不按它过滤(列全部)。"""
     resp = requests.get(BASE + f"/project/{slug}/version", params={
-        "game_versions": json.dumps([game_version]),
-        "loaders": json.dumps([loader]),
+        "game_versions": json.dumps([game_version] if game_version else []),
+        "loaders": json.dumps([loader] if loader else []),
     }, timeout=20)
     resp.raise_for_status()
     return [v.get("version_number", "?") for v in resp.json()]

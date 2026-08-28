@@ -56,13 +56,13 @@ class TutorialDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(t("📖 新手教程", "Beginner Tutorial"))
+        self.setWindowTitle(t("BEGINNER_TUTORIAL"))
         self.resize(780, 640)
 
         # ---- 左侧:页面导航(全部来自 tutorial_content 数据) ----
         self.nav = QListWidget()
         self.nav.setFixedWidth(208)
-        self._meta = [(None, t("基本概念", "Basics"))]      # (page_id, 标题)  None=基本概念
+        self._meta = [(None, t("BASICS"))]      # (page_id, 标题)  None=基本概念
         self.nav.addItem(self._meta[0][1])
         for p in get_pages():
             self.nav.addItem(p["title"])
@@ -83,8 +83,7 @@ class TutorialDialog(QDialog):
         split.setStretchFactor(1, 1)
         split.setSizes([208, 560])
 
-        tip = QLabel(t("这里只讲「每个界面里有什么、在哪、有什么用」,点左侧切页面;"
-                       "不改变启动器任何设置。", "Read-only guide: what each control does."))
+        tip = QLabel(t("READ_ONLY_GUIDE_WHAT_EACH_CONTROL_DOES"))
         tip.setStyleSheet("color:#8a93a0;")
         tip.setWordWrap(True)
 

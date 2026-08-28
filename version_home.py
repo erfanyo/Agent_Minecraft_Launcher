@@ -129,7 +129,7 @@ class LoginCard(QWidget):
 
         # 更改登录方式入口
         self.login_btn = QToolButton()
-        self.login_btn.setText(t("更改登录方式 ▾", "Change login ▾"))
+        self.login_btn.setText(t("VERSION_HOME_CHANGE_LOGIN"))
         self.login_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.login_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -153,8 +153,11 @@ class LoginCard(QWidget):
             menu.addAction("退出正版登录(回离线)", self._logout_microsoft)
             menu.addSeparator()
         elif cur_method == LOGIN_OFFLINE:
-            menu.addAction(t("修改离线昵称…", "Edit offline name…"),
+            menu.addAction(t("VERSION_HOME_EDIT_OFFLINE_NAME"),
                            self._change_offline_name)
+        menu.addSeparator()
+        # 配置微软 client_id(自注册 Entra 应用;微软已收回 Mojang 公开 id)
+        menu.addAction("配置微软登录 client_id…", self._set_ms_client_id)
         menu.addSeparator()
         for _key, label, tip in _PLANNED_LOGIN:
             act = menu.addAction(label)
@@ -163,7 +166,7 @@ class LoginCard(QWidget):
         self.login_btn.setMenu(menu)
         # 登录方式入口也提供「启动器设置…」二级入口,方便直接改内存/目录等
         menu.addSeparator()
-        menu.addAction(t("打开启动器设置…", "Open launcher settings…"),
+        menu.addAction(t("VERSION_HOME_OPEN_LAUNCHER_SETTINGS"),
                        lambda: self.open_settings_requested.emit())
 
         lay = QVBoxLayout(self)
@@ -217,9 +220,9 @@ class LoginCard(QWidget):
         self.avatar_label.setPixmap(_avatar_pixmap(name, self._avatar_size))
         self.name_label.setText(name)
         if method == LOGIN_MICROSOFT:
-            self.status_label.setText(t("微软正版 · 已登录", "Microsoft · signed in"))
+            self.status_label.setText(t("VERSION_HOME_MS_SIGNED_IN"))
         elif method == LOGIN_OFFLINE:
-            self.status_label.setText(t("离线模式 · 昵称可改", "Offline · name editable"))
+            self.status_label.setText(t("VERSION_HOME_OFFLINE_NAME_EDITABLE"))
         else:
             label = next((lbl for key, lbl, _tp in _LOGIN_METHODS if key == method),
                          "离线模式")
@@ -259,8 +262,8 @@ class LoginCard(QWidget):
         """修改离线昵称(前端可自洽:写到 config.json 并通知启动器)。"""
         # 读取最新配置再改昵称,避免用启动时的旧快照覆盖用户改过的其他设置(如内存)
         cur = load_settings().get("username", "Steve")
-        new, ok = QInputDialog.getText(self, t("修改离线昵称", "Edit offline name"),
-                                       t("离线模式显示的游戏名:", "Offline in-game name:"),
+        new, ok = QInputDialog.getText(self, t("VERSION_HOME_EDIT_OFFLINE_NAME_TITLE"),
+                                       t("VERSION_HOME_OFFLINE_IN_GAME_NAME"),
                                        text=cur)
         if not ok:
             return
@@ -270,6 +273,22 @@ class LoginCard(QWidget):
         save_settings(settings)
         self.refresh()
         self.changed.emit()
+
+    def _set_ms_client_id(self):
+        """配置微软登录 client_id(自注册 Entra 应用;存 config.json,已 gitignore)。"""
+        cur = load_settings().get("ms_client_id", "") or ""
+        new, ok = QInputDialog.getText(
+            self, "配置微软登录 client_id",
+            "填你的 Microsoft Entra 应用(客户端)ID。\n"
+            "微软已收回 Mojang 公开 id,自注册应用后填这里即可正版登录。\n"
+            "留空=使用占位(可能报 AADSTS700016):",
+            text=cur)
+        if not ok:
+            return
+        settings = load_settings()
+        settings["ms_client_id"] = new.strip()
+        save_settings(settings)
+        self.refresh()
 
     # ---- 微软正版登录 ----
     def _do_microsoft_login(self):
@@ -386,9 +405,9 @@ class InstanceSettingsCard(QWidget):
         self.setObjectName("instCard")
         self.setStyleSheet(f"#instCard {{ {panel_style()} }}")
 
-        self.title = QLabel(t("当前选择", "Current selection"))
+        self.title = QLabel(t("VERSION_HOME_CURRENT_SELECTION"))
         self.title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {muted_color()};")
-        self.inst_label = QLabel(t("未选择实例", "No instance selected"))
+        self.inst_label = QLabel(t("VERSION_HOME_NO_INSTANCE_SELECTED"))
         self.inst_label.setWordWrap(True)
         self.inst_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {text_color()};")
 
@@ -402,7 +421,7 @@ class InstanceSettingsCard(QWidget):
         """更新「当前选择」信息。inst 为 None 表示未选择。"""
         self._inst = inst
         if inst is None:
-            self.inst_label.setText(t("未选择实例", "No instance selected"))
+            self.inst_label.setText(t("VERSION_HOME_NO_INSTANCE_SELECTED"))
         else:
             self.inst_label.setText(inst.get("id", "?"))
 
@@ -460,7 +479,7 @@ class VersionHome(QWidget):
         # 「导入整合包」(左)+「一键配置」(右)并排,放在「启动游戏」上方
         tool_row = QHBoxLayout()
         tool_row.setSpacing(10)
-        self.import_btn = QPushButton(t("导入整合包", "Import Modpack"))
+        self.import_btn = QPushButton(t("VERSION_HOME_IMPORT_MODPACK"))
         self.import_btn.setMinimumHeight(44)
         self.import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         set_style(self.import_btn, card_btn_style)
@@ -468,7 +487,7 @@ class VersionHome(QWidget):
         tool_row.addWidget(self.import_btn, 1)
 
         self.config_btn = QToolButton()
-        self.config_btn.setText(t("一键配置 ▾", "One-click ▾"))
+        self.config_btn.setText(t("VERSION_HOME_ONE_CLICK"))
         self.config_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.config_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.config_btn.setMinimumHeight(44)
@@ -476,12 +495,11 @@ class VersionHome(QWidget):
         set_style(self.config_btn, card_btn_style)
         cfg_menu = QMenu(self.config_btn)
         bridge_item = cfg_menu.addAction(
-            t("一键配置 bridge-mod(本地指令口,推荐)",
-              "One-click bridge-mod (local command port, recommended)"),
+            t("VERSION_HOME_ONE_CLICK_BRIDGE"),
             lambda: self.one_click_config_requested.emit("bridge"))
         bridge_item.setToolTip("下载并安装 bridge-mod(游戏内指令口 / 数据导出),需加载器")
         rcon_item = cfg_menu.addAction(
-            t("一键配置 RCON(临时方案)", "One-click RCON (temporary)"),
+            t("VERSION_HOME_ONE_CLICK_RCON"),
             lambda: self.one_click_config_requested.emit("rcon"))
         rcon_item.setToolTip("临时方案:需要 Lan Server Properties,进世界后按 ESC → 对局域网开放")
         # 联机 mod(Essential/e4mc):点击时由主窗口判断实例版本是否支持
@@ -495,7 +513,7 @@ class VersionHome(QWidget):
         lay.addLayout(tool_row)
 
         # 启动游戏大按钮
-        self.launch_btn = QPushButton(t("启动游戏", "Launch Game"))
+        self.launch_btn = QPushButton(t("VERSION_HOME_LAUNCH_GAME"))
         self.launch_btn.setMinimumHeight(56)
         self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         set_style(self.launch_btn, launch_btn_style)
@@ -582,13 +600,13 @@ class VersionHome(QWidget):
         self.tabs.setDocumentMode(True)
         set_style(self.tabs, tab_style)
 
-        self._version_tab_index = self.tabs.addTab(self._build_version_tab(), t("实例", "Instances"))
-        self.tabs.addTab(self._build_changelog_tab(), t("更新日志", "Changelog"))
-        self.tabs.addTab(self._build_community_tab(), t("MC 动态", "Community"))
+        self._version_tab_index = self.tabs.addTab(self._build_version_tab(), t("VERSION_HOME_INSTANCES"))
+        self.tabs.addTab(self._build_changelog_tab(), t("VERSION_HOME_CHANGELOG"))
+        self.tabs.addTab(self._build_community_tab(), t("VERSION_HOME_COMMUNITY"))
         # 启动器日志:作为「MC 动态」同级的子标签页(游戏运行输出/命令)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.tabs.addTab(self.log_view, t("启动器日志", "Launcher Log"))
+        self.tabs.addTab(self.log_view, t("VERSION_HOME_LAUNCHER_LOG"))
         # 切回「实例」标签页时自动刷新(不再有刷新按钮)
         self.tabs.currentChanged.connect(self._on_home_tab_changed)
 
@@ -647,7 +665,7 @@ class VersionHome(QWidget):
         self.changelog_status = QLabel()
         self.changelog_status.setStyleSheet(f"color: {muted_color()};")
         self.changelog_status.setWordWrap(True)
-        self.changelog_refresh_btn = QPushButton(t("刷新", "Refresh"))
+        self.changelog_refresh_btn = QPushButton(t("VERSION_HOME_REFRESH"))
         set_style(self.changelog_refresh_btn, card_btn_style)
         self.changelog_refresh_btn.setMinimumHeight(30)
         self.changelog_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -655,7 +673,7 @@ class VersionHome(QWidget):
 
         # 标题行:更新日志 + 来源说明 + 刷新按钮
         header = QHBoxLayout()
-        title = QLabel(t("更新日志", "Changelog"))
+        title = QLabel(t("VERSION_HOME_CHANGELOG"))
         title.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
         header.addWidget(title)
         header.addStretch(1)
@@ -667,14 +685,13 @@ class VersionHome(QWidget):
         self.changelog_view.setHtml(
             f"<p style='color:{muted_color()}'>🔄 正在从 GitHub 拉取更新日志…</p>")
         self.changelog_status.setText(
-            t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md",
-              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md"))
+            t("VERSION_HOME_SOURCE_URL"))
         return w
 
     def _load_changelog_async(self):
         """后台线程从 GitHub 拉取更新日志,避免卡 UI。"""
         self.changelog_status.setText(
-            t("正在从 GitHub 拉取…", "Fetching from GitHub…"))
+            t("VERSION_HOME_FETCHING_GH"))
         self.changelog_view.setHtml(
             f"<p style='color:{muted_color()}'>🔄 正在从 GitHub 拉取更新日志…</p>")
 
@@ -694,25 +711,21 @@ class VersionHome(QWidget):
         """更新日志拉取成功 → 渲染 HTML。"""
         self.changelog_view.setHtml(changelog_html(entries))
         self.changelog_status.setText(
-            t("来源:github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md",
-              "Source: github.com/erfanyo/Agent_Minecraft_Launcher/CHANGELOG.md"))
+            t("VERSION_HOME_SOURCE_URL"))
 
     def _on_changelog_failed(self, err: str):
         """从 GitHub 拉取失败 → 显示友好提示 + 重试入口。"""
         self.changelog_view.setHtml(
             f"<p style='color:{muted_color()}'>暂时拉不到更新日志(网络或 GitHub 不可用)。"
             "<br>可点击右上角「刷新」重试,或检查网络。</p>")
-        self.changelog_status.setText(t("拉取失败,请检查网络后点「刷新」",
-                                        "Fetch failed, check network and Refresh"))
+        self.changelog_status.setText(t("VERSION_HOME_FETCH_FAILED"))
 
     def _build_community_tab(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(12, 12, 12, 12)
         placeholder = QLabel(
-            t("MC 社区动态(规划中)\n\n"
-              "未来这里会显示 Minecraft 社区动态、新闻等内容。当前为占位。",
-              "MC community feed (planned)\n\nFuture home for community news. Placeholder."))
+            t("VERSION_HOME_COMMUNITY_FEED_PLANNED"))
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         placeholder.setWordWrap(True)
         placeholder.setStyleSheet(f"color: {muted_color()};")
@@ -741,7 +754,7 @@ class VersionHome(QWidget):
         inst = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
         self.inst_card.set_instance(inst)
         self.launch_btn.setToolTip(
-            inst.get("id", "") if inst is not None else t("先选择实例", "Select an instance first"))
+            inst.get("id", "") if inst is not None else t("VERSION_HOME_SELECT_INSTANCE_FIRST"))
         self.instance_selected.emit(inst)
 
     def _launch_current_via_key(self, item):

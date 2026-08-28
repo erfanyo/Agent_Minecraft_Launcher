@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from fetch_versions import fetch_version_manifest
 from instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
+from i18n import t
 from loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions
 from modrinth import list_mod_versions
 from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style, set_style
@@ -201,6 +202,12 @@ class DownloadTab(QWidget):
         self.loader_hint.setStyleSheet(hint_style())
         vbox.addWidget(self.loader_hint)
 
+        # 加载器是什么:一句通俗解释,帮新手理解(不改"加载器"这个词,只加说明)
+        self.loader_explain = QLabel(t("LOADER_EXPLAIN"))
+        self.loader_explain.setWordWrap(True)
+        self.loader_explain.setStyleSheet(hint_style())
+        vbox.addWidget(self.loader_explain)
+
         # Fabric API:绝大多数 Fabric 模组需要它,选中 Fabric 后自动出现版本选择
         self.fabric_api_row = QWidget()
         fa_layout = QHBoxLayout(self.fabric_api_row)
@@ -261,6 +268,16 @@ class DownloadTab(QWidget):
         if current is None:
             return
         v = current.data(0, Qt.ItemDataRole.UserRole)
+        # 点中大版本分组节点(折叠态):自动选中它的推荐具体版,再走叶子逻辑
+        if isinstance(v, dict) and "__major__" in v:
+            rec = v.get("recommended") or ""
+            leaf = self._find_leaf_version(current, rec)
+            if leaf is not None:
+                self.version_tree.blockSignals(True)
+                self.version_tree.setCurrentItem(leaf)
+                self.version_tree.blockSignals(False)
+                self._on_version_selected(leaf, current)
+            return
         if not (isinstance(v, dict) and "id" in v):
             return
         self.mc = v["id"]
@@ -271,6 +288,18 @@ class DownloadTab(QWidget):
         self.menu.setCurrentRow(1)
         # 按新版本重新检测各加载器可用性,决定显示哪些卡片
         self._refresh_loader_cards()
+
+    @staticmethod
+    def _find_leaf_version(root, version_str: str):
+        """在某大版本节点下找指定具体版字符串的叶子(QTreeWidgetItem)。"""
+        if not version_str:
+            return None
+        for i in range(root.childCount()):
+            ch = root.child(i)
+            if isinstance(ch.data(0, Qt.ItemDataRole.UserRole), dict) \
+                    and ch.data(0, Qt.ItemDataRole.UserRole).get("id") == version_str:
+                return ch
+        return None
 
     # ================= 菜单切换 =================
     def _switch_panel(self, row):
