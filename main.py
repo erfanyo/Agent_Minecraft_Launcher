@@ -1170,6 +1170,18 @@ class MainWindow(QMainWindow):
                         "token_type": "msa",
                     }
                     username_load = cred.get("username") or username_load
+            # 强制正版(microsoft_login=true):【没有正版凭证】才禁止启动;
+            # 正版玩家即便切到离线昵称也会放行(凭证保留,可切回正版)。
+            force_online = self.settings.get("microsoft_login", True)
+            _creds = dict(self.settings.get("ms_credentials") or {})
+            if force_online and not _creds.get("uuid"):
+                self.dl_indicator.hide()
+                QMessageBox.warning(
+                    self, "需要正版登录",
+                    "当前为「强制正版」模式(config 的 microsoft_login=true)。\n"
+                    "本机还没有正版账号,请先完成微软正版登录才能启动游戏。\n\n"
+                    "若想完全跳过正版、纯离线使用,请把 config.json 的 microsoft_login 改为 false。")
+                return
             cmd = build_launch_command(
                 d, game_dir, java_exe,
                 username=username_load,

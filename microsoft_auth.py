@@ -2,18 +2,20 @@
 """
 微软正版登录(Minecraft Java 版):设备码流 + 令牌链,拿到游戏内凭证。
 
-流程(社区共识,参考 iris/prismlauncher 等做法):
-  ① 微软 OAuth 设备码流(Device Code):向 Azure AD 申请 device code,用户在浏览器里输 code 授权;
+流程(参考 azalea 等自托管实现,实测可用):
+  ① 微软 OAuth 设备码流(Device Code,logim.live.com 消费级生态):申请 device code,
+     用户在浏览器里输 code 授权;
   ② 微软 access_token → 用它换 Xbox Live 令牌(XBL);
   ③ XBL → XSTS(授权)令牌;
   ④ XSTS → Minecraft 访问令牌(Minecraft services, api.minecraftservices.com);
   ⑤ 用 MC 令牌查 entitlements(游戏所有权校验)并取 profile(name + id)。
 
-client_id:公开的 Mojang/iris client id(Mojang 官方给第三方启动器使用的公开 id),
-无需自己注册 Azure 应用即可用。
+client_id:微软官方给 Xbox/Minecraft 消费级使用的公开门户 id(00000000441cc96b),
+该 id 已在 api.minecraftservices.com 的批准名单上,无需自己注册 Azure 应用即可用。
 
-注意:完整令牌链需要真实网络到 login.microsoftonline.com / xboxlive.com /
-api.minecraftservices.com,且登录时必须由用户在浏览器完成授权(本模块弹 device code 提示)。
+注意:完整令牌链需要真实网络到 login.live.com / user.auth.xboxlive.com /
+xsts.auth.xboxlive.com / api.minecraftservices.com,且登录时必须由用户在浏览器完成授权
+(本模块弹 device code 提示)。
 """
 import json
 import random
@@ -22,10 +24,13 @@ import time
 import urllib.parse
 import urllib.request
 
-# 微软 OAuth client_id:默认用【作者自注册的 Entra 应用 id】(硬编码默认值)。
+# 微软 OAuth client_id:默认用微软官方给 Xbox/Minecraft 消费级使用的公开门户 id。
+# 该 id 已在 api.minecraftservices.com 的"批准应用名单"上,能走通完整令牌链。
 # 注意:client_id 是公开的应用标识,不是密钥,可随源码/分发;真正需保密的是 client_secret/私钥。
 # 仍保留 settings["ms_client_id"] 配置覆盖(可换应用/给不同部署者,不改代码)。
-_DEFAULT_CLIENT_ID = "4d1fdde2-8e5a-4cea-a93e-efff4e69b280"
+# 重要:不要改成自注册的 Azure AD(Entra) 应用 —— 自注册应用无法获得该 scope 的预授权,
+#      且最后一步 api.minecraftservices.com 会对不在批准名单中的应用返回 403(Invalid app registration)。
+_DEFAULT_CLIENT_ID = "00000000441cc96b"
 
 
 def get_client_id() -> str:
@@ -40,10 +45,11 @@ def get_client_id() -> str:
     return _DEFAULT_CLIENT_ID
 
 
-_SCOPE = "service::user.auth.xboxlive.com::MSCS"
-# 微软 OAuth 端点
-_DEVICE_CODE_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
-_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
+_SCOPE = "service::user.auth.xboxlive.com::MBI_SSL"
+# 微软 OAuth 端点(live.com 消费级生态;不要去用 login.microsoftonline.com/consumers,
+# 那是 Azure AD 应用生态,需预授权+审批,自注册应用无法完成 Minecraft 全链)
+_DEVICE_CODE_URL = "https://login.live.com/oauth20_connect.srf"
+_TOKEN_URL = "https://login.live.com/oauth20_token.srf"
 
 
 def _post_json(url: str, data: dict, headers=None) -> dict:
@@ -65,7 +71,31 @@ def _post_json(url: str, data: dict, headers=None) -> dict:
         raise RuntimeError(f"网络请求失败: {type(e).__name__}: {e}")
 
 
+def _post_json_body(url: str, obj: dict, headers=None) -> dict:
+    """POST JSON 体(Content-Type: application/json)并解析 JSON 响应。
+
+    XBL / XSTS / Minecraft services 均为 JSON API,必须用 JSON 体;
+    表单 urlencode 会被微软返回 400,切记不要用 _post_json 发这些。
+    """
+    body = json.dumps(obj).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        txt = e.read().decode("utf-8", "replace")
+        raise RuntimeError(f"HTTP {e.code}: {txt[:300]}")
+    except Exception as e:
+        raise RuntimeError(f"网络请求失败: {type(e).__name__}: {e}")
+
+
 def _get(url: str, headers=None) -> dict:
+    """GET 请求并解析 JSON 响应(失败抛异常,带原因)。"""
     req = urllib.request.Request(url, method="GET")
     if headers:
         for k, v in headers.items():
@@ -108,6 +138,7 @@ class MsAuth:
         data = {
             "client_id": get_client_id(),
             "scope": _SCOPE,
+            "response_type": "device_code",
         }
         r = _post_json(_DEVICE_CODE_URL, data)
         self._device_code = r.get("device_code")
@@ -128,7 +159,7 @@ class MsAuth:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                r = _post_json(_TOKEN_URL, {
+                r = _post_json(_TOKEN_URL + "?client_id=" + urllib.parse.quote(get_client_id()), {
                     "client_id": get_client_id(),
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                     "device_code": self._device_code,
@@ -153,21 +184,23 @@ class MsAuth:
         """微软 token → XBL → XSTS → MC 令牌 → entitlements + profile。"""
         # 微软 access_token → MC access_token
         ms_token = self._ms_token
-        xbl = _post_json("https://user.auth.xboxlive.com/user/authenticate", {
+        xbl = _post_json_body("https://user.auth.xboxlive.com/user/authenticate", {
             "Properties": {
                 "AuthMethod": "RPS",
                 "SiteName": "user.auth.xboxlive.com",
-                "RpsTicket": "d=%s" % ms_token,
+                # 用微软官方门户 id(默认)时 RpsTicket【不加 d= 前缀】;
+                # 只有自注册的 Azure 应用才需要 "d=" 前缀。
+                "RpsTicket": ms_token,
             },
             "RelyingParty": "http://auth.xboxlive.com",
             "TokenType": "JWT",
-        })
+        }, headers={"x-xbl-contract-version": "1"})
         xbl_token = xbl.get("Token")
         xbl_uhs = (xbl.get("DisplayClaims") or {}).get("xui", [{}])[0].get("uhs", "")
         if not xbl_token:
             raise RuntimeError("Xbox Live 令牌获取失败")
 
-        xsts = _post_json("https://xsts.auth.xboxlive.com/xsts/authorize", {
+        xsts = _post_json_body("https://xsts.auth.xboxlive.com/xsts/authorize", {
             "Properties": {
                 "SandboxId": "RETAIL",
                 "UserTokens": [xbl_token],
@@ -179,20 +212,21 @@ class MsAuth:
         if not xsts_token:
             raise RuntimeError("XSTS 令牌获取失败")
 
-        mc = _post_json("https://api.minecraftservices.com/authentication/login_with_xbox", {
+        mc = _post_json_body("https://api.minecraftservices.com/authentication/login_with_xbox", {
             "identityToken": "XBL3.0 x=%s;%s" % (xbl_uhs, xsts_token),
-        }, headers={"Content-Type": "application/json"})
+        })
         mc_token = mc.get("access_token")
         if not mc_token:
             raise RuntimeError("Minecraft 访问令牌获取失败")
 
         # ① 所有权校验(必须有 Minecraft 授权)
+        # 注意:这里要区分【令牌拉取失败】和【确实未购买】,别把坏 token 误报成未购买。
         try:
             ent = _get("https://api.minecraftservices.com/entitlements/mcstore",
                        headers={"Authorization": "Bearer %s" % mc_token})
             items = ent.get("items", [])
-        except Exception:
-            items = []
+        except Exception as e:
+            raise RuntimeError(f"查询 Minecraft 所有权失败(请重试登录): {type(e).__name__}")
         if not items:
             raise RuntimeError("该账号没有 Minecraft Java 版所有权(未购买/未迁移)。")
 
@@ -231,7 +265,7 @@ def refresh_with_ms_refresh(refresh_token: str) -> dict:
     if not refresh_token:
         raise RuntimeError("没有可用的 refresh_token")
     r = _post_json(_TOKEN_URL, {
-        "client_id": _CLIENT_ID,
+        "client_id": get_client_id(),
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
         "scope": _SCOPE,
@@ -252,32 +286,40 @@ def refresh_with_ms_refresh(refresh_token: str) -> dict:
 def download_player_avatar(uuid_str: str, size: int = 64, use_cache: bool = True) -> bytes | None:
     """拉取玩家 3D 头像(头部贴图渲染图),缓存到 AMCL/cache/avatars/<uuid>_<size>.png。
 
-    用公开头像渲染服务(crafatar.com,免费、按 UUID 渲染头);失败返回 None(调用方回退占位头像)。
+    用公开头像渲染服务,无需登录官网(皮肤头是公开资源,有 UUID 即可)。
+    按顺序尝试多个服务(crafatar/mc-heads/minotar)做回退,单个失败或被墙时自动换下一个;
+    全部失败返回 None(调用方回退占位头像)。
     uuid 需是无横线的纯 hex(32 位)或标准 UUID;服务都接受。
     """
     if not uuid_str:
         return None
-    try:
-        import os as _os
-        from paths import cache_dir as _cache_dir
-        d = _cache_dir("avatars")
-        cache_path = _os.path.join(d, "%s_%d.png" % (uuid_str.replace("-", ""), size))
-        if use_cache and _os.path.isfile(cache_path):
-            with open(cache_path, "rb") as f:
-                return f.read()
-        uid = uuid_str.replace("-", "")
-        url = "https://crafatar.com/avatars/%s?size=%d&overlay" % (uid, size)
-        req = urllib.request.Request(url, method="GET", headers={"User-Agent": "AgentLauncher/0.4"})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = resp.read()
-        if data and len(data) > 100:
-            try:
-                _os.makedirs(d, exist_ok=True)
-                with open(cache_path, "wb") as f:
-                    f.write(data)
-            except OSError:
-                pass
-            return data
-    except Exception:
-        pass
+    import os as _os
+    from paths import cache_dir as _cache_dir
+    d = _cache_dir("avatars")
+    uid = uuid_str.replace("-", "")
+    cache_path = _os.path.join(d, "%s_%d.png" % (uid, size))
+    if use_cache and _os.path.isfile(cache_path):
+        with open(cache_path, "rb") as f:
+            return f.read()
+    urls = [
+        "https://crafatar.com/avatars/%s?size=%d&overlay" % (uid, size),
+        "https://mc-heads.net/avatar/%s/%d" % (uid, size),
+        "https://minotar.net/helm/%s/%d.png" % (uid, size),
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, method="GET",
+                                         headers={"User-Agent": "AgentLauncher/0.4"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+            if data and len(data) > 100:
+                try:
+                    _os.makedirs(d, exist_ok=True)
+                    with open(cache_path, "wb") as f:
+                        f.write(data)
+                except OSError:
+                    pass
+                return data
+        except Exception:
+            continue     # 该服务失败,换下一个
     return None

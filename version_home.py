@@ -22,6 +22,7 @@ import threading
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -138,24 +139,38 @@ class LoginCard(QWidget):
             f" padding: 2px 6px; border-radius: 6px; }}"
             f"QToolButton:hover {{ background: {hover_bg()}; }}")
         menu = QMenu(self.login_btn)
-        cur_method = load_settings().get("login_method", LOGIN_OFFLINE)
-        # 当前模式置 ✓
-        for key, label, tip in _LOGIN_METHODS:
-            act = menu.addAction(("✓ " if key == cur_method else "") + label)
-            act.setToolTip(tip)
-            if key == LOGIN_OFFLINE:
-                act.triggered.connect(lambda: self._set_offline())
-            elif key == LOGIN_MICROSOFT:
+        s = load_settings()
+        cur_method = s.get("login_method", LOGIN_OFFLINE)
+        force_online = s.get("microsoft_login", True)        # 强制正版(默认 true)
+        has_creds = bool((s.get("ms_credentials") or {}).get("uuid"))
+        # 是否允许离线昵称:
+        #  - 强制正版且【无正版凭证】:完全禁止离线,必须先登录正版
+        #  - 正版玩家(有凭证)或非强制:都可自由切离线昵称(凭证保留)
+        allow_offline = (not force_online) or has_creds
+
+        if not allow_offline:
+            # 强制正版 + 无凭证:只能先登录正版
+            act = menu.addAction(("✓ " if cur_method == LOGIN_MICROSOFT else "") + "微软正版登录")
+            act.setToolTip("强制正版(microsoft_login=true)且本机无正版账号,请先登录正版。"
+                           "想纯离线请把开关改为 false。")
+            if cur_method != LOGIN_MICROSOFT:
                 act.triggered.connect(self._do_microsoft_login)
+        else:
+            # 正版/离线昵称 切换(正版玩家可自由选离线昵称,凭证保留)
+            if cur_method == LOGIN_MICROSOFT:
+                menu.addAction("✓ 正版身份(Microsoft)", lambda: None)
+                menu.addAction("以离线昵称游玩(保留正版凭证)", self._play_offline_keep_creds)
+            else:
+                menu.addAction("切换回正版(Microsoft,免重登)", self._use_microsoft_account)
+                menu.addAction("✓ 离线昵称(保留正版凭证)", lambda: None)
         menu.addSeparator()
-        # 当前是微软正版 → 提供退出(回离线)
-        if cur_method == LOGIN_MICROSOFT:
-            menu.addAction("退出正版登录(回离线)", self._logout_microsoft)
+
+        # 二级操作
+        if allow_offline:
+            menu.addAction("🌐 换皮肤 / 我的账号", self._open_minecraft_account)
+            menu.addAction("✏️ 设置离线昵称…", self._change_offline_name)
+            menu.addAction("退出登录并清除凭证", self._logout_microsoft)
             menu.addSeparator()
-        elif cur_method == LOGIN_OFFLINE:
-            menu.addAction(t("VERSION_HOME_EDIT_OFFLINE_NAME"),
-                           self._change_offline_name)
-        menu.addSeparator()
         # 配置微软 client_id(自注册 Entra 应用;微软已收回 Mojang 公开 id)
         menu.addAction("配置微软登录 client_id…", self._set_ms_client_id)
         menu.addSeparator()
@@ -212,25 +227,38 @@ class LoginCard(QWidget):
         """根据最新设置刷新:头像/昵称/登录方式。"""
         self._settings = load_settings()
         method = self._settings.get("login_method", LOGIN_OFFLINE)
-        if method == LOGIN_MICROSOFT:
-            name = (self._settings.get("ms_credentials") or {}).get("username", "Minecraft")
+        force_online = self._settings.get("microsoft_login", True)
+        cred = self._settings.get("ms_credentials") or {}
+        has_creds = bool(cred.get("uuid"))
+        logged_in = (method == LOGIN_MICROSOFT) and has_creds
+        if logged_in:
+            name = cred.get("username", "Minecraft")
+        elif has_creds:
+            name = self._settings.get("username", "Steve") or "Steve"   # 离线昵称
+        elif force_online:
+            name = "未登录正版"
         else:
             name = self._settings.get("username", "Steve") or "Steve"
         self._name = name
         self.avatar_label.setPixmap(_avatar_pixmap(name, self._avatar_size))
         self.name_label.setText(name)
-        if method == LOGIN_MICROSOFT:
+        # 状态文案
+        if logged_in:
             self.status_label.setText(t("VERSION_HOME_MS_SIGNED_IN"))
+        elif has_creds:
+            self.status_label.setText("离线昵称(正版已保留,可切回)")
+        elif force_online:
+            self.status_label.setText("未登录正版 · 点上方登录")
         elif method == LOGIN_OFFLINE:
             self.status_label.setText(t("VERSION_HOME_OFFLINE_NAME_EDITABLE"))
         else:
             label = next((lbl for key, lbl, _tp in _LOGIN_METHODS if key == method),
                          "离线模式")
             self.status_label.setText(label)
-        # 正版登录:尝试拉真实皮肤头像(异步,失败回退占位)
-        if method == LOGIN_MICROSOFT:
-            uuid_str = (self._settings.get("ms_credentials") or {}).get("uuid", "")
-            self._fetch_avatar_async(uuid_str)
+        # 只要有正版 uuid 就尝试拉真实皮肤头像(异步,失败回退占位);
+        # 离线保留凭证时也能显示皮肤头。
+        if has_creds:
+            self._fetch_avatar_async(cred.get("uuid", ""))
 
     def _fetch_avatar_async(self, uuid_str: str):
         """后台拉正版头像(不卡 UI);成功后换掉占位头像。"""
@@ -313,19 +341,38 @@ class LoginCard(QWidget):
         # 提示弹窗:给用户 device code + 网址,并自动打开浏览器
         dlg = QDialog(self)
         dlg.setWindowTitle("微软登录 · 请在浏览器完成授权")
+        # 始终置顶:避免打开浏览器(常被设为全屏)后把本弹窗完全盖住,复制按钮点不到。
+        dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         dlg.setMinimumSize(520, 300)
         dl = QVBoxLayout(dlg)
         dl.addWidget(QLabel("<b>请在浏览器里打开下面的网址,并输入设备代码:</b>"))
         code_lbl = QLabel(f"<span style='font-size:28px;font-weight:bold;'>{user_code}</span>")
         code_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        code_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         url_lbl = QLabel(f"<span style='font-size:16px;'>{uri}</span>")
         url_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         url_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         open_btn = QPushButton("▶ 打开浏览器授权")
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(uri)))
+        copy_btn = QPushButton("📋 复制代码到剪贴板")
+        copy_btn.setToolTip("一键复制设备代码,在微软页面里粘贴即可")
+
+        def _copy_code():
+            try:
+                QApplication.clipboard().setText(user_code)
+                old = copy_btn.text()
+                copy_btn.setText("已复制 ✓")
+                QTimer.singleShot(1500, lambda: copy_btn.setText(old))
+            except Exception:
+                pass
+
+        copy_btn.clicked.connect(_copy_code)
         dl.addWidget(code_lbl)
         dl.addWidget(url_lbl)
-        dl.addWidget(open_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(copy_btn)
+        btn_row.addWidget(open_btn)
+        dl.addLayout(btn_row)
         wait = QLabel("登录过程中请保持此窗口打开;成功后自动关闭。")
         wait.setWordWrap(True); wait.setStyleSheet("color:#888888;")
         dl.addWidget(wait)
@@ -368,8 +415,14 @@ class LoginCard(QWidget):
         except Exception:
             pass
 
+    def _open_minecraft_account(self):
+        """打开官方 Minecraft 账号/换皮肤页面(正版皮肤只能在官网改)。"""
+        QDesktopServices.openUrl(QUrl("https://www.minecraft.net/ms/account/profile"))
+
     def _logout_microsoft(self):
-        """退出微软正版,回离线。"""
+        """彻底退出登录:清除正版凭证并回离线。
+        注意:这个会清掉凭证,之后想用正版需重新登录;
+        只想过把离线瘾而不丢凭证,用 _play_offline_keep_creds。"""
         settings = load_settings()
         settings["login_method"] = LOGIN_OFFLINE
         settings["ms_credentials"] = {}
@@ -377,13 +430,32 @@ class LoginCard(QWidget):
         self.refresh()
         self.changed.emit()
 
-    def _set_offline(self):
-        """切回离线(若当前非离线)。"""
+    def _play_offline_keep_creds(self):
+        """以离线昵称游玩:切离线但他【保留】正版凭证,可一键切回免重登。"""
         settings = load_settings()
         if settings.get("login_method") != LOGIN_OFFLINE:
             settings["login_method"] = LOGIN_OFFLINE
-            settings["ms_credentials"] = {}
+            save_settings(settings)          # 注意:不清 ms_credentials
+            self.refresh()
+            self.changed.emit()
+
+    def _use_microsoft_account(self):
+        """用保留的正版凭证切回正版(免重登;启动时若 token 过期会自动刷新)。"""
+        settings = load_settings()
+        if settings.get("login_method") != LOGIN_MICROSOFT:
+            settings["login_method"] = LOGIN_MICROSOFT
             save_settings(settings)
+            self.refresh()
+            self.changed.emit()
+
+    def _set_offline(self):
+        """切到离线昵称(正版玩家可选;保留正版凭证,便于切回)。
+
+        保留此方法以防外部调用;等价于 _play_offline_keep_creds。"""
+        settings = load_settings()
+        if settings.get("login_method") != LOGIN_OFFLINE:
+            settings["login_method"] = LOGIN_OFFLINE
+            save_settings(settings)          # 注意:不清 ms_credentials
             self.refresh()
             self.changed.emit()
 
