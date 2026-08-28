@@ -157,7 +157,7 @@ class LoginCard(QWidget):
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("loginCard")
-        self.setStyleSheet(f"#loginCard {{ {panel_style()} }}")
+        set_style(self, lambda: f"#loginCard {{ {panel_style()} }}")
 
         self.avatar_label = QLabel()
         self.avatar_label.setFixedSize(self._avatar_size, self._avatar_size)
@@ -366,7 +366,7 @@ class LoginCard(QWidget):
         btn_row.addWidget(open_btn)
         dl.addLayout(btn_row)
         wait = QLabel("登录过程中请保持此窗口打开;成功后自动关闭。")
-        wait.setWordWrap(True); wait.setStyleSheet("color:#888888;")
+        wait.setWordWrap(True); wait.setStyleSheet(f"color: {muted_color()};")
         dl.addWidget(wait)
         close_btn = QPushButton("取消")
         close_btn.clicked.connect(dlg.reject)
@@ -467,7 +467,7 @@ class InstanceSettingsCard(QWidget):
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("instCard")
-        self.setStyleSheet(f"#instCard {{ {panel_style()} }}")
+        set_style(self, lambda: f"#instCard {{ {panel_style()} }}")
 
         self.title = QLabel(t("VERSION_HOME_CURRENT_SELECTION"))
         self.title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {muted_color()};")

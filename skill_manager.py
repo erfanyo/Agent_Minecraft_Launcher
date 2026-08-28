@@ -14,6 +14,7 @@
 """
 import os
 
+from ui_style import muted_color
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -468,7 +469,7 @@ class SkillManagerDialog(QDialog):
         hint = QLabel("技能 = 游戏运行时的辅助功能(如自动重启、备份提醒、指令指南)。\n"
                       "以后会逐渐添加更多,勾选即启用、取消勾选即停用,立即生效。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #888888;")
+        hint.setStyleSheet(f"color: {muted_color()};")
 
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from i18n import t
 from tutorial_content import get_concepts, get_pages
-from ui_style import text_color
+from ui_style import text_color, muted_color
 
 
 def _md(text: str) -> str:
@@ -84,7 +84,7 @@ class TutorialDialog(QDialog):
         split.setSizes([208, 560])
 
         tip = QLabel(t("READ_ONLY_GUIDE_WHAT_EACH_CONTROL_DOES"))
-        tip.setStyleSheet("color:#8a93a0;")
+        tip.setStyleSheet(f"color: {muted_color()};")
         tip.setWordWrap(True)
 
         layout = QVBoxLayout(self)

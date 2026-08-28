@@ -11,7 +11,7 @@ import uuid
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSpinBox,
+    QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
     QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
@@ -22,7 +22,8 @@ from i18n import t
 from paths import DEFAULT_GAME_DIR
 from settings import save_settings
 from ui_style import (card_btn_style, muted_color, set_style,
-                      COLOR_BLIND_PRESETS, check_readability, panel_style, text_color)
+                      COLOR_BLIND_PRESETS, check_readability, panel_style, text_color,
+                      accent_color, danger_color, success_color, current_color)
 
 
 def _fmt_mcp_entry(c: dict) -> str:
@@ -94,7 +95,7 @@ class ToggleSwitch(QWidget):
         from PySide6.QtCore import Qt as _Qt
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        track = QColor("#5B8DEF") if self._checked else QColor("#444a56")
+        track = QColor(accent_color()) if self._checked else QColor(current_color("btn_disabled_bg"))
         p.setPen(Qt.PenStyle.NoPen); p.setBrush(track)
         p.drawRoundedRect(0, 0, 46, 24, 12, 12)
         # 圆点
@@ -180,7 +181,7 @@ class SettingsCenter(QWidget):
         form.addRow("版本隔离:", self.isolation_check)
         form.addRow("游戏目录:", dir_row)
         hint = QLabel("可以是任意位置,包括 PCL2 / 官方启动器创建的 .minecraft(自动读取里面的实例)")
-        hint.setWordWrap(True); hint.setStyleSheet("color: #888888;")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
         l.addLayout(form); l.addWidget(hint); l.addStretch()
         return w
@@ -225,7 +226,7 @@ class SettingsCenter(QWidget):
         idx = self.ui_mode_combo.findData(self.settings.get("ui_mode", "beginner"))
         self.ui_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
         mode_hint = QLabel("全面:首页显示资源结构科普、更详细的状态提示;摘要:隐藏科普、精简提示。")
-        mode_hint.setWordWrap(True); mode_hint.setStyleSheet("color: #888888;")
+        mode_hint.setWordWrap(True); mode_hint.setStyleSheet(f"color: {muted_color()};")
 
         form = QFormLayout()
         form.addRow("界面语言:", self.language_combo)
@@ -239,7 +240,7 @@ class SettingsCenter(QWidget):
         from deprecated_features import get_deprecated
         for d in get_deprecated():
             info = QLabel(f"<b>{d.get('name')}</b>  ·  状态:{d.get('status','')}<br>"
-                          f"<span style='color:#8a93a0;'>{d.get('note','')}</span>")
+                          f"<span style='color:{muted_color()};'>{d.get('note','')}</span>")
             info.setWordWrap(True); info.setTextFormat(Qt.TextFormat.RichText)
             row = QHBoxLayout(); row.addWidget(info, 1)
             # 老版教程(基础版)已移除:不再提供「临时查看」入口,只保留新版「重播引导教程」
@@ -273,7 +274,7 @@ class SettingsCenter(QWidget):
         cbtn_row.addWidget(reset_btn)
         l.addLayout(cbtn_row)
         color_hint = QLabel("配色改完**立即覆盖整个启动器**(实时上色,不用等重启);当前设置页同步预览。")
-        color_hint.setWordWrap(True); color_hint.setStyleSheet("color:#8a93a0;")
+        color_hint.setWordWrap(True); color_hint.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(color_hint)
         # 色盲/色弱友好模板(为无障碍预设,一键应用)
         cb_row = QHBoxLayout(); cb_row.setSpacing(8)
@@ -299,7 +300,7 @@ class SettingsCenter(QWidget):
         cache_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
         l.addWidget(cache_title)
         cache_hint = QLabel("图片/描述按 Mod 名缓存(不同版本同一 Mod 复用)。若某 Mod 更新了图标或想重翻描述,清除后重新打开该 Mod 即可。")
-        cache_hint.setWordWrap(True); cache_hint.setStyleSheet("color:#8a93a0;")
+        cache_hint.setWordWrap(True); cache_hint.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(cache_hint)
         cache_row = QHBoxLayout(); cache_row.setSpacing(8)
         clear_icon_btn = QPushButton("清除图片缓存"); set_style(clear_icon_btn, card_btn_style); clear_icon_btn.setMinimumHeight(32)
@@ -309,6 +310,64 @@ class SettingsCenter(QWidget):
         cache_row.addWidget(clear_icon_btn)
         cache_row.addWidget(clear_desc_btn)
         l.addLayout(cache_row)
+        # 自定义背景(阶段 2):壁纸源 + 遮罩强度(决策 1/2/3)
+        l.addSpacing(12)
+        bg_title = QLabel("🖼 背景(壁纸 & 遮罩):")
+        bg_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
+        l.addWidget(bg_title)
+        self.wallpaper_source_combo = QComboBox()
+        for _lab, _val in (("关闭", "none"), ("预设渐变", "preset"),
+                           ("官方壁纸", "official"), ("本地图片", "user")):
+            self.wallpaper_source_combo.addItem(_lab, _val)
+        self.wallpaper_source_combo.setCurrentIndex(
+            max(0, self.wallpaper_source_combo.findData(
+                self.settings.get("ui_wallpaper_source", "none"))))
+        self.wallpaper_source_combo.currentIndexChanged.connect(self._on_wallpaper_source_changed)
+        src_row = QHBoxLayout(); src_row.addWidget(QLabel("壁纸:"))
+        src_row.addWidget(self.wallpaper_source_combo, 1)
+        l.addLayout(src_row)
+
+        from ui_background import PRESETS
+        self.wallpaper_preset_combo = QComboBox()
+        for _pid in PRESETS:
+            self.wallpaper_preset_combo.addItem(_pid, _pid)
+        self.wallpaper_preset_combo.setCurrentIndex(
+            max(0, self.wallpaper_preset_combo.findData(
+                self.settings.get("ui_wallpaper_preset", "teal"))))
+        preset_row = QHBoxLayout(); preset_row.addWidget(QLabel("预设:"))
+        preset_row.addWidget(self.wallpaper_preset_combo, 1)
+        l.addLayout(preset_row)
+
+        self._wallpaper_user_path = self.settings.get("ui_wallpaper_user_path", "") or ""
+        self.wallpaper_user_btn = QPushButton("选择本地图片…")
+        set_style(self.wallpaper_user_btn, card_btn_style)
+        self.wallpaper_user_btn.setMinimumHeight(32)
+        self.wallpaper_user_btn.clicked.connect(self._pick_wallpaper_image)
+        self.wallpaper_user_label = QLabel(self._wallpaper_user_path or "未选择")
+        self.wallpaper_user_label.setWordWrap(True)
+        self.wallpaper_user_label.setStyleSheet(f"color: {muted_color()};")
+        user_row = QHBoxLayout(); user_row.addWidget(self.wallpaper_user_btn)
+        user_row.addWidget(self.wallpaper_user_label, 1)
+        l.addLayout(user_row)
+
+        self.wallpaper_mask_slider = QSlider(Qt.Orientation.Horizontal)
+        self.wallpaper_mask_slider.setRange(0, 80)
+        try:
+            _mask = int(self.settings.get("ui_wallpaper_mask", 60))
+        except Exception:
+            _mask = 60
+        self.wallpaper_mask_slider.setValue(_mask)
+        self.wallpaper_mask_label = QLabel(f"遮罩强度: {self.wallpaper_mask_slider.value()}%")
+        self.wallpaper_mask_slider.valueChanged.connect(
+            lambda v: self.wallpaper_mask_label.setText(f"遮罩强度: {v}%"))
+        mask_row = QHBoxLayout(); mask_row.addWidget(QLabel("遮罩:"))
+        mask_row.addWidget(self.wallpaper_mask_slider, 1)
+        mask_row.addWidget(self.wallpaper_mask_label)
+        l.addLayout(mask_row)
+        bg_hint = QLabel("壁纸垫在内容区背景,遮罩保证文字清晰;官方壁纸首次用到时后台下载(离线自动回退预设)。")
+        bg_hint.setWordWrap(True); bg_hint.setStyleSheet(f"color: {muted_color()};")
+        l.addWidget(bg_hint)
+        self._on_wallpaper_source_changed()
         l.addStretch()
         return self._wrap_scroll(w)
 
@@ -331,6 +390,33 @@ class SettingsCenter(QWidget):
             QMessageBox.information(self, "清除缓存", msg)
         except Exception as e:
             QMessageBox.warning(self, "清除缓存", f"清除失败:{type(e).__name__}: {e}")
+
+    def _on_wallpaper_source_changed(self, *_):
+        """切换壁纸源 → 只启用对应控件。"""
+        src = self.wallpaper_source_combo.currentData()
+        self.wallpaper_preset_combo.setEnabled(src == "preset")
+        self.wallpaper_user_btn.setEnabled(src == "user")
+
+    def _pick_wallpaper_image(self):
+        """选本地图片 → 复制进 AMCL/cache/wallpapers/(遵循文件放置约定),记录相对路径。"""
+        from PySide6.QtWidgets import QFileDialog
+        import os
+        import shutil
+        import time
+        from paths import cache_dir
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择壁纸图片", "", "图片 (*.png *.jpg *.jpeg *.bmp *.webp)")
+        if not path:
+            return
+        try:
+            wall_dir = cache_dir("wallpapers")
+            ext = os.path.splitext(path)[1].lower() or ".png"
+            name = f"user_{int(time.time())}{ext}"
+            shutil.copy2(path, os.path.join(wall_dir, name))
+            self._wallpaper_user_path = os.path.join("wallpapers", name)
+            self.wallpaper_user_label.setText(os.path.basename(path))
+        except Exception as e:
+            QMessageBox.warning(self, "选择壁纸", f"复制图片失败:{type(e).__name__}: {e}")
 
     def _gen_mcp_files(self):
         """生成 MCP 连接/客户端配置文件,写到启动器创建的 AMCL 文件夹。"""
@@ -375,10 +461,10 @@ class SettingsCenter(QWidget):
             if lbl is None:
                 return
             if msgs:
-                lbl.setStyleSheet("color:#E53935; font-size:11px;")
+                lbl.setStyleSheet(f"color:{danger_color()}; font-size:11px;")
                 lbl.setText("\n".join(msgs))
             else:
-                lbl.setStyleSheet("color:#4CAF50; font-size:11px;")
+                lbl.setStyleSheet(f"color:{success_color()}; font-size:11px;")
                 lbl.setText("✅ 配色可读性良好(文字/强调色与背景对比适中)。")
         except Exception:
             pass
@@ -405,7 +491,7 @@ class SettingsCenter(QWidget):
         from PySide6.QtWidgets import QColorDialog
         from ui_style import get_custom_colors, set_custom_colors
         cur = get_custom_colors()
-        start = QColor(cur.get(slot)) if cur.get(slot) else QColor("#5B8DEF")
+        start = QColor(cur.get(slot)) if cur.get(slot) else QColor(accent_color())
         c = QColorDialog.getColor(start, self, f"选择{label}")
         if not c.isValid():
             return
@@ -462,7 +548,7 @@ class SettingsCenter(QWidget):
         self.mod_translate_check.setChecked(bool(self.settings.get("ai_mod_translate", True)))
         self.model_dl_btn = QPushButton(t("DOWNLOAD_LOCAL_MODEL"))
         self.model_dl_status = QLabel(""); self.model_dl_status.setWordWrap(True)
-        self.model_dl_status.setStyleSheet("color: #888888;")
+        self.model_dl_status.setStyleSheet(f"color: {muted_color()};")
         self.model_dl_btn.clicked.connect(self._start_model_download)
         dl_row = QHBoxLayout(); dl_row.addWidget(self.model_dl_btn); dl_row.addWidget(self.model_dl_status, 1)
 
@@ -471,7 +557,7 @@ class SettingsCenter(QWidget):
                       "这类要靠云端,想要稳定体验请配云端(如 DeepSeek);\n"
                       "· 发图片(多模态):只有所选模型本身会看图才有效,内置本地模型自动关闭;\n"
                       "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
-        hint.setWordWrap(True); hint.setStyleSheet("color: #888888;")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
 
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
         l.addWidget(self.ai_form); l.addWidget(self.mod_translate_check); l.addWidget(self.model_dl_btn)
@@ -554,12 +640,12 @@ class SettingsCenter(QWidget):
         self.strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.strategy_combo.currentIndexChanged.connect(self._on_strategy_changed)
         self.strategy_hint = QLabel(""); self.strategy_hint.setWordWrap(True)
-        self.strategy_hint.setStyleSheet("color: #888888;")
+        self.strategy_hint.setStyleSheet(f"color: {muted_color()};")
         self._update_strategy_hint()
 
         self.mirror_combo = QComboBox()
         self.mirror_hint = QLabel(""); self.mirror_hint.setWordWrap(True)
-        self.mirror_hint.setStyleSheet("color: #888888;")
+        self.mirror_hint.setStyleSheet(f"color: {muted_color()};")
         self._refresh_mirror_combo()
         self.mirror_combo.currentIndexChanged.connect(self._update_mirror_hint)
         self.mirror_combo.setEnabled(self.strategy_combo.currentData() != "official_only")
@@ -841,6 +927,12 @@ class SettingsCenter(QWidget):
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors
+        # 自定义背景(阶段 2)
+        self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
+        self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
+        self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
+        if getattr(self, "_wallpaper_user_path", ""):
+            self.settings["ui_wallpaper_user_path"] = self._wallpaper_user_path
         # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):配置在 MCP 插件设置页(w._mcp_clients_edit)。
         # 从 shell 里找该编辑框(插件未启用/未构建时保留原值)。
         mcp_edit = getattr(self, "mcp_clients_edit", None)

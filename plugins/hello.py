@@ -11,6 +11,8 @@ PLUGIN_NAME = "示例"
 PLUGIN_DESCRIPTION = "演示注册一个 AI 工具 + 一个设置项 + 一个页面 + 一个技能(完整的插件示例)。"
 PLUGIN_VERSION = "0.1.0"
 
+from ui_style import muted_color
+
 
 # --- 全局:记录自定义设置值(插件内维护) ---
 _HELLO_TAG = "hello"
@@ -65,7 +67,7 @@ def register(api):
                       "· 技能(游戏生命周期钩子 + ai_hint)\n"
                       "照这个文件改,就是你的 AI 生成新插件的最小模板。")
         desc.setWordWrap(True)
-        desc.setStyleSheet("color:#8a93a0; font-size:11px;")
+        desc.setStyleSheet(f"color: {muted_color()}; font-size:11px;")
         lay.addWidget(desc)
         return w
 

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QProgressDialog, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
-from ui_style import card_btn_style, hint_style, set_style
+from ui_style import card_btn_style, hint_style, set_style, text_color, current_color
 
 # 顶层目录里「个人游玩记录」类(默认不勾选)
 _RECORD_DIRS = {"saves", "logs", "crash-reports", "backups", "schematics",
@@ -111,8 +111,8 @@ class PackExportDialog(QDialog):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setColumnCount(1)
-        self.tree.setStyleSheet("QTreeWidget { background:#1c2128; color:#e8ecf2;"
-                                " border:1px solid #3a4150; border-radius:8px; }")
+        self.tree.setStyleSheet(f"QTreeWidget {{ background:{current_color('bg0')}; color:{text_color()};"
+                                f" border:1px solid {current_color('btn_border')}; border-radius:8px; }}")
         layout.addWidget(self.tree, 1)
 
         # ③ 底部:全选/全不选 + 目标路径 + 导出

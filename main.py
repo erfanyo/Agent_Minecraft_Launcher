@@ -214,12 +214,15 @@ class MainWindow(QMainWindow):
         # 启动器尽可能把所有反馈(状态/异常/操作)记进日志,方便 AI 定位问题
         self._log_feedback_setup()
 
-        # ---- 组装整个窗口 ----
-        central = QWidget()
+        # ---- 组装整个窗口(背景引擎:BackgroundWidget 垫底画壁纸+遮罩)----
+        from ui_background import BackgroundWidget
+        central = BackgroundWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.main_tabs)
         self.setCentralWidget(central)
+        self._background = central
+        self.apply_background()
 
         # ---- 全局键盘导航(遥控器式):顶部分类标签 左右切换;当前页左菜单 上下切换;Enter 进入分项 ----
         # 焦点在实例列表/按钮/输入框等"自己会消费按键"的控件上时不抢键(防回归)。
@@ -344,7 +347,24 @@ class MainWindow(QMainWindow):
         self.resource_center.set_ui_mode(s.get("ui_mode", "beginner"))
         self.refresh_instances()   # 游戏目录可能被改了,重新扫描
         self._watch_versions_dir()   # 游戏目录若变更,把监听指向新的 versions/
+        self.apply_background()   # 壁纸/遮罩变化 → 立即生效
         self.statusBar().showMessage("设置已保存")
+
+    def apply_background(self):
+        """按设置应用背景壁纸 + 遮罩 + 面板不透明度(阶段 2 · 决策 2)。"""
+        from ui_background import load_wallpaper, mask_strength
+        from ui_tokens import set_wallpaper_active, is_wallpaper_active
+        pix = load_wallpaper(self.settings)
+        mask = mask_strength(self.settings)
+        active = pix is not None
+        bg = getattr(self, "_background", None)
+        if bg is not None:
+            bg.set_wallpaper(pix, mask)
+        # 壁纸激活态变了 → 切换面板不透明度并全量重刷样式(否则跳过,省成本)
+        if is_wallpaper_active() != active:
+            set_wallpaper_active(active)
+            from ui_style import refresh_theme
+            refresh_theme()
 
     def open_update_dialog(self):
         """设置 → 检查更新:AMCL 启动器 + bridge-mod(帮助菜单已移除,入口并入设置菜单)"""
@@ -926,15 +946,16 @@ class MainWindow(QMainWindow):
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
+        from ui_style import muted_color, success_color
         n = len(self._running_instances)
         if n:
             self._running_label.setText(f"🟢 已有 {n} 个运行中的实例")
             self._running_label.setToolTip("运行中的实例:\n" + "\n".join(sorted(self._running_instances)))
-            self._running_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+            self._running_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
         else:
             self._running_label.setText("⚪ 已有 0 个运行中的实例")
             self._running_label.setToolTip("启动实例后这里会显示运行中的游戏")
-            self._running_label.setStyleSheet("color: #888888;")
+            self._running_label.setStyleSheet(f"color: {muted_color()};")
 
     def _busy_download(self, busy: bool):
         self.download_tab.set_busy(busy)

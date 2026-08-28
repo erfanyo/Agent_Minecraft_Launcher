@@ -16,6 +16,7 @@ import html
 import os
 import time
 
+from ui_style import muted_color, success_color, warning_color, danger_color, accent_color
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -121,7 +122,7 @@ class ContextRing(QWidget):
         super().__init__(parent)
         self._used = 0
         self._limit = 1
-        self._color = "#4CAF50"
+        self._color = success_color()
         self.setFixedSize(30, 30)
         self.setToolTip("上下文占用")
         self.setStyleSheet("background: transparent;")
@@ -131,11 +132,11 @@ class ContextRing(QWidget):
         self._limit = max(limit, 1)
         ratio = min(1.0, self._used / self._limit)
         if ratio < 0.6:
-            self._color = "#4CAF50"
+            self._color = success_color()
         elif ratio < 0.85:
-            self._color = "#F59E0B"
+            self._color = warning_color()
         else:
-            self._color = "#E53935"
+            self._color = danger_color()
         self.setToolTip(f"上下文: 已用 {self._used:,} / {self._limit:,} tokens ({ratio * 100:.0f}%)")
         self.update()
 
@@ -173,7 +174,7 @@ class SendWithRing(QWidget):
         super().__init__(parent)
         self._used = 0
         self._limit = 1
-        self._color = "#4CAF50"
+        self._color = success_color()
         self.setFixedSize(40, 40)
         self.setToolTip("发送(Enter) | 上下文: 0%")
         self.setStyleSheet("background: transparent;")
@@ -182,10 +183,10 @@ class SendWithRing(QWidget):
         self.btn.move(7, 7)
         self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn.setStyleSheet(
-            "QPushButton{border-radius:13px; background:#3E7CB1; color:white;"
-            " font-size:15px; font-weight:bold; border:none;}"
-            "QPushButton:hover{background:#5B8DEF;}"
-            "QPushButton:pressed{background:#2E5A85;}")
+            f"QPushButton{{border-radius:13px; background:#3E7CB1; color:white;"
+            f" font-size:15px; font-weight:bold; border:none;}}"
+            f"QPushButton:hover{{background:{accent_color()};}}"
+            f"QPushButton:pressed{{background:#2E5A85;}}")
         self.btn.clicked.connect(self.clicked.emit)
 
     def click(self):
@@ -196,11 +197,11 @@ class SendWithRing(QWidget):
         self._limit = max(limit, 1)
         ratio = min(1.0, self._used / self._limit)
         if ratio < 0.6:
-            self._color = "#4CAF50"
+            self._color = success_color()
         elif ratio < 0.85:
-            self._color = "#F59E0B"
+            self._color = warning_color()
         else:
-            self._color = "#E53935"
+            self._color = danger_color()
         self.setToolTip(f"发送(Enter) | 上下文: 已用 {self._used:,} / "
                         f"{self._limit:,} tokens ({ratio * 100:.0f}%)")
         self.update()
@@ -242,10 +243,10 @@ class RecentScreenshotsDialog(QDialog):
         if not shots:
             hint = QLabel("还没有截图。游戏里按 F2 截图后会自动存到 .minecraft 里(启动器会自动找到)。")
             hint.setWordWrap(True)
-            hint.setStyleSheet("color:#888888;")
+            hint.setStyleSheet(f"color: {muted_color()};")
         else:
             hint = QLabel(f"共找到最近 {len(shots)} 张截图:双击添加,或选中多张点[添加]")
-            hint.setStyleSheet("color:#888888;")
+            hint.setStyleSheet(f"color: {muted_color()};")
             for p in shots:
                 name = os.path.basename(p)
                 when = time.strftime("%m-%d %H:%M", time.localtime(os.path.getmtime(p)))

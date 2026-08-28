@@ -11,74 +11,21 @@
 用法(页面里):`from ui_style import card_btn_style, text_color, ...` —— 和以前一样。
 新增配色方案:读设置 → `load_theme_from_settings(settings)`(预留设置键 ui_custom_colors)。
 """
-from PySide6.QtWidgets import QApplication
+from ui_tokens import (   # 设计 token 单一数据源:颜色/非颜色 token 全部从 ui_tokens 取
+    COLOR_SLOTS, COLOR_TOKENS,
+    is_dark_mode, current_token,
+    set_custom_colors, clear_custom_colors, get_custom_colors,
+    SPACING, RADIUS, SHADOW, DURATION, EASING,
+)
 
-
-def is_dark_mode() -> bool:
-    """判断当前系统主题是不是深色"""
-    app = QApplication.instance()
-    if app is None:
-        return False
-    try:
-        scheme = app.styleHints().colorScheme()
-        if hasattr(scheme, "name") and scheme.name == "Dark":
-            return True
-    except Exception:
-        pass
-    win = app.palette().window().color()
-    return win.lightness() < 128
-
-
-# ---------------- 自定义配色方案(预留) ----------------
-# 所有颜色槽 = (深色默认, 浅色默认)。自定义主题只覆盖需要的槽。
-COLOR_SLOTS = {
-    "text": ("#e7ecf5", "#1f2430"),
-    "muted": ("#8b96a8", "#6b7280"),
-    "hover": ("rgba(255,255,255,0.08)", "rgba(0,0,0,0.05)"),
-    "panel_bg": ("rgba(255,255,255,0.045)", "rgba(0,0,0,0.035)"),
-    "panel_border": ("rgba(255,255,255,0.11)", "rgba(20,30,60,0.12)"),
-    "btn_bg": ("#2b2f3a", "#f4f6fa"),
-    "btn_bg_pressed": ("#242833", "#e6ebf3"),
-    "btn_border": ("#3a4150", "#cfd5e0"),
-    "accent": ("#5B8DEF", "#3B8EEA"),
-    "accent_bright": ("#4A8CF0", "#3D8BF2"),
-    "accent_bg": ("#2E6FD8", "#1E6FD9"),
-    "accent_bg_hover": ("#3D80E8", "#2F7FE8"),
-    "accent_bg_pressed": ("#265FB8", "#175CB5"),
-    "btn_disabled_bg": ("#44506A", "#B9C4D6"),
-    "btn_disabled_text": ("#9AA4B8", "#EEF1F6"),
-    "sel_bg": ("rgba(91,141,239,0.30)", "rgba(59,142,234,0.20)"),
-    "list_hover": ("rgba(255,255,255,0.08)", "rgba(59,142,234,0.08)"),
-    "menu_sel": ("rgba(91,141,239,0.20)", "rgba(59,142,234,0.16)"),
-    "menu_hover": ("rgba(255,255,255,0.07)", "rgba(59,142,234,0.08)"),
-    "tab_pane_border": ("rgba(255,255,255,0.10)", "rgba(20,30,60,0.14)"),
-    "tab_sel_bg": ("rgba(91,141,239,0.16)", "rgba(59,142,234,0.14)"),
-}
-
-_CUSTOM_COLORS = {}   # name -> color(自定义主题覆盖)
-
-
-def set_custom_colors(mapping: dict) -> None:
-    """设置自定义配色主题(只认 COLOR_SLOTS 里的名字;空/不认识的忽略)。"""
-    global _CUSTOM_COLORS
-    _CUSTOM_COLORS = {k: v for k, v in (mapping or {}).items() if k in COLOR_SLOTS and v}
-
-
-def clear_custom_colors() -> None:
-    global _CUSTOM_COLORS
-    _CUSTOM_COLORS = {}
-
-
-def get_custom_colors() -> dict:
-    return dict(_CUSTOM_COLORS)
+# ---------------- 兼容层:保留既有公开 API ----------------
+# COLOR_SLOTS / set_custom_colors / clear_custom_colors / get_custom_colors / is_dark_mode
+# 均从 ui_tokens 重导出,名字与行为不变(第三方 import 不破)。
 
 
 def current_color(name: str) -> str:
-    """取某颜色槽的当前值:自定义主题优先,否则按深浅色默认。"""
-    if name in _CUSTOM_COLORS:
-        return _CUSTOM_COLORS[name]
-    dark, light = COLOR_SLOTS.get(name, ("#000000", "#000000"))
-    return dark if is_dark_mode() else light
+    """取某颜色槽的当前值(委托 ui_tokens.current_token;签名/行为不变)。"""
+    return current_token(name)
 
 
 def load_theme_from_settings(settings: dict) -> None:
@@ -321,6 +268,31 @@ def hover_bg() -> str:
     return current_color("hover")
 
 
+def accent_color() -> str:
+    """强调色(主色,用于悬停边框/链接/开关)"""
+    return current_color("accent")
+
+
+def danger_color() -> str:
+    """语义色:危险/错误(红)"""
+    return current_color("danger")
+
+
+def success_color() -> str:
+    """语义色:成功(绿)"""
+    return current_color("success")
+
+
+def warning_color() -> str:
+    """语义色:警告/进行中(橙黄)"""
+    return current_color("warning")
+
+
+def info_color() -> str:
+    """语义色:信息(蓝,默认同 accent)"""
+    return current_color("info")
+
+
 def panel_style() -> str:
     """卡片/面板:圆角 + 细边框 + 柔和背景,自适应深色。"""
     bg = current_color("panel_bg")
@@ -334,11 +306,13 @@ def card_btn_style() -> str:
     border = current_color("btn_border")
     text = text_color()
     pressed = current_color("btn_bg_pressed")
+    focus = current_color("focus")
     return (
         f"QPushButton {{ background: {bg}; color: {text}; border: 1px solid {border};"
         f" border-radius: 9px; padding: 8px 12px; }}"
         f"QPushButton:hover {{ border-color: {current_color('accent')}; }}"
         f"QPushButton:pressed {{ background: {pressed}; }}"
+        f"QPushButton:focus {{ border: 2px solid {focus}; }}"
     )
 
 
@@ -382,6 +356,7 @@ def launch_btn_style() -> str:
         "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
         f" stop:0 {current_color('accent_bright')}, stop:1 {current_color('accent_bg_hover')}); }}"
         f"QPushButton:pressed {{ background: {current_color('accent_bg_pressed')}; }}"
+        f"QPushButton:focus {{ border: 2px solid {current_color('focus')}; }}"
         f"QPushButton:disabled {{ background: {current_color('btn_disabled_bg')};"
         f" color: {current_color('btn_disabled_text')}; }}"
     )
@@ -409,16 +384,16 @@ def card_style() -> str:
     """可点击卡片(加载器/实例/Mod):未选中浅灰底,选中蓝框高亮"""
     if is_dark_mode():
         return (
-            "QPushButton { background: #2b2b2b; border: 2px solid #555555; border-radius: 6px;"
-            " color: #e8e8e8; text-align: left; }"
-            "QPushButton:hover { border-color: #5B8DEF; }"
-            "QPushButton:checked { background: #1e3a5c; border: 2px solid #5B8DEF; color: #cfe3ff; }"
+            f"QPushButton {{ background: #2b2b2b; border: 2px solid #555555; border-radius: 6px;"
+            f" color: {text_color()}; text-align: left; }}"
+            f"QPushButton:hover {{ border-color: {accent_color()}; }}"
+            f"QPushButton:checked {{ background: #1e3a5c; border: 2px solid {accent_color()}; color: #cfe3ff; }}"
         )
     return (
-        "QPushButton { background: #f5f5f5; border: 2px solid #999999; border-radius: 6px;"
-        " color: #222222; text-align: left; }"
-        "QPushButton:hover { border-color: #3B8EEA; }"
-        "QPushButton:checked { background: #DCEBFF; border: 2px solid #3B8EEA; color: #10437F; }"
+        f"QPushButton {{ background: #f5f5f5; border: 2px solid #999999; border-radius: 6px;"
+        f" color: {text_color()}; text-align: left; }}"
+        f"QPushButton:hover {{ border-color: {accent_color()}; }}"
+        f"QPushButton:checked {{ background: #DCEBFF; border: 2px solid {accent_color()}; color: #10437F; }}"
     )
 
 
@@ -432,12 +407,13 @@ def accent_border_style() -> str:
         f" border-radius: 8px; font-weight: bold; }}"
         f"QPushButton:hover {{ border-color: {current_color('accent')}; }}"
         f"QPushButton:pressed {{ background: {current_color('btn_bg_pressed')}; }}"
+        f"QPushButton:focus {{ border: 2px solid {current_color('focus')}; }}"
     )
 
 
 def arrow_style() -> str:
     """卡片右侧的展开箭头按钮"""
-    return "QPushButton { border: none; background: transparent; color: #888888; }"
+    return f"QPushButton {{ border: none; background: transparent; color: {muted_color()}; }}"
 
 
 def primary_btn_style() -> str:
@@ -447,6 +423,7 @@ def primary_btn_style() -> str:
         f" border-radius: 6px; padding: 6px 14px; font-weight: bold; }}"
         f"QPushButton:hover {{ background: {current_color('accent_bg_hover')}; }}"
         f"QPushButton:pressed {{ background: {current_color('accent_bg_pressed')}; }}"
+        f"QPushButton:focus {{ border: 2px solid {current_color('focus')}; }}"
         f"QPushButton:disabled {{ background: {current_color('btn_disabled_bg')};"
         f" color: {current_color('btn_disabled_text')}; }}"
     )
@@ -496,30 +473,35 @@ def dialog_dark_style() -> str:
     启动器的深色圆角样子。浅色主题下返回空串(用系统默认)。"""
     if not is_dark_mode():
         return ""
-    border = "rgba(255,255,255,0.10)"
-    bg = "#23272f"
-    base = "#1a1d23"
+    border = current_color("border_soft")
+    bg = current_color("bg1")
+    base = current_color("bg0")
+    focus = current_color("focus")
     text = text_color()
     return (
         f"QMenu {{ background: {bg}; border: 1px solid {border}; border-radius: 8px; padding: 4px; }}"
         f"QMenu::item {{ padding: 6px 16px; border-radius: 5px; color: {text}; }}"
-        f"QMenu::item:selected {{ background: rgba(91,141,239,0.25); }}"
+        f"QMenu::item:selected {{ background: {current_color('menu_sel')}; }}"
         f"QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}"
         f"QComboBox {{ background: {bg}; color: {text}; border: 1px solid {border};"
         f" border-radius: 6px; padding: 4px 8px; }}"
+        f"QComboBox:focus {{ border-color: {focus}; }}"
         f"QComboBox QAbstractItemView {{ background: {base}; color: {text};"
-        f" selection-background-color: rgba(91,141,239,0.30); border: 1px solid {border}; }}"
-        f"QPushButton {{ background: #2b2f3a; color: {text}; border: 1px solid {border};"
+        f" selection-background-color: {current_color('sel_bg')}; border: 1px solid {border}; }}"
+        f"QPushButton {{ background: {current_color('btn_bg')}; color: {text}; border: 1px solid {border};"
         f" border-radius: 6px; padding: 5px 11px; }}"
-        f"QPushButton:hover {{ border-color: #5B8DEF; }}"
-        f"QPushButton:pressed {{ background: #242833; }}"
+        f"QPushButton:hover {{ border-color: {current_color('accent')}; }}"
+        f"QPushButton:pressed {{ background: {current_color('btn_bg_pressed')}; }}"
+        f"QPushButton:focus {{ border-color: {focus}; }}"
         f"QLineEdit, QSpinBox {{ background: {base}; color: {text}; border: 1px solid {border};"
         f" border-radius: 6px; padding: 3px 6px; }}"
+        f"QLineEdit:focus, QSpinBox:focus {{ border-color: {focus}; }}"
         f"QListWidget {{ background: {base}; color: {text}; border: 1px solid {border};"
         f" border-radius: 8px; }}"
         f"QListWidget::item {{ padding: 4px 6px; border-radius: 4px; }}"
-        f"QListWidget::item:selected {{ background: rgba(91,141,239,0.30); }}"
+        f"QListWidget::item:selected {{ background: {current_color('sel_bg')}; }}"
         f"QCheckBox {{ color: {text}; }}"
         f"QTextEdit, QPlainTextEdit {{ background: {base}; color: {text}; border: 1px solid {border}; }}"
+        f"QTextEdit:focus, QPlainTextEdit:focus {{ border-color: {focus}; }}"
         f"QToolTip {{ background: {bg}; color: {text}; border: 1px solid {border}; }}"
     )

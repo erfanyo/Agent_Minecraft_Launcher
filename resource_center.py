@@ -42,7 +42,8 @@ from PySide6.QtWidgets import (
 
 from i18n import t
 from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
-                      muted_color, panel_style, text_color, set_style)
+                      muted_color, panel_style, text_color, set_style,
+                      accent_color, warning_color)
 from version_tree import GameVersionTree
 
 # 资源分类(左侧菜单 + Modrinth project_type + 安装目录子文件夹)
@@ -335,7 +336,7 @@ class ResourceBrowser(QWidget):
         self.mcmod_link.setTextFormat(Qt.TextFormat.RichText)
         self.mcmod_link.setOpenExternalLinks(False)   # 点击走 QDesktopServices,统一 URL 构造
         self.mcmod_link.linkActivated.connect(self._open_mcmod_link)
-        self.mcmod_link.setStyleSheet("color: #5B8DEF; font-size: 12px;")
+        self.mcmod_link.setStyleSheet(f"color: {accent_color()}; font-size: 12px;")
         self.mcmod_link.setVisible(False)
         # ---- 全局版本/加载器(方案一:搜索筛选 + 下载默认合一,底部卡显示) ----
         # 游戏版本用版本树(按大版本分组,点大版本自动选推荐版),不再是可编辑下拉。
@@ -435,7 +436,7 @@ class ResourceBrowser(QWidget):
         # 手动下载悬浮层(装 游戏版本树 + 加载器 + mod版本)
         self.manual_popup = PopupCard(self)
         self.manual_popup.setObjectName("manual_popup")
-        self.manual_popup.setStyleSheet(panel_style())
+        set_style(self.manual_popup, panel_style)
         mp = QVBoxLayout(self.manual_popup)
         mp.setContentsMargins(10, 8, 10, 8)
         mp.setSpacing(6)
@@ -463,7 +464,7 @@ class ResourceBrowser(QWidget):
         # 目标实例悬浮层(装 实例卡片 + 自定义目录提示)
         self.inst_popup = PopupCard(self)
         self.inst_popup.setObjectName("inst_popup")
-        self.inst_popup.setStyleSheet(panel_style())
+        set_style(self.inst_popup, panel_style)
         pp = QVBoxLayout(self.inst_popup)
         pp.setContentsMargins(10, 8, 10, 8)
         pp.setSpacing(4)
@@ -954,7 +955,7 @@ class ResourceBrowser(QWidget):
         if source == "failed":
             self.desc_label.setText(text)
             self.desc_note_label.setText(t("TRANSLATION_FAILED_SHOWING_ORIGINAL"))
-            self.desc_note_label.setStyleSheet(f"color: #c78a2e; font-size: 11px;")
+            self.desc_note_label.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
             self.desc_note_label.setVisible(True)
             return
         if result.get("machine"):
@@ -963,7 +964,7 @@ class ResourceBrowser(QWidget):
             if result.get("confidence") == "low":
                 note = t("MACHINE_TRANSLATION_LOW_CONFIDENCE_SEE_ORIGINAL")
             self.desc_note_label.setText(note)
-            self.desc_note_label.setStyleSheet(f"color: #c78a2e; font-size: 11px;")
+            self.desc_note_label.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
             self.desc_note_label.setVisible(True)
             return
         # 兜底:显示原文

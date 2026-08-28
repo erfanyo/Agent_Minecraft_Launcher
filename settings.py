@@ -74,6 +74,12 @@ DEFAULTS = {
         # 默认填官方插件仓库(erfanyo/Agent_Minecraft_Launcher);用户可手动添加其它仓库
         {"url": "https://github.com/erfanyo/Agent_Minecraft_Launcher", "name": "erfanyo/Agent_Minecraft_Launcher"},
     ],       # 插件仓库源:[{"url","name"}] 手动添加(你的官方仓库默认在此)
+    # ---- 自定义背景(阶段 2;默认关,决策 3)----
+    "ui_wallpaper_source": "none",     # 壁纸源:none(关闭)/ preset(预设渐变)/ official(官方,首启下载)/ user(本地图片)
+    "ui_wallpaper_preset": "teal",     # 预设壁纸 id(见 ui_background.PRESETS)
+    "ui_wallpaper_user_path": "",      # 用户图片相对路径(相对 AMCL/cache/,复制进来的)
+    "ui_wallpaper_official_id": "",    # 官方壁纸 id(素材待项目方提供)
+    "ui_wallpaper_mask": 60,           # 遮罩强度 0~80(%);默认 60(深色遮罩/浅色遮罩自动换色)
 }
 
 

@@ -44,10 +44,10 @@ class OnboardingDialog(QDialog):
         # 注意:父级一旦设置样式表,Qt 引擎会接管渲染,子控件文字会回退为默认黑色
         # (深浅色系统都可能「黑底黑字」),所以必须在这里把所有控件类型显式上色。
         from ui_style import current_color, set_style, text_color, muted_color, is_dark_mode
-        _dlg_bg = "#23272f" if is_dark_mode() else "#f5f6f9"   # 不透明背景,避免 QSS 半透明画成黑块
+        _dlg_bg = current_color("bg1")   # 不透明背景,避免 QSS 半透明画成黑块
         _text = text_color()
         _muted = muted_color()
-        _base = "#1a1d23" if is_dark_mode() else "#ffffff"
+        _base = current_color("bg0")
         _border = current_color("panel_border")
         _btn_bg = current_color("btn_bg")
         _sel = current_color("sel_bg")
@@ -142,13 +142,13 @@ class OnboardingDialog(QDialog):
         hint = QLabel("没有 DeepSeek 账号?可以先用 Ollama / LM Studio 本地模型,完全免费离线。\n"
                       "注意:发图片需要模型本身会\"看图\",本地模型通常不支持,不确定就别勾。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #888888;")
+        hint.setStyleSheet(f"color: {muted_color()};")
         builtin_hint = QLabel("💡 也可以直接用「内置本地 AI 模型」:离线可用、无需密钥,"
                               "首次用到时自动下载(约 500MB,镜像优先)。\n"
                               "⚠️ 但它很小,只懂直白指令;像\"按功能找 mod\"这类模糊需求它理解不了,"
                               "甚至会选错工具——想要稳定体验建议配云端(如 DeepSeek)。")
         builtin_hint.setWordWrap(True)
-        builtin_hint.setStyleSheet("color: #888888;")
+        builtin_hint.setStyleSheet(f"color: {muted_color()};")
 
         p2 = QVBoxLayout(page_ai)
         p2.addWidget(title2)

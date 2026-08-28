@@ -117,7 +117,7 @@ class SettingsDialog(QDialog):
         form.addRow("游戏目录:", dir_row)
         dir_hint = QLabel("可以是任意位置,包括 PCL2 / 官方启动器创建的 .minecraft(自动读取里面的实例)")
         dir_hint.setWordWrap(True)
-        dir_hint.setStyleSheet("color: #888888;")
+        dir_hint.setStyleSheet(f"color: {muted_color()};")
 
         w = QWidget()
         lay = QVBoxLayout(w)
@@ -144,7 +144,7 @@ class SettingsDialog(QDialog):
         idx = self.language_combo.findData(cur)
         self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
         lang_hint = QLabel("切换语言后需重启启动器生效(检测系统语言:中文系统自动用中文)")
-        lang_hint.setStyleSheet("color: #888888;")
+        lang_hint.setStyleSheet(f"color: {muted_color()};")
 
         # 界面模式(全面:多提示/科普;摘要:精简) —— 对外叫「全面 / 摘要」,
         # 不用「新手 / 专家」(免得显得看不起新手)。值保持 beginner/expert 兼容旧配置。
@@ -157,7 +157,7 @@ class SettingsDialog(QDialog):
         self.ui_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
         mode_hint = QLabel(t("FULL_SHOWS_RESOURCE_GUIDE_DETAILED_HINTS_SUMMARY_HIDES_THEM_CONCISE"))
         mode_hint.setWordWrap(True)
-        mode_hint.setStyleSheet("color: #888888;")
+        mode_hint.setStyleSheet(f"color: {muted_color()};")
         mode_hint.setWordWrap(True)
 
         form = QFormLayout()
@@ -180,7 +180,7 @@ class SettingsDialog(QDialog):
             for d in dep:
                 row = QHBoxLayout()
                 info = QLabel(f"<b>{d.get('name')}</b>  ·  状态:{d.get('status','')}<br>"
-                              f"<span style='color:#8a93a0;'>{d.get('note','')}</span>")
+                              f"<span style='color:{muted_color()};'>{d.get('note','')}</span>")
                 info.setWordWrap(True)
                 info.setTextFormat(Qt.TextFormat.RichText)
                 row.addWidget(info, 1)
@@ -211,7 +211,7 @@ class SettingsDialog(QDialog):
                          "· 发图片(多模态):只有所选模型本身会\"看图\"才有效,内置本地模型自动关闭;\n"
                          "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
         ai_hint.setWordWrap(True)
-        ai_hint.setStyleSheet("color: #888888;")
+        ai_hint.setStyleSheet(f"color: {muted_color()};")
 
         # Mod 描述本地 AI 翻译(英→中)开关:归属 AI 功能,默认开
         self.mod_translate_check = QCheckBox("Mod 描述本地 AI 翻译(英→中)")
@@ -221,7 +221,7 @@ class SettingsDialog(QDialog):
             "开:详情显示中文翻译 + \"机翻仅供参考\"标注;关:显示英文原文。")
         mod_ai_hint = QLabel("开:选 Mod 时详情面板把英文描述翻成中文(本地小模型,翻译在后台跑,不卡界面)。")
         mod_ai_hint.setWordWrap(True)
-        mod_ai_hint.setStyleSheet("color: #888888;")
+        mod_ai_hint.setStyleSheet(f"color: {muted_color()};")
         mod_ai_row = QHBoxLayout()
         mod_ai_row.addWidget(self.mod_translate_check)
         mod_ai_row.addStretch()
@@ -232,7 +232,7 @@ class SettingsDialog(QDialog):
         self.model_dl_btn.clicked.connect(self._start_model_download)
         self.model_dl_status = QLabel("")
         self.model_dl_status.setWordWrap(True)
-        self.model_dl_status.setStyleSheet("color: #888888;")
+        self.model_dl_status.setStyleSheet(f"color: {muted_color()};")
         model_dl_row = QHBoxLayout()
         model_dl_row.addWidget(self.model_dl_btn)
         model_dl_row.addWidget(self.model_dl_status, 1)
@@ -262,13 +262,13 @@ class SettingsDialog(QDialog):
         self.strategy_combo.currentIndexChanged.connect(self._on_strategy_changed)
         self.strategy_hint = QLabel("")
         self.strategy_hint.setWordWrap(True)
-        self.strategy_hint.setStyleSheet("color: #888888;")
+        self.strategy_hint.setStyleSheet(f"color: {muted_color()};")
         self._update_strategy_hint()
 
         # 镜像站:实际用到的镜像(策略里"只用官方"时自动禁用)
         self.mirror_hint = QLabel("")
         self.mirror_hint.setWordWrap(True)
-        self.mirror_hint.setStyleSheet("color: #888888;")
+        self.mirror_hint.setStyleSheet(f"color: {muted_color()};")
         self.mirror_combo = QComboBox()
         self._refresh_mirror_combo()
         self.mirror_combo.currentIndexChanged.connect(self._update_mirror_hint)

@@ -69,7 +69,7 @@ from assistant_ui import (
     RecentScreenshotsDialog,
     SendWithRing,
 )
-from ui_style import set_style, list_style
+from ui_style import set_style, list_style, muted_color, accent_color, success_color, warning_color, danger_color, text_color, current_color
 from settings import save_settings
 
 # 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
@@ -914,7 +914,7 @@ class AISettingsForm(QWidget):
             "去联想 + 查证,本地模型做不来。想要稳定的\"按功能找 Mod\"体验,"
             "建议配一个云端(如 DeepSeek);或接受本地模型会答偏、需要你换更明确的说法。")
         self.local_explainer.setWordWrap(True)
-        self.local_explainer.setStyleSheet("color: #888888;")
+        self.local_explainer.setStyleSheet(f"color: {muted_color()};")
         ll.addWidget(self.local_explainer)
 
         # ---------- 通用 ----------
@@ -953,7 +953,7 @@ class AISettingsForm(QWidget):
             "下面的【额度/冷却】保护你的 AI API 额度:多人联机时游戏内玩家都能敲 /ai,\n"
             "不设限会被刷、烧光你的 API 额度。")
         ai_explain.setWordWrap(True)
-        ai_explain.setStyleSheet("color: #888888;")
+        ai_explain.setStyleSheet(f"color: {muted_color()};")
         av.addWidget(ai_explain)
 
         # 每日总额度 + 每玩家冷却(保护服主 API)
@@ -1238,7 +1238,7 @@ class AISettingsDialog(QDialog):
             "· 发图片:和用哪家无关,取决于所选模型本身会不会\"看图\"(内置本地模型不支持,自动关闭);\n"
             "文件权限:只读 = AI 只能看文件;工作区可写 = AI 只能在启动器目录里改文件。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #888888;")
+        hint.setStyleSheet(f"color: {muted_color()};")
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -1307,16 +1307,16 @@ class AIChatDock(QDockWidget):
         self.strategy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._rebuild_strategy_menu()
         self.strategy_btn.setStyleSheet(
-            "QToolButton { color: #8b96a8; border: 1px solid #3a4150;"
-            " border-radius: 6px; padding: 3px 8px; background: transparent; }"
-            "QToolButton:hover { color: #ffffff; border-color: #5B8DEF; }")
+            f"QToolButton {{ color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
+            f" border-radius: 6px; padding: 3px 8px; background: transparent; }}"
+            f"QToolButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
         skills_btn = QPushButton("技能管理…")
         skills_btn.setToolTip("管理游戏运行时辅助技能(指令指南/任务拆分等)")
         skills_btn.clicked.connect(self.open_skill_manager)
         skills_btn.setStyleSheet(
-            "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"
-            " border-radius: 6px; padding: 3px 8px; }"
-            "QPushButton:hover { color: #ffffff; border-color: #5B8DEF; }")
+            f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
+            f" border-radius: 6px; padding: 3px 8px; }}"
+            f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
         top_row = QHBoxLayout()
         top_row.setContentsMargins(2, 0, 2, 0)
         top_row.addWidget(self.strategy_btn)
@@ -1335,9 +1335,9 @@ class AIChatDock(QDockWidget):
                             "只读 = AI 不能改任何文件;工作区可写 = AI 只能改启动器目录内的文件")
         perm_btn.clicked.connect(self._cycle_permission)
         perm_btn.setStyleSheet(
-            "QPushButton { background: transparent; color: #8b96a8; border: 1px solid #3a4150;"
-            " border-radius: 6px; padding: 3px 8px; }"
-            "QPushButton:hover { color: #ffffff; border-color: #5B8DEF; }")
+            f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
+            f" border-radius: 6px; padding: 3px 8px; }}"
+            f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
         self.perm_label = QLabel("")
         perm_row = QHBoxLayout()
         perm_row.setContentsMargins(2, 0, 2, 0)
@@ -1526,10 +1526,10 @@ class AIChatDock(QDockWidget):
         cur = self.settings.get("ai_permission", "readonly")
         if cur == "workspace_write":
             self.perm_label.setText("工作区可写")
-            self.perm_label.setStyleSheet("color: #2E7D32; font-weight: bold;")
+            self.perm_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
         else:
             self.perm_label.setText("只读")
-            self.perm_label.setStyleSheet("color: #888888;")
+            self.perm_label.setStyleSheet(f"color: {muted_color()};")
 
     def _cycle_permission(self):
         """切换 只读 ↔ 工作区可写,立即保存并同步主窗口。
@@ -1566,7 +1566,7 @@ class AIChatDock(QDockWidget):
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(6)
         tip = QLabel("把当前对话存成会话,或从归档快速恢复(恢复后可继续提问,含工具过程)。")
-        tip.setWordWrap(True); tip.setStyleSheet("color:#888888; font-size:11px;")
+        tip.setWordWrap(True); tip.setStyleSheet(f"color: {muted_color()}; font-size:11px;")
         lay.addWidget(tip)
         self._archive_list = QListWidget()
         self._archive_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -1580,8 +1580,8 @@ class AIChatDock(QDockWidget):
         del_btn = QPushButton("删 除")
         del_btn.clicked.connect(self._delete_selected)
         for b in (save_btn, restore_btn, del_btn):
-            b.setStyleSheet("QPushButton{background:#2b2f3a;color:#e8ecf2;border:1px solid #3a4150;"
-                            "border-radius:6px;padding:4px 8px;} QPushButton:hover{border-color:#5B8DEF;}")
+            b.setStyleSheet(f"QPushButton{{background:{current_color('btn_bg')};color:{text_color()};border:1px solid {current_color('btn_border')};"
+                            f"border-radius:6px;padding:4px 8px;}} QPushButton:hover{{border-color:{accent_color()};}}")
             btn_row.addWidget(b)
         lay.addLayout(btn_row)
         self._refresh_archive_list()
@@ -1679,7 +1679,7 @@ class AIChatDock(QDockWidget):
         for idx, e in enumerate(self._entries):
             kind = e[0]
             if kind == "system":
-                self.history.append(f'<p style="color:#888888;">{_esc(e[1])}</p>')
+                self.history.append(f'<p style="color:{muted_color()};">{_esc(e[1])}</p>')
             elif kind == "user":
                 self.history.append(f'<p><b>你:</b> {_esc(e[1])}</p>')
             elif kind == "ai":
@@ -1688,11 +1688,11 @@ class AIChatDock(QDockWidget):
                     if idx in self._expanded_ai:
                         self.history.append(
                             f'<p><b>AI:</b> {_esc(body)} '
-                            f'<a href="ai:{idx}" style="color:#5B8DEF;">[收起]</a></p>')
+                            f'<a href="ai:{idx}" style="color:{accent_color()};">[收起]</a></p>')
                     else:
                         self.history.append(
                             f'<p><b>AI:</b> {_esc(self._ai_summary(body))}… '
-                            f'<a href="ai:{idx}" style="color:#5B8DEF;">[展开]</a></p>')
+                            f'<a href="ai:{idx}" style="color:{accent_color()};">[展开]</a></p>')
                 else:
                     self.history.append(f'<p><b>AI:</b> {_esc(body)}</p>')
             elif kind == "tool":
@@ -1702,13 +1702,13 @@ class AIChatDock(QDockWidget):
                 full = (result or "").strip()
                 if tid in self._expanded_tools:
                     self.history.append(
-                        f'<p style="color:#888888;">🔧 工具 {name}({_esc(args_text)})'
+                        f'<p style="color:{muted_color()};">🔧 工具 {name}({_esc(args_text)})'
                         f'<br>&nbsp;&nbsp;→ {_esc(full)} '
                         f'<a href="tool:{tid}">[收起]</a></p>')
                 else:
                     preview = (full[:60].replace("\n", " ") + "…") if len(full) > 60 else full
                     self.history.append(
-                        f'<p style="color:#888888;">🔧 工具 {name}({_esc(args_text)})'
+                        f'<p style="color:{muted_color()};">🔧 工具 {name}({_esc(args_text)})'
                         f'<br>&nbsp;&nbsp;→ {_esc(preview)} '
                         f'<a href="tool:{tid}">[展开]</a></p>')
         self._update_ctx_ring()
@@ -1800,12 +1800,12 @@ class AIChatDock(QDockWidget):
             thumb.setPixmap(pix.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
                                        Qt.TransformationMode.SmoothTransformation))
             thumb.setFixedSize(42, 42)
-            thumb.setStyleSheet("border:1px solid #888; border-radius:3px;")
+            thumb.setStyleSheet(f"border:1px solid {current_color('btn_border')}; border-radius:3px;")
             thumb.setToolTip(os.path.basename(item["path"]))
             x = QPushButton("×")
             x.setFixedSize(16, 16)
-            x.setStyleSheet("QPushButton{background:#E53935;color:white;border:none;"
-                            "border-radius:8px;font-size:10px;font-weight:bold;}")
+            x.setStyleSheet(f"QPushButton{{background:{danger_color()};color:white;border:none;"
+                            f"border-radius:8px;font-size:10px;font-weight:bold;}}")
             x.setToolTip("移除这张图片")
             x.clicked.connect(lambda _c, idx=i: self._remove_image(idx))
             hl.addWidget(thumb)
@@ -2085,11 +2085,11 @@ class AIChatDock(QDockWidget):
         self.local_status_label.setVisible(True)
         self.local_status_label.setText(text)
         if "中" in text:          # 预热中/下载中/推理中 → 进行中
-            color = "#B26A00"      # 进行中:橙
+            color = warning_color()      # 进行中:橙
         elif "已就绪" in text:
-            color = "#2E7D32"      # 就绪:绿
+            color = success_color()      # 就绪:绿
         else:
-            color = "#8a8f98"
+            color = muted_color()
         self.local_status_label.setStyleSheet(f"color: {color}; background: transparent;")
 
     def update_local_status(self):

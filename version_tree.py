@@ -9,6 +9,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
 
+from ui_style import muted_color
+
 # 黄金版本:模组生态最活跃的经典版本(灵感 #1,静态列表版)。
 # 经典版本几乎不再变动,没必要实时统计;以后想加版本直接往这里添一行。
 GOLDEN_VERSIONS = {
@@ -94,7 +96,7 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
         item = QTreeWidgetItem([f"{v['id']}  ({v['type']}){star}",
                                 v.get("releaseTime", "")[:7]])
         item.setData(0, Qt.ItemDataRole.UserRole, v)
-        item.setForeground(1, QColor("#999999"))  # 灰色年月
+        item.setForeground(1, QColor(muted_color()))  # 灰色年月(次要色)
         item.setTextAlignment(1, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         parent.addChild(item)
         return item

@@ -7,6 +7,8 @@ MCP Server 插件(默认关闭):把启动器工具暴露给外部 AI 宿主(MCP 
 """
 import threading
 
+from ui_style import muted_color
+
 PLUGIN_ID = "mcp_server"
 PLUGIN_NAME = "MCP Server"
 PLUGIN_DESCRIPTION = "把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等),让外部 AI 能调用启动器能力。默认关闭,按需拉起到本地端口。"
@@ -74,7 +76,7 @@ def register(api):
         desc = QLabel("把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等),让外部 AI 能调用启动器能力。\n"
                       "客户端用「http」选项填下面的地址即可连本启动器;走后端 127.0.0.1 端口,不放公网。\n"
                       "默认关闭:不用时不占端口;按需启动。")
-        desc.setWordWrap(True); desc.setStyleSheet("color:#8a93a0; font-size:11px;")
+        desc.setWordWrap(True); desc.setStyleSheet(f"color: {muted_color()}; font-size:11px;")
         lay.addWidget(desc)
 
         # 端口
@@ -98,7 +100,7 @@ def register(api):
         url_edit.setPlaceholderText("连接地址(启动后显示)")
         lay.addWidget(url_edit)
         status_lbl = QLabel("状态: 未运行")
-        status_lbl.setWordWrap(True); status_lbl.setStyleSheet("color:#8a93a0;")
+        status_lbl.setWordWrap(True); status_lbl.setStyleSheet(f"color: {muted_color()};")
         lay.addWidget(status_lbl)
 
         def refresh():
@@ -126,10 +128,10 @@ def register(api):
 
         # ---- MCP 客户端(启动器 AI 去调用的外部 MCP 服务器)----
         c_title = QLabel("🔌 MCP 客户端(启动器 AI 去调用的外部服务器):")
-        c_title.setStyleSheet("font-weight:bold; color:#8a93a0;")
+        c_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
         lay.addWidget(c_title)
         c_hint = QLabel("每条用 ; 分隔;HTTP 写 url,本地 stdio 写 名字>=命令(如 mcwiki>=uvx mc-wiki-mcp)。")
-        c_hint.setWordWrap(True); c_hint.setStyleSheet("color:#8a93a0; font-size:11px;")
+        c_hint.setWordWrap(True); c_hint.setStyleSheet(f"color: {muted_color()}; font-size:11px;")
         lay.addWidget(c_hint)
         mcp_clients_edit = QLineEdit()
         mcp_clients_edit.setPlaceholderText(

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import t
-from ui_style import card_btn_style, launch_btn_style, muted_color, panel_style, set_style
+from ui_style import card_btn_style, launch_btn_style, muted_color, panel_style, set_style, danger_color
 
 
 def _open_url(url: str):
@@ -327,7 +327,7 @@ class RecommendWizard(QWidget):
         self.q_prompt.setStyleSheet("font-weight: bold; font-size: 15px;")
         self.q_hint = QLabel()
         self.q_hint.setWordWrap(True)
-        self.q_hint.setStyleSheet("color: #666666;")
+        self.q_hint.setStyleSheet(f"color: {muted_color()};")
         lay.addWidget(self.q_prompt)
         lay.addWidget(self.q_hint)
         lay.addSpacing(8)
@@ -360,10 +360,10 @@ class RecommendWizard(QWidget):
         self.res_title.setStyleSheet("font-weight: bold; font-size: 17px;")
         self.res_desc = QLabel()
         self.res_desc.setWordWrap(True)
-        self.res_desc.setStyleSheet("color: #444444;")
+        self.res_desc.setStyleSheet(f"color: {muted_color()};")
         self.res_genuine = QLabel()
         self.res_genuine.setWordWrap(True)
-        self.res_genuine.setStyleSheet("color: #b23b3b; font-weight: bold;")
+        self.res_genuine.setStyleSheet(f"color: {danger_color()}; font-weight: bold;")
         self.res_genuine.setVisible(False)
         lay.addWidget(self.res_title)
         lay.addWidget(self.res_desc)
@@ -387,7 +387,7 @@ class RecommendWizard(QWidget):
         et.setContentsMargins(0, 8, 0, 8)
         self.et_status = QLabel()
         self.et_status.setWordWrap(True)
-        self.et_status.setStyleSheet("color: #666666;")
+        self.et_status.setStyleSheet(f"color: {muted_color()};")
         self.et_gen = QPushButton(t("GENERATE_ROOM_SHARE"))
         self.et_gen.clicked.connect(self._easytier_gen)
         et.addWidget(self.et_status)
@@ -521,7 +521,7 @@ def build_tutorials_tab() -> QWidget:
     box = QWidget()
     lay = QVBoxLayout(box)
     head = QLabel("—— 教程与资料 ——\n非 CLI 方案(需正版 / 官方)为重点;各方案要点见下。")
-    head.setStyleSheet("font-weight: bold; color: #555555;")
+    head.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
     head.setWordWrap(True)
     lay.addWidget(head)
     for tut in TUTORIALS:
@@ -531,7 +531,7 @@ def build_tutorials_tab() -> QWidget:
         lay.addWidget(name)
         body = QLabel(tut["text"])
         body.setWordWrap(True)
-        body.setStyleSheet("color: #666666;")
+        body.setStyleSheet(f"color: {muted_color()};")
         lay.addWidget(body)
         open_btn = QPushButton(t("OPEN_OFFICIAL_TUTORIAL"))
         open_btn.setFixedWidth(140)
@@ -543,7 +543,7 @@ def build_tutorials_tab() -> QWidget:
         lay.addSpacing(10)
     note = QLabel(_TUTORIAL_NOTE)
     note.setWordWrap(True)
-    note.setStyleSheet("color: #777777;")
+    note.setStyleSheet(f"color: {muted_color()};")
     lay.addWidget(note)
     lay.addStretch()
     scroll.setWidget(box)
@@ -643,7 +643,7 @@ class OnlineCenter(QWidget):
         v.setContentsMargins(8, 8, 8, 8)
         v.setSpacing(10)
         head = QLabel(f"—— {title} ——")
-        head.setStyleSheet("font-weight: bold; color: #555555;")
+        head.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
         v.addWidget(head)
         for name, desc, url in items:
             v.addWidget(self._card(name, desc, url))

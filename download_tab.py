@@ -36,7 +36,7 @@ from instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from i18n import t
 from loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions
 from modrinth import list_mod_versions
-from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style, set_style
+from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style, set_style, danger_color
 from version_tree import fill_version_tree
 
 
@@ -116,7 +116,7 @@ class DownloadTab(QWidget):
         """点"开始下载实例":没选版本时给出明确提示(先选版本,再选加载器)"""
         if not self.mc:
             self.status_label.setText("⚠️ 请先到「游戏版本」选择一个版本(如 1.21.1)")
-            self.status_label.setStyleSheet("color: #E53935;")
+            self.status_label.setStyleSheet(f"color: {danger_color()};")
             self.menu.setCurrentRow(0)
             return
         self.status_label.setStyleSheet(hint_style())
