@@ -103,13 +103,58 @@ class LoginCard(QWidget):
 
     changed = Signal()          # 昵称/登录方式变化 → 让启动器重读设置
     open_settings_requested = Signal()
+    _avatar_ready = Signal(bytes)   # 后台线程拉到头像后,把字节送回主线程(queued 到 GUI 线程)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._avatar_size = _AVATAR_BASE   # 当前头像尺寸(随窗口自适应)
         self._name = ""
+        self._avatar_ready.connect(self._apply_avatar_bytes)
         self._build_ui()
         self.refresh()
+
+    def _build_login_menu(self):
+        """按当前设置动态构建登录菜单(每次打开前重建,保证状态与菜单一致)。"""
+        menu = self.login_btn.menu()
+        menu.clear()
+        s = load_settings()
+        cur_method = s.get("login_method", LOGIN_OFFLINE)
+        force_online = s.get("microsoft_login", True)        # 强制正版(默认 true)
+        has_creds = bool((s.get("ms_credentials") or {}).get("uuid"))
+        # 是否允许离线昵称:
+        #  - 强制正版且【无正版凭证】:完全禁止离线,必须先登录正版
+        #  - 正版玩家(有凭证)或非强制:都可自由切离线昵称(凭证保留)
+        allow_offline = (not force_online) or has_creds
+
+        if not allow_offline:
+            act = menu.addAction(("✓ " if cur_method == LOGIN_MICROSOFT else "") + "微软正版登录")
+            act.setToolTip("强制正版(microsoft_login=true)且本机无正版账号,请先登录正版。"
+                           "想纯离线请把开关改为 false。")
+            if cur_method != LOGIN_MICROSOFT:
+                act.triggered.connect(self._do_microsoft_login)
+        else:
+            # 正版/离线昵称 切换(正版玩家可自由选离线昵称,凭证保留)
+            if cur_method == LOGIN_MICROSOFT:
+                menu.addAction("✓ 正版身份(Microsoft)", lambda: None)
+                menu.addAction("以离线昵称游玩(保留正版凭证)", self._play_offline_keep_creds)
+            else:
+                menu.addAction("切换回正版(Microsoft,免重登)", self._use_microsoft_account)
+                menu.addAction("✓ 离线昵称(保留正版凭证)", lambda: None)
+        menu.addSeparator()
+
+        # 二级操作
+        if allow_offline:
+            menu.addAction("🌐 换皮肤 / 我的账号", self._open_minecraft_account)
+            menu.addAction("✏️ 设置离线昵称…", self._change_offline_name)
+            menu.addAction("退出登录并清除凭证", self._logout_microsoft)
+            menu.addSeparator()
+        for _key, label, tip in _PLANNED_LOGIN:
+            act = menu.addAction(label)
+            act.setEnabled(False)
+            act.setToolTip(tip)
+        menu.addSeparator()
+        menu.addAction(t("VERSION_HOME_OPEN_LAUNCHER_SETTINGS"),
+                       lambda: self.open_settings_requested.emit())
 
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -139,47 +184,10 @@ class LoginCard(QWidget):
             f" padding: 2px 6px; border-radius: 6px; }}"
             f"QToolButton:hover {{ background: {hover_bg()}; }}")
         menu = QMenu(self.login_btn)
-        s = load_settings()
-        cur_method = s.get("login_method", LOGIN_OFFLINE)
-        force_online = s.get("microsoft_login", True)        # 强制正版(默认 true)
-        has_creds = bool((s.get("ms_credentials") or {}).get("uuid"))
-        # 是否允许离线昵称:
-        #  - 强制正版且【无正版凭证】:完全禁止离线,必须先登录正版
-        #  - 正版玩家(有凭证)或非强制:都可自由切离线昵称(凭证保留)
-        allow_offline = (not force_online) or has_creds
-
-        if not allow_offline:
-            # 强制正版 + 无凭证:只能先登录正版
-            act = menu.addAction(("✓ " if cur_method == LOGIN_MICROSOFT else "") + "微软正版登录")
-            act.setToolTip("强制正版(microsoft_login=true)且本机无正版账号,请先登录正版。"
-                           "想纯离线请把开关改为 false。")
-            if cur_method != LOGIN_MICROSOFT:
-                act.triggered.connect(self._do_microsoft_login)
-        else:
-            # 正版/离线昵称 切换(正版玩家可自由选离线昵称,凭证保留)
-            if cur_method == LOGIN_MICROSOFT:
-                menu.addAction("✓ 正版身份(Microsoft)", lambda: None)
-                menu.addAction("以离线昵称游玩(保留正版凭证)", self._play_offline_keep_creds)
-            else:
-                menu.addAction("切换回正版(Microsoft,免重登)", self._use_microsoft_account)
-                menu.addAction("✓ 离线昵称(保留正版凭证)", lambda: None)
-        menu.addSeparator()
-
-        # 二级操作
-        if allow_offline:
-            menu.addAction("🌐 换皮肤 / 我的账号", self._open_minecraft_account)
-            menu.addAction("✏️ 设置离线昵称…", self._change_offline_name)
-            menu.addAction("退出登录并清除凭证", self._logout_microsoft)
-            menu.addSeparator()
-        for _key, label, tip in _PLANNED_LOGIN:
-            act = menu.addAction(label)
-            act.setEnabled(False)
-            act.setToolTip(tip)
         self.login_btn.setMenu(menu)
-        # 登录方式入口也提供「启动器设置…」二级入口,方便直接改内存/目录等
-        menu.addSeparator()
-        menu.addAction(t("VERSION_HOME_OPEN_LAUNCHER_SETTINGS"),
-                       lambda: self.open_settings_requested.emit())
+        # 每次打开菜单前按当前状态重建,保证状态与菜单一致(切离线/正版后能正确反映)。
+        menu.aboutToShow.connect(self._build_login_menu)
+        self._build_login_menu()
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 14, 12, 12)
@@ -267,21 +275,26 @@ class LoginCard(QWidget):
                 from microsoft_auth import download_player_avatar
                 data = download_player_avatar(uuid_str, size)
                 if data:
-                    from PySide6.QtGui import Qt as _Qt, QPixmap as _QPixmap
-                    from PySide6.QtCore import QByteArray as _QBA
-                    pm = _QPixmap()
-                    if pm.loadFromData(_QBA(data)):
-                        from PySide6.QtCore import QTimer
-                        QTimer.singleShot(0, lambda p=pm: self._apply_avatar_pixmap(p))
+                    # 用 Signal 把字节送回主线程(Qt 自动 queued 到 GUI 线程);
+                    # 不要在此线程直接建 QPixmap,会在 GUI 线程外失效。
+                    self._avatar_ready.emit(data)
             except Exception:
                 pass
         threading.Thread(target=worker, daemon=True).start()
 
-    def _apply_avatar_pixmap(self, pm):
-        if pm is not None and not pm.isNull():
-            self.avatar_label.setPixmap(pm.scaled(self._avatar_size, self._avatar_size,
-                                                  Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                                  Qt.TransformationMode.SmoothTransformation))
+    def _apply_avatar_bytes(self, data: bytes):
+        """主线程根据字节构建/缩放 QPixmap 并设置到头像。"""
+        try:
+            from PySide6.QtGui import QPixmap as _QPixmap
+            from PySide6.QtCore import QByteArray as _QBA
+            pm = _QPixmap()
+            if pm.loadFromData(_QBA(data)) and not pm.isNull():
+                self.avatar_label.setPixmap(
+                    pm.scaled(self._avatar_size, self._avatar_size,
+                              Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                              Qt.TransformationMode.SmoothTransformation))
+        except Exception:
+            pass
 
     def _change_offline_name(self):
         """修改离线昵称(前端可自洽:写到 config.json 并通知启动器)。"""
