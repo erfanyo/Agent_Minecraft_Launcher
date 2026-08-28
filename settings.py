@@ -28,7 +28,7 @@ DEFAULTS = {
                                  # 正版登录后这里变成 microsoft,启动游戏用正版凭证。
     "ms_credentials": {},        # 微软正版凭证(登录成功后存 refresh_token/username/uuid/access_token 摘要)。
                                  # 敏感,只存本机;不随包分享。
-    "ms_client_id": "",          # 微软 OAuth client_id(你自己的 Microsoft Entra 应用 id)。
+    "ms_client_id": "",          # 微软 OAuth client_id(可选覆盖;留空=用官方白名单 id 00000000441cc96b)。
                                  # 微软已收回 Mojang 公开 id,自注册应用后填这里即可正版登录;敏感,只存本机。
     "tutorial_auto": True,       # 新手教程自动播放:首次启动引导里选「新手」时自动进教程;选「老手」不进。
                                  # 之后任何时刻都能在 设置→界面→重播引导教程 重播。

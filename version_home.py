@@ -171,9 +171,6 @@ class LoginCard(QWidget):
             menu.addAction("✏️ 设置离线昵称…", self._change_offline_name)
             menu.addAction("退出登录并清除凭证", self._logout_microsoft)
             menu.addSeparator()
-        # 配置微软 client_id(自注册 Entra 应用;微软已收回 Mojang 公开 id)
-        menu.addAction("配置微软登录 client_id…", self._set_ms_client_id)
-        menu.addSeparator()
         for _key, label, tip in _PLANNED_LOGIN:
             act = menu.addAction(label)
             act.setEnabled(False)
@@ -301,22 +298,6 @@ class LoginCard(QWidget):
         save_settings(settings)
         self.refresh()
         self.changed.emit()
-
-    def _set_ms_client_id(self):
-        """配置微软登录 client_id(自注册 Entra 应用;存 config.json,已 gitignore)。"""
-        cur = load_settings().get("ms_client_id", "") or ""
-        new, ok = QInputDialog.getText(
-            self, "配置微软登录 client_id",
-            "填你的 Microsoft Entra 应用(客户端)ID。\n"
-            "微软已收回 Mojang 公开 id,自注册应用后填这里即可正版登录。\n"
-            "留空=使用占位(可能报 AADSTS700016):",
-            text=cur)
-        if not ok:
-            return
-        settings = load_settings()
-        settings["ms_client_id"] = new.strip()
-        save_settings(settings)
-        self.refresh()
 
     # ---- 微软正版登录 ----
     def _do_microsoft_login(self):
