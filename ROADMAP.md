@@ -136,3 +136,38 @@
     产物附 release:`AgentMinecraftLauncher.exe` + `.sig` + `erfanyo.asc`。
   - 前提:gpg bin 已在用户 PATH;密钥 erfanyo(ed25519,无口令)已生成,指纹
     `D2D1 0D7F 7FC3 E2AF FA76  88E9 1A89 9932 9DC6 5331`。
+- [ ] **插件 ed25519 签名:生成私钥→填公钥→重签官方插件** — 2026-08-28(需作者持私钥,我无法代做)
+  - plugin_sign.py 已就位(阶段3),但 `PLUGIN_PUBKEY` 还是占位空串;需作者:
+    ① 装 cryptography,跑 `python -c "import plugin_sign as ps; print(ps.generate_keypair())"`
+    生成 ed25519 私钥/公钥;② 公钥 base64 填入 `plugin_sign.py` 的 `PLUGIN_PUBKEY`;
+    ③ 用 `sign_plugin(code, 私钥)` 给官方插件(hello/lan_bridge/mcp_server/performance_monitor)
+    生成 `PLUGIN_SIGNATURE` 填入插件文件 → 启动器验签通过标 `official`。
+  - 私钥**只存本地**(见 `私钥维护.md`,已 .gitignore);AI 生成/第三方插件无签名=标 `unsigned`。
+  - 验证:验签通过=official;未装 cryptography 降级=unsigned(安全默认)。
+- [ ] **GUI 前端更新(规划已定,暂缓推进)** — 2026-08-28(讨论后用户决定先不改)
+  - 现状:QWidget + QSS(ui_style.py 437行主题系统),已有 2 处透明背景,无真模糊。
+  - 规划结论(按 ROI):
+    * **不引入 QML**——现全 QWidget,QML 是另一套 UI 体系,迁移成本高、维护税大;
+      动画用 QWidget 属性动画(QPropertyAnimation)+ QSS 过渡即可覆盖淡入/卡片滑动/下载环。
+    * **阶段A(推荐,低风险)**:自定义背景(图片/渐变/纯色,存 settings)+ 深浅色主题联动 +
+      轻量动画(窗口淡入/页面切换/下载环)。纯 QSS/QPainter,跨平台稳。
+    * **阶段B(可选,Win11增强)**:Win11 Mica/Acrylic 毛玻璃(仅 Windows,用系统 API,
+      mac/Linux 降级纯色);需 os_platform 加系统效果适配。
+    * **阶段C(慎入)**:若真要 QML,只对「AI 对话面板」做演示(高动画需求最前沿),其余维持 QWidget
+      ——渐进式,不全量迁移。
+  - 关键认知:Qt 无跨平台内置模糊;"真模糊"仅 Win11 API 可行,跨平台统一模糊不现实。
+    窗口半透明(WA_TranslucentBackground)低成本可行,但别同一窗口既透明又模糊。
+- [ ] **跨平台 GUI 提升(明确限定 win/linux/mac 一致)** — 2026-08-28
+  - **前提修正**:必须三者跨平台一致 → **放弃平台专属"真模糊"**(Mica/Acrylic/vibrancy 只有单一平台,
+    无法统一)。跨平台唯一边界内的"毛玻璃感" = **背景图高斯模糊后作背垫**(QPainter 全平台可实现)+
+    半透明卡片,不是真 GL blur。
+  - **阶段A(最优先,全平台QSS/QPainter)**:① 主题细化(背景/卡片/按钮/选中态/菜单/滚动条一套精致深色)+
+    ② 自定义背景图(设置→界面,纯色/渐变/图片)+ 深浅色自适应(图片上覆深色蒙层保文字可读)+
+    ③ 伪毛玻璃感(背景模糊后+半透明卡片)。
+  - **阶段B**:动画体系(全部 QPropertyAnimation+QEasingCurve,不引 QML):窗口淡入淡出扩展到所有
+    Dialog / 页面切换过渡 / 卡片悬停压力反馈 / 列表项滑入 / 下载环平滑。
+  - **阶段C(小/低风险)**:HiDPI 适配(devicePixelRatio 下图标/圆角清晰)+ 字体回退链
+    (Win 雅黑/mac PingFang/Linux Noto Sans 统一,避免跨平台字体差异致布局崩)。
+  - **不做**:真毛玻璃(平台专属,不满足跨平台)/ QML(另一套体系,混用痛苦)/ 复杂粒子动画(过度)。
+  - **性能约束(面向 mac+Intel Wildcat Lake 等弱核显入门设备)**:伪模糊用 CPU 合成(弱GPU也能跑),
+    动画用简单属性插值(弱设备不卡),别用需强 GPU 的实时 blur/粒子。
