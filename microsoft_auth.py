@@ -22,10 +22,10 @@ import time
 import urllib.parse
 import urllib.request
 
-# 微软 OAuth client_id:优先从配置(settings["ms_client_id"])读——这是【你自己的】
-# Microsoft Entra 应用 id,不写死源码、随 config.json(已 gitignore)走。
-# 未配置时回退 Mojang 旧公开 id(可能已被微软收回,导致 AADSTS700016;配了自定义即修复)。
-_DEFAULT_CLIENT_ID = "00000000402b5328"
+# 微软 OAuth client_id:默认用【作者自注册的 Entra 应用 id】(硬编码默认值)。
+# 注意:client_id 是公开的应用标识,不是密钥,可随源码/分发;真正需保密的是 client_secret/私钥。
+# 仍保留 settings["ms_client_id"] 配置覆盖(可换应用/给不同部署者,不改代码)。
+_DEFAULT_CLIENT_ID = "4d1fdde2-8e5a-4cea-a93e-efff4e69b280"
 
 
 def get_client_id() -> str:
