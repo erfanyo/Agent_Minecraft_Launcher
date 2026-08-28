@@ -22,8 +22,24 @@ import time
 import urllib.parse
 import urllib.request
 
-# 公开的 Mojang / iris client id(第三方启动器通用)
-_CLIENT_ID = "00000000402b5328"
+# 微软 OAuth client_id:优先从配置(settings["ms_client_id"])读——这是【你自己的】
+# Microsoft Entra 应用 id,不写死源码、随 config.json(已 gitignore)走。
+# 未配置时回退 Mojang 旧公开 id(可能已被微软收回,导致 AADSTS700016;配了自定义即修复)。
+_DEFAULT_CLIENT_ID = "00000000402b5328"
+
+
+def get_client_id() -> str:
+    """返回当前生效的微软 OAuth client_id:settings['ms_client_id'] 优先,否则默认。"""
+    try:
+        from settings import load_settings
+        v = (load_settings().get("ms_client_id") or "").strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    return _DEFAULT_CLIENT_ID
+
+
 _SCOPE = "service::user.auth.xboxlive.com::MSCS"
 # 微软 OAuth 端点
 _DEVICE_CODE_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode"
@@ -90,7 +106,7 @@ class MsAuth:
     def start_device_code(self) -> dict:
         """启动设备码流,返回 {user_code, verification_uri, interval, message}。"""
         data = {
-            "client_id": _CLIENT_ID,
+            "client_id": get_client_id(),
             "scope": _SCOPE,
         }
         r = _post_json(_DEVICE_CODE_URL, data)
@@ -113,7 +129,7 @@ class MsAuth:
         while time.time() < deadline:
             try:
                 r = _post_json(_TOKEN_URL, {
-                    "client_id": _CLIENT_ID,
+                    "client_id": get_client_id(),
                     "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                     "device_code": self._device_code,
                 })
