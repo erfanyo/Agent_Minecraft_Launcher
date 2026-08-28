@@ -162,8 +162,6 @@ class SettingsCenter(QWidget):
 
     # ================= 游戏 =================
     def _build_game(self) -> QWidget:
-        self.username_edit = QLineEdit(self.settings.get("username", "Player"))
-        self.username_edit.setPlaceholderText("离线模式显示的游戏名")
         self.memory_spin = QSpinBox()
         self.memory_spin.setRange(1, 16)
         self.memory_spin.setSuffix(" GB")
@@ -178,7 +176,6 @@ class SettingsCenter(QWidget):
         dir_row.addWidget(browse_btn); dir_row.addWidget(default_btn)
 
         form = QFormLayout()
-        form.addRow("游戏名:", self.username_edit)
         form.addRow("内存:", self.memory_spin)
         form.addRow("版本隔离:", self.isolation_check)
         form.addRow("游戏目录:", dir_row)
@@ -834,7 +831,6 @@ class SettingsCenter(QWidget):
 
     # ================= 保存 =================
     def apply(self):
-        self.settings["username"] = self.username_edit.text().strip() or "Player"
         self.settings["memory_gb"] = self.memory_spin.value()
         self.settings["version_isolation"] = self.isolation_check.isChecked()
         self.settings["game_dir"] = self.game_dir_edit.text().strip()

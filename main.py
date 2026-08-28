@@ -1182,10 +1182,20 @@ class MainWindow(QMainWindow):
                     "本机还没有正版账号,请先完成微软正版登录才能启动游戏。\n\n"
                     "若想完全跳过正版、纯离线使用,请把 config.json 的 microsoft_login 改为 false。")
                 return
+            # 实例级内存覆盖:读本实例 launch_options.json(memory_gb>0 则覆盖全局;0/缺失=用全局)
+            inst_mem = 0
+            try:
+                lop = os.path.join(paths.GAME_DIR, "versions", v["id"], "launch_options.json")
+                if os.path.isfile(lop):
+                    with open(lop, encoding="utf-8") as f:
+                        inst_mem = int(json.load(f).get("memory_gb") or 0)
+            except Exception:
+                inst_mem = 0
+            mem_gb = inst_mem if inst_mem > 0 else self.settings.get("memory_gb", 4)
             cmd = build_launch_command(
                 d, game_dir, java_exe,
                 username=username_load,
-                memory_gb=self.settings.get("memory_gb", 4),
+                memory_gb=mem_gb,
                 assets_dir=os.path.join(paths.GAME_DIR, "assets"),
                 install_dir=paths.GAME_DIR,
                 auth=auth,

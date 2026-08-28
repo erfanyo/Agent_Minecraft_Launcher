@@ -192,7 +192,7 @@ class InstanceManagerDialog(QWidget):
         opts = self._load_launch_options()
 
         self.inst_memory_spin = QSpinBox()
-        self.inst_memory_spin.setRange(1, 64)
+        self.inst_memory_spin.setRange(0, 64)      # 0 = 跟随全局
         # 本实例覆盖全局内存:0 = 用全局设置(默认);>0 = 本实例专用
         self.inst_memory_spin.setValue(int(opts.get("memory_gb") or 0))
         mem_hint = QLabel("0 = 跟随全局设置(设置→游戏→内存);>0 = 本实例专用内存(整合包/光影建议 ≥6G)")

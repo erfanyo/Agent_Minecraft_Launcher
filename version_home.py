@@ -153,8 +153,6 @@ class LoginCard(QWidget):
             act.setEnabled(False)
             act.setToolTip(tip)
         menu.addSeparator()
-        menu.addAction(t("VERSION_HOME_OPEN_LAUNCHER_SETTINGS"),
-                       lambda: self.open_settings_requested.emit())
 
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
