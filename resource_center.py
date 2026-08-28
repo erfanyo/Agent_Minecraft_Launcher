@@ -343,6 +343,11 @@ class ResourceBrowser(QWidget):
         self.gv_combo.currentIndexChanged.connect(self._refresh_versions)
         self.loader_combo.currentIndexChanged.connect(self._refresh_versions)
 
+        # 版本/加载器/mod版本 + 下载,改放【底部向上展开的折叠条】(bottom_bar),不占右侧窄条。
+        # 右侧 panel 只留描述/作者/百科链接 → Mod 列表更宽、能多展示。
+        # 注: self.gv_combo 等属性名保留(现有 _download/_refresh_versions/_load_project 引用不变),
+        #     只改放到哪。
+
         p = QVBoxLayout(self.panel)
         p.setContentsMargins(14, 14, 14, 14)
         p.setSpacing(8)
@@ -351,22 +356,13 @@ class ResourceBrowser(QWidget):
         p.addWidget(self.desc_label)
         p.addWidget(self.desc_note_label)
         p.addWidget(self.mcmod_link)
-        for _lbl, combo in [(t("游戏版本:", "Game version:"), self.gv_combo),
-                            (t("加载器:", "Loader:"), self.loader_combo),
-                            (t("版本:", "Version:"), self.ver_combo)]:
-            row = QHBoxLayout()
-            row.addWidget(QLabel(_lbl))
-            row.addWidget(combo, 1)
-            p.addLayout(row)
-        p.addWidget(self.dl_btn)
-        self.empty_label = QLabel(t("← 在左侧选择一个项目\n展开它的版本 / 加载器选项",
+        self.empty_label = QLabel(t("← 在左侧选择一个项目",
                                     "← Select a project on the left"))
         self.empty_label.setStyleSheet(hint_style())
         self.empty_label.setWordWrap(True)
         p.addWidget(self.empty_label)
         p.addStretch()
-        for w in (self.title_label, self.meta_label, self.desc_label,
-                  self.gv_combo, self.loader_combo, self.ver_combo, self.dl_btn):
+        for w in (self.title_label, self.meta_label, self.desc_label):
             w.setVisible(False)
         self.split = QSplitter(Qt.Orientation.Horizontal)
         self.split.addWidget(self.result_list)
@@ -375,7 +371,7 @@ class ResourceBrowser(QWidget):
         panel_scroll.setWidget(self.panel)
         self.split.addWidget(panel_scroll)
         self.split.setChildrenCollapsible(False)
-        self.split.setSizes([380, 320])
+        self.split.setSizes([440, 280])   # 列表更宽,右窄条更窄
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -407,8 +403,57 @@ class ResourceBrowser(QWidget):
         layout.addLayout(self._row(self.search_edit, search_btn))
         layout.addWidget(self.split, 1)
 
+        # ---- 底部向上展开的折叠条:版本 + 目标实例 + 下载(最后一步设参数→下载) ----
+        self._build_bottom_bar()
+        layout.addWidget(self.bottom_bar)
+
         # 切换排序时,若处于默认浏览(空关键词)则重新拉取
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+
+    def _build_bottom_bar(self):
+        """底部折叠条(默认收起,点击向上展开):
+        展开后显示 [游戏版本] [加载器] [mod版本] [下载到] [下载]。
+        版本参数跟当前选中的 Mod 走(复用 _load_project/_refresh_versions)。"""
+        self.bottom_bar = QWidget()
+        self.bottom_bar.setStyleSheet("QWidget { background: transparent; }")
+        bl = QVBoxLayout(self.bottom_bar)
+        bl.setContentsMargins(8, 0, 8, 6)
+        bl.setSpacing(4)
+        # 折叠开关(收起时只显示这条)
+        self.bottom_toggle = QPushButton(t("▸ 版本与下载", "▸ Version & Download"))
+        self.bottom_toggle.setCheckable(True)
+        self.bottom_toggle.setChecked(False)
+        self.bottom_toggle.setToolTip(t("展开后可手动指定 游戏版本/加载器/mod版本,并选择下载到哪个实例",
+                                        "Expand to pick game/loader/mod version and target instance"))
+        set_style(self.bottom_toggle, card_btn_style)
+        self.bottom_toggle.clicked.connect(self._toggle_bottom_bar)
+        bl.addWidget(self.bottom_toggle)
+        # 展开内容(隐藏,点开关显示)
+        self.bottom_content = QWidget()
+        self.bottom_content.setVisible(False)
+        bc = QHBoxLayout(self.bottom_content)
+        bc.setContentsMargins(4, 4, 4, 0)
+        bc.setSpacing(6)
+        for lbl, combo in [(t("游戏版本", "Game"), self.gv_combo),
+                           (t("加载器", "Loader"), self.loader_combo),
+                           (t("版本", "Mod ver"), self.ver_combo)]:
+            bc.addWidget(QLabel(lbl))
+            bc.addWidget(combo, 1)
+        bc.addSpacing(8)
+        # 目标实例(简版:读全局共享 goal;点开选择用现有 inst_cards_toggle 逻辑)
+        self.target_lbl = QLabel(t("下载到: 未选择", "Download to: none"))
+        set_style(self.target_lbl, card_btn_style)
+        self.target_lbl.setVisible(False)   # 目标选择占位,交互后续联动 inst_cards
+        bc.addWidget(self.target_lbl)
+        bc.addStretch()
+        bc.addWidget(self.dl_btn)
+        bl.addWidget(self.bottom_content)
+
+    def _toggle_bottom_bar(self):
+        self.bottom_content.setVisible(self.bottom_toggle.isChecked())
+        self.bottom_toggle.setText(
+            ("▸ " if not self.bottom_toggle.isChecked() else "▾ ")
+            + t("版本与下载", "Version & Download"))
 
     def _row(self, *widgets):
         r = QHBoxLayout()
@@ -1019,6 +1064,7 @@ class ResourceCenter(QWidget):
                 (t("光影包", "Shaders"), "shader"),
                 (t("数据包", "Datapacks"), "datapack"),
                 (t("资源包", "Resourcepacks"), "resourcepack"),
+                (t("收藏夹", "Favorites"), "favorite"),
                 (t("启动器插件", "Plugins"), "utility")]:
             self.menu.add_item(label, icon)
         self.menu.itemClicked.connect(self.switch_to)
@@ -1057,8 +1103,11 @@ class ResourceCenter(QWidget):
             self.browsers[ptype] = br
             self.stack.addWidget(br)                        # 3..6
 
+        # 收藏夹:占位(收藏/批量下载/AI平替逻辑下一步做,先给入口)
+        self.stack.addWidget(self._build_favorites_placeholder())   # 7
+
         # 启动器插件:占位页(插件生态建设中,先给入口)
-        self.stack.addWidget(self._build_plugins_placeholder())   # 7
+        self.stack.addWidget(self._build_plugins_placeholder())   # 8
 
         # ---- 布局 ----
         layout = QHBoxLayout(self)
@@ -1139,6 +1188,24 @@ class ResourceCenter(QWidget):
             self._guide_labels.append(l)
         layout.addStretch()
         return home
+
+    def _build_favorites_placeholder(self) -> QWidget:
+        """收藏夹(占位):后续实现「收藏/批量下载/版本检查/AI 找平替」。先给入口 + 说明。"""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(8)
+        title = QLabel("⭐ 收藏夹")
+        title.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {text_color()};")
+        outer.addWidget(title)
+        note = QLabel("这里汇聚你在各资源页收藏的 Mod(可收藏指定版本)。\n"
+                      "后续支持:批量下载到目标实例、不兼容提示、用 AI 找功能类似的平替。\n\n"
+                      "(当前为占位页,收藏/下载功能开发中。)")
+        note.setWordWrap(True)
+        note.setStyleSheet(hint_style())
+        outer.addWidget(note)
+        outer.addStretch()
+        return page
 
     def _build_plugins_placeholder(self) -> QWidget:
         """启动器插件商店:手动注册仓库源 → 列出仓库里的插件 → 一键安装单文件。
