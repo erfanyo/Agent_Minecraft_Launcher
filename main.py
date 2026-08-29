@@ -1592,14 +1592,34 @@ class MainWindow(QMainWindow):
                          and not os.path.isdir(os.path.join(self.game_dir_for(i["id"]), "saves")))]
 
         # 1) 我的版本列表(带封面)
-        self.instance_list.clear()
-        for inst in shown:
-            item = QListWidgetItem(inst["label"])
-            item.setData(Qt.ItemDataRole.UserRole, inst)
-            icon = self._instance_icon(inst["id"])
-            if icon:
-                item.setIcon(icon)
-            self.instance_list.addItem(item)
+        # 保留当前选中:versions/ 目录变动会触发防抖自动刷新(500ms),clear() 会把当前项
+        # 清成 None → currentItemChanged(None) → 详情页被"自动取消"。这里 blockSignals
+        # 重建列表、按 id 复原选中,最后统一同步一次 UI(恢复选中 / 实例真的没了→None)。
+        _cur_item = self.instance_list.currentItem()
+        _cur_id = (_cur_item.data(Qt.ItemDataRole.UserRole) or {}).get("id") if _cur_item else None
+        self.instance_list.blockSignals(True)
+        try:
+            self.instance_list.clear()
+            for inst in shown:
+                item = QListWidgetItem(inst["label"])
+                item.setData(Qt.ItemDataRole.UserRole, inst)
+                icon = self._instance_icon(inst["id"])
+                if icon:
+                    item.setIcon(icon)
+                self.instance_list.addItem(item)
+            _restore = None
+            if _cur_id:
+                for _i in range(self.instance_list.count()):
+                    _d = self.instance_list.item(_i).data(Qt.ItemDataRole.UserRole)
+                    if _d and _d.get("id") == _cur_id:
+                        _restore = self.instance_list.item(_i)
+                        break
+            if _restore is not None:
+                self.instance_list.setCurrentItem(_restore)
+        finally:
+            self.instance_list.blockSignals(False)
+        # 刷新后统一同步一次当前选择(复原的实例,或已消失→None)
+        self.instance_list._on_selection_changed(self.instance_list.currentItem(), None)
         # 同步到首页面板(实例数量 + 当前选择态)
         self.home_panel.set_current_instances(shown)
 
