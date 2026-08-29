@@ -200,6 +200,9 @@ class SettingsCenter(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
         scroll.setWidget(w)
         return scroll
 
@@ -256,14 +259,14 @@ class SettingsCenter(QWidget):
         more_row = QHBoxLayout(); more_row.addWidget(upd_btn); more_row.addWidget(tut_btn); more_row.addStretch()
         l.addLayout(more_row)
 
-        # 配色(自定义主题):改 强调色/文字色/背景色
+        # 配色(自定义主题):改 强调色/文字色/次要文字/背景色
         l.addSpacing(12)
         theme_title = QLabel("🎨 配色(自定义主题,文字颜色也可以改):")
         theme_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
         l.addWidget(theme_title)
         self._color_btns = {}
         cbtn_row = QHBoxLayout(); cbtn_row.setSpacing(8)
-        for slot, label in [("accent", "强调色"), ("text", "文字色"), ("panel_bg", "背景色")]:
+        for slot, label in [("accent", "强调色"), ("text", "文字色"), ("muted", "次要文字"), ("panel_bg", "背景色")]:
             b = QPushButton(label)
             set_style(b, card_btn_style)
             b.clicked.connect(lambda _c, s=slot, lb=label: self._pick_color(s, lb))
@@ -447,7 +450,7 @@ class SettingsCenter(QWidget):
     def _refresh_color_btn_text(self):
         from ui_style import get_custom_colors
         cur = get_custom_colors()
-        labels = {"accent": "强调色", "text": "文字色", "panel_bg": "背景色"}
+        labels = {"accent": "强调色", "text": "文字色", "muted": "次要文字", "panel_bg": "背景色"}
         for slot, b in getattr(self, "_color_btns", {}).items():
             v = cur.get(slot)
             b.setText(f"{labels.get(slot, slot)}:" + (v if v else "默认"))
@@ -766,6 +769,9 @@ class SettingsCenter(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
         scroll.setWidget(page)
         return scroll
 

@@ -315,8 +315,9 @@ class MainWindow(QMainWindow):
         # (self._running_instances / _running_label 已在创建标题栏时初始化)
         self._update_running_label()
 
-        # 无边框窗口:启用状态栏右下角的尺寸拖拽手柄(resize)
-        self.statusBar().setSizeGripEnabled(True)
+        # 状态栏隐藏:信息走启动器日志 / 下载球 / 提示条;自绘状态栏留待后续
+        self.statusBar().hide()
+        self.apply_background()   # AI dock 已建好,再刷一次让 dock 也带上壁纸(幂等)
 
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
@@ -351,20 +352,82 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("设置已保存")
 
     def apply_background(self):
-        """按设置应用背景壁纸 + 遮罩 + 面板不透明度(阶段 2 · 决策 2)。"""
-        from ui_background import load_wallpaper, mask_strength
+        """按设置应用背景壁纸 + 遮罩 + 面板/按钮/文本框透明化(阶段 2 · 决策 2)。"""
+        from ui_background import load_wallpaper, mask_strength, input_style_qss
         from ui_tokens import set_wallpaper_active, is_wallpaper_active
         pix = load_wallpaper(self.settings)
         mask = mask_strength(self.settings)
         active = pix is not None
-        bg = getattr(self, "_background", None)
-        if bg is not None:
-            bg.set_wallpaper(pix, mask)
-        # 壁纸激活态变了 → 切换面板不透明度并全量重刷样式(否则跳过,省成本)
+        self._wallpaper_source = pix
+        self._wallpaper_mask = mask
+        self._recompute_wallpaper()
+        # 文本框透明化(全局 QSS,仅壁纸模式;无壁纸时清空回 QPalette)
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            new_qss = input_style_qss() if active else ""
+            if app.styleSheet() != new_qss:   # 样式串没变就别重设,避免无谓 re-polish
+                app.setStyleSheet(new_qss)
+        # 壁纸激活态变了 → 切换面板/按钮不透明度并全量重刷样式(否则跳过,省成本)
         if is_wallpaper_active() != active:
             set_wallpaper_active(active)
             from ui_style import refresh_theme
             refresh_theme()
+
+    def _recompute_wallpaper(self):
+        """按当前中央区尺寸 + 壁纸源,重算共享壁纸(一张画布),并设置中央区与 AI dock 视口。"""
+        from ui_background import prepare_shared_wallpaper
+        pix = getattr(self, "_wallpaper_source", None)
+        mask = getattr(self, "_wallpaper_mask", 0.6)
+        bg = getattr(self, "_background", None)
+        if pix is None or bg is None:
+            self._wallpaper_scaled = None
+            self._wallpaper_ox = self._wallpaper_oy = 0
+            if bg is not None:
+                bg.clear()
+            self._sync_ai_wallpaper()
+            return
+        scaled, ox, oy = prepare_shared_wallpaper(pix, bg.size(), self._ai_dock_width())
+        self._wallpaper_scaled = scaled
+        self._wallpaper_ox = ox
+        self._wallpaper_oy = oy
+        if scaled is not None:
+            bg.set_shared_view(scaled, ox, oy, mask)
+        self._sync_ai_wallpaper()
+
+    def _ai_dock_width(self) -> int:
+        """右侧 AI dock 的当前宽度(用于共享画布覆盖「中央 + dock」的左右跨度)。
+        用 isHidden 而非 isVisible:初始布局阶段 isVisible 可能尚未置真。"""
+        try:
+            d = getattr(self, "ai_dock", None)
+            if d is not None and not d.isHidden():
+                return max(0, d.width())
+        except Exception:
+            pass
+        return 0
+
+    def _sync_ai_wallpaper(self):
+        """把共享壁纸片段同步给 AI dock 与收起窄条(按相对中央区位置)。"""
+        if hasattr(self, "ai_dock") and hasattr(self.ai_dock, "_sync_wallpaper_view"):
+            self.ai_dock._sync_wallpaper_view()
+        self._sync_strip_wallpaper()
+
+    def _sync_strip_wallpaper(self):
+        """把共享壁纸片段同步给收起窄条。"""
+        strip = getattr(self, "ai_strip", None)
+        central = getattr(self, "_background", None)
+        if strip is None or central is None:
+            return
+        scaled = getattr(self, "_wallpaper_scaled", None)
+        if scaled is None:
+            strip.clear()
+            return
+        ox = getattr(self, "_wallpaper_ox", 0)
+        oy = getattr(self, "_wallpaper_oy", 0)
+        mask = getattr(self, "_wallpaper_mask", 0.6)
+        dg = strip.mapToGlobal(strip.rect().topLeft())
+        cg = central.mapToGlobal(central.rect().topLeft())
+        strip.set_shared_view(scaled, ox + dg.x() - cg.x(), oy + dg.y() - cg.y(), mask)
 
     def open_update_dialog(self):
         """设置 → 检查更新:AMCL 启动器 + bridge-mod(帮助菜单已移除,入口并入设置菜单)"""
@@ -397,6 +460,10 @@ class MainWindow(QMainWindow):
                 self._win_patched = True
             except Exception:
                 pass
+        # 布局落定后再重算一次共享壁纸(此时中央区/dock 尺寸已正确)
+        if getattr(self, "_wallpaper_source", None) is not None:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._recompute_wallpaper)
 
     def closeEvent(self, event):
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
@@ -496,34 +563,34 @@ class MainWindow(QMainWindow):
 
     def _on_ai_visibility(self, visible: bool):
         """AI 对话栏可见性变化:X 掉/隐藏 → 收窄成贴右边缘小条(留「展开」);显示 → 收起小条。
-        变化会影响右侧内容区宽度 → 重摆下载悬浮球。"""
+        变化会影响右侧内容区宽度 → 重摆下载悬浮球 + 重算共享壁纸。"""
         if hasattr(self, "ai_strip_dock"):
             self.ai_strip_dock.setVisible(not visible)
         if hasattr(self, "dl_indicator"):
             self._place_download_ball()
+        if getattr(self, "_wallpaper_source", None) is not None:
+            self._recompute_wallpaper()
 
     def _build_ai_strip(self):
-        """AI 被收起时贴在主窗口右边缘的窄条:竖排「AI ▸」按钮,点它展开。"""
-        self.ai_strip = QWidget()
-        self.ai_strip.setFixedWidth(46)
+        """AI 被收起时贴在主窗口右边缘的超窄竖条:一个竖排「▶」按钮,点它展开。"""
+        from ui_background import BackgroundWidget
+        self.ai_strip = BackgroundWidget()   # 窄条也透明,画共享壁纸片段
+        self.ai_strip.setFixedWidth(22)
         sv = QVBoxLayout(self.ai_strip)
-        sv.setContentsMargins(0, 8, 0, 8)
-        sv.setSpacing(8)
-        lbl = QLabel("AI")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        from ui_style import text_color
-        lbl.setStyleSheet(f"font-weight: bold; color: {text_color()};")
-        expand_btn = QPushButton("▶\n展开")
-        expand_btn.setFixedHeight(68)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.setSpacing(0)
+        expand_btn = QPushButton("▶")
+        expand_btn.setFixedSize(22, 72)
+        expand_btn.setToolTip("展开 AI 助手")
         from ui_style import set_style, accent_border_style
         set_style(expand_btn, accent_border_style)
         expand_btn.clicked.connect(self._expand_ai)
-        sv.addWidget(lbl)
         sv.addWidget(expand_btn)
         sv.addStretch()
         self.ai_strip_dock = QDockWidget(t("AI_ASSISTANT"), self)
         self.ai_strip_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
         self.ai_strip_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self.ai_strip_dock.setTitleBarWidget(QWidget())   # 隐藏标题栏,只留窄条
         self.ai_strip_dock.setWidget(self.ai_strip)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_strip_dock)
         self.ai_strip_dock.hide()
@@ -943,6 +1010,8 @@ class MainWindow(QMainWindow):
         super().resizeEvent(ev)
         if hasattr(self, "dl_indicator"):
             self._place_download_ball()
+        if getattr(self, "_wallpaper_source", None) is not None:
+            self._recompute_wallpaper()
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""

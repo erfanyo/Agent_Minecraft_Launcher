@@ -331,13 +331,17 @@ def list_style() -> str:
 
 
 def tab_style() -> str:
-    """标签页:圆角 + 选中高亮,自适应主题。"""
+    """标签页:圆角 + 选中高亮,自适应主题。QTabWidget/QTabBar 本身设透明,
+    壁纸能从标签条/内容区透出(否则 QTabBar 默认画不透明底色,标签区遮住壁纸)。"""
     pane_border = current_color("tab_pane_border")
     sel_bg = current_color("tab_sel_bg")
     text = text_color()
     muted = muted_color()
     return (
-        f"QTabWidget::pane {{ border: 1px solid {pane_border}; border-radius: 10px; }}"
+        f"QTabWidget {{ background: transparent; }}"
+        f"QTabWidget::pane {{ border: 1px solid {pane_border}; border-radius: 10px;"
+        f" background: transparent; }}"
+        f"QTabBar {{ background: transparent; }}"
         f"QTabBar::tab {{ background: transparent; padding: 7px 16px; margin-right: 4px;"
         f" color: {muted}; font-size: 14px; border-top-left-radius: 7px;"
         f" border-top-right-radius: 7px; }}"

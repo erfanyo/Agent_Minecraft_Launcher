@@ -115,9 +115,8 @@ def get_custom_colors() -> dict:
 def current_token(name: str) -> str:
     """取某颜色槽的当前值:自定义主题优先(仅 COLOR_SLOTS 槽),否则按深浅色默认。
     兼容 COLOR_SLOTS 与新增 COLOR_TOKENS 两类槽名。"""
-    # 决策 2:壁纸激活时,半透明面板底抬高到近不透明,保证文字在壁纸上的可读性。
-    if name == "panel_bg" and _WALLPAPER_ACTIVE:
-        dark, light = _WALLPAPER_PANEL_BG
+    if _WALLPAPER_ACTIVE and name in _WALLPAPER_OVERRIDES:
+        dark, light = _WALLPAPER_OVERRIDES[name]
         return dark if is_dark_mode() else light
     if name in _CUSTOM_COLORS:
         return _CUSTOM_COLORS[name]
@@ -126,9 +125,20 @@ def current_token(name: str) -> str:
 
 
 # ---------------- 壁纸模式状态(阶段 2 · 决策 2) ----------------
-# 壁纸激活时,panel_bg 抬高到近不透明(可读性);切换后需 refresh_theme() 重刷样式。
+# 壁纸激活时,所有「面」(面板/按钮/输入底)统一抬高到近不透明的同档透明度(0.88),
+# 让壁纸在整窗均匀透出(用户反馈:按钮/文本框原来不透明,画面不统一)。
+# 切换后需 refresh_theme() 重刷样式。
 _WALLPAPER_ACTIVE = False
-_WALLPAPER_PANEL_BG = ("rgba(30,34,42,0.88)", "rgba(255,255,255,0.88)")
+_WALLPAPER_OVERRIDES = {
+    # 深色用「灰底」(比默认底更浅的灰、白字更清楚);浅色用微灰白。统一 0.72 透明度,
+    # 让壁纸均匀透出,又不至于叠两层太重。
+    "panel_bg":         ("rgba(52,58,68,0.72)",  "rgba(240,243,247,0.72)"),
+    "btn_bg":           ("rgba(58,64,74,0.72)",  "rgba(246,248,252,0.72)"),
+    "btn_bg_pressed":   ("rgba(48,54,63,0.72)",  "rgba(232,237,245,0.72)"),
+    "btn_disabled_bg":  ("rgba(74,84,104,0.55)", "rgba(190,200,214,0.55)"),
+    "bg0":              ("rgba(46,52,62,0.72)",  "rgba(255,255,255,0.72)"),
+    "bg2":              ("rgba(58,64,74,0.72)",  "rgba(246,248,252,0.72)"),
+}
 
 
 def set_wallpaper_active(active: bool) -> None:

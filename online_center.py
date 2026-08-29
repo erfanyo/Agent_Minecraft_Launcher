@@ -518,6 +518,8 @@ class RecommendWizard(QWidget):
 def build_tutorials_tab() -> QWidget:
     scroll = QScrollArea()
     scroll.setWidgetResizable(True)
+    scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }"
+                         "QScrollArea > QWidget > QWidget { background: transparent; }")
     box = QWidget()
     lay = QVBoxLayout(box)
     head = QLabel("—— 教程与资料 ——\n非 CLI 方案(需正版 / 官方)为重点;各方案要点见下。")
@@ -638,6 +640,8 @@ class OnlineCenter(QWidget):
     def _build_tab(self, title: str, items: list) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }"
+                             "QScrollArea > QWidget > QWidget { background: transparent; }")
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(8, 8, 8, 8)

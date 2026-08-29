@@ -69,7 +69,8 @@ from assistant_ui import (
     RecentScreenshotsDialog,
     SendWithRing,
 )
-from ui_style import set_style, list_style, muted_color, accent_color, success_color, warning_color, danger_color, text_color, current_color
+from ui_style import set_style, list_style, muted_color, accent_color, success_color, warning_color, danger_color, text_color, current_color, tab_style
+from ui_background import BackgroundWidget
 from settings import save_settings
 
 # 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
@@ -1363,12 +1364,13 @@ class AIChatDock(QDockWidget):
         irl.addStretch()
         self.img_row_widget = img_row_widget
 
-        container = QWidget()
+        container = BackgroundWidget()   # 壁纸模式下 AI dock 内容区也画同张壁纸+遮罩(不割裂)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         # ---- 用标签页:0=聊天(原内容) 1=聊天记录·归档 ----
         self.tabs = QTabWidget()
+        set_style(self.tabs, tab_style)   # 透明标签条/面板,壁纸透出
         # Tab0: 聊天(历史+权限+图片+输入)
         chat_tab = QWidget()
         chat_lay = QVBoxLayout(chat_tab)
@@ -1385,6 +1387,7 @@ class AIChatDock(QDockWidget):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
         self.setWidget(container)
+        self._container = container
         self.setMinimumWidth(320)
         self.setObjectName("AIChatDock")
 
@@ -1413,6 +1416,38 @@ class AIChatDock(QDockWidget):
         QTimer.singleShot(2000, self.maybe_preload_local)
         # §5 性能策略:CPU 采样监控线程(量化提示);daemon,不阻塞退出。见 shutdown() 置停。
         threading.Thread(target=self._infer_monitor_loop, daemon=True).start()
+
+    def _sync_wallpaper_view(self):
+        """按与本窗口中央区的相对位置,更新本 dock 显示的壁纸片段(共享模式)。
+        效果:AI dock 的壁纸是主窗壁纸的「局部放大/平移」,横向连续;浮动后左右移动
+        会切换到对应位置的片段。"""
+        main = self.main
+        scaled = getattr(main, "_wallpaper_scaled", None)
+        c = getattr(self, "_container", None)
+        if c is None:
+            return
+        if scaled is None:
+            c.clear()
+            return
+        ox = getattr(main, "_wallpaper_ox", 0)
+        oy = getattr(main, "_wallpaper_oy", 0)
+        mask = getattr(main, "_wallpaper_mask", 0.6)
+        central = getattr(main, "_background", None)
+        if central is None:
+            return
+        dg = c.mapToGlobal(c.rect().topLeft())
+        cg = central.mapToGlobal(central.rect().topLeft())
+        dx = dg.x() - cg.x()
+        dy = dg.y() - cg.y()
+        c.set_shared_view(scaled, ox + dx, oy + dy, mask)
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        self._sync_wallpaper_view()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._sync_wallpaper_view()
 
     def update_vision_ui(self):
         """按所选模型是否支持看图(多模态)显示/隐藏图片相关按钮。
