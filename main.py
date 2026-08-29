@@ -1619,7 +1619,7 @@ class MainWindow(QMainWindow):
         finally:
             self.instance_list.blockSignals(False)
         # 刷新后统一同步一次当前选择(复原的实例,或已消失→None)
-        self.instance_list._on_selection_changed(self.instance_list.currentItem(), None)
+        self.home_panel._on_selection_changed(self.instance_list.currentItem(), None)
         # 同步到首页面板(实例数量 + 当前选择态)
         self.home_panel.set_current_instances(shown)
 
