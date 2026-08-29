@@ -56,7 +56,7 @@ def _facets(game_version: str, loader: str | None,
 
 def search_mods_cn(query: str, game_version: str, loader: str | None = None,
                    limit: int = 20, project_type: str | None = None,
-                   order_by: str = "downloads", tags: str = "") -> list:
+                   order_by: str = "downloads", tags: str = "", offset: int = 0) -> list:
     """中文增强搜索。
 
     - 关键词含中文 → 先查本地中文名库 → 命中 slug 就去 Modrinth 取详情(按版本/加载器过滤)
@@ -106,7 +106,7 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
         # 中文没命中本地库:继续走原生搜索(用户可能搜的是英文或平台别名)
 
     hits = search_mods(query, game_version, loader, limit, project_type,
-                       order_by=order_by, tags=tags)
+                       order_by=order_by, tags=tags, offset=offset)
     for h in hits:
         cn = merged.get(h["slug"])
         if cn:
@@ -116,7 +116,7 @@ def search_mods_cn(query: str, game_version: str, loader: str | None = None,
 
 def search_mods(query: str, game_version: str, loader: str | None = None,
                 limit: int = 20, project_type: str | None = None,
-                order_by: str = "downloads", tags: str = "") -> list:
+                order_by: str = "downloads", tags: str = "", offset: int = 0) -> list:
     """搜索 Mod,返回 [{slug, title, description, downloads, author, categories}, ...]
     project_type: mod / datapack / shader 等(默认 None = 全部)。
     order_by: relevance(相关度) / downloads(下载量,默认) / updated(最近更新)。
@@ -133,6 +133,7 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
         "facets": _facets(game_version, loader, project_type, tags),
         "limit": limit,
         "index": order_by,
+        "offset": offset,
     }
     resp = requests.get(BASE + "/search", params=params, timeout=20)
     resp.raise_for_status()
@@ -145,6 +146,7 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
                 "facets": _facets("", loader, project_type, tags),
                 "limit": limit,
                 "index": order_by,
+                "offset": offset,
             }, timeout=20)
             hits = resp2.json().get("hits", [])
         except Exception:

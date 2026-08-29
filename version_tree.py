@@ -178,6 +178,8 @@ class GameVersionTree(QTreeWidget):
         self.setColumnCount(1)
         self.setHeaderHidden(True)
         self.setAlternatingRowColors(False)
+        self.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)   # 逐像素滚动,触控板更顺
+        self.setHorizontalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)
         self.header().setStretchLastSection(True)
         self.currentItemChanged.connect(self._on_current_changed)
         self._none_item = None

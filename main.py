@@ -53,7 +53,7 @@ from downloader import download_with_mirror  # 下载工具:镜像 + 进度 + sh
 import updater  # 自动更新(检查 GitHub 新版本 / 下载 / 替换)
 from bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
 from assistant import AIChatDock, permission_instructions  # AI 助手(右侧停靠对话栏)
-from download_indicator import DownloadDetailDialog, DownloadIndicator  # 左下角下载指示器
+from download_indicator import DownloadDetailWidget, DownloadIndicator  # 左下角下载指示器
 from updater_dialog import UpdateDialog  # 检查更新对话框(独立模块)
 from download_tab import DownloadTab  # 下载新实例选项卡(左侧菜单 + 分类面板)
 from fetch_versions import fetch_version_detail, fetch_version_manifest  # 网络模块
@@ -848,27 +848,33 @@ class MainWindow(QMainWindow):
                 self.dl_indicator.setToolTip("下载失败,点击查看详情")
                 self._dl_finish(False)
 
-    def open_download_detail(self):
-        """点击左下角指示器:查看下载详情(非模态,可一直开着实时看进度;不强制置顶/不阻塞)。"""
-        if getattr(self, "_dl_detail", None) is not None:
-            # 已有详情窗 → 直接聚焦,不重复弹
-            try:
-                self._dl_detail.show()
-                self._dl_detail.raise_()
-                self._dl_detail.activateWindow()
-            except Exception:
-                pass
+    def _ensure_dl_overlay(self):
+        """惰性创建下载详情覆盖层(ContentOverlay + DownloadDetailWidget,复用不重复建)。"""
+        if getattr(self, "_dl_overlay", None) is not None:
             return
+        from ui_overlay import ContentOverlay
 
         def live():
             return (list(self._dl_log), self._dl_progress[0], self._dl_progress[1])
-        dlg = DownloadDetailDialog(self._dl_log, self._dl_progress[0], self._dl_progress[1],
-                                   self, live=live)
-        # 非模态:不强制保留在页面最前端,用户可切到其它界面同时看进度
-        dlg.setModal(False)
-        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
-        self._dl_detail = dlg
-        dlg.show()
+
+        self._dl_overlay = ContentOverlay(self._background)
+        self._dl_overlay.set_title("下载详情")
+        self._dl_overlay.backRequested.connect(self._on_dl_back)
+        self._dl_overlay.set_content(
+            DownloadDetailWidget(self._dl_log, self._dl_progress[0], self._dl_progress[1],
+                                 live=live))
+
+    def _on_dl_back(self):
+        """下载详情返回:收起覆盖层,恢复主内容。"""
+        if getattr(self, "_dl_overlay", None) is not None:
+            self._dl_overlay.hide_overlay()
+        self.main_tabs.show()
+
+    def open_download_detail(self):
+        """点击下载球:隐藏主内容,在主窗显示半透明下载详情覆盖层(返回按钮回原页)。"""
+        self._ensure_dl_overlay()
+        self.main_tabs.hide()   # 隐藏主内容,让半透明覆盖层直接压在壁纸上
+        self._dl_overlay.show_overlay()
 
     def _dl_finish(self, _ok):
         self._busy_download(False)

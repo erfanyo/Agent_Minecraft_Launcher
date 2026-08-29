@@ -111,8 +111,8 @@ class DownloadIndicator(QWidget):
             e.accept()
 
 
-class DownloadDetailDialog(QDialog):
-    """下载详情:状态消息流 + 当前进度(支持 live 回调实时刷新)。
+class DownloadDetailWidget(QWidget):
+    """下载详情内容(状态消息流 + 进度条),供 ContentOverlay 覆盖层承载(不再是对话框)。
 
     live: 可选 callable,返回 (log_lines, done, total);提供时用 QTimer 周期性刷新,
     这样下载/整合包导入过程中打开详情,能看到实时进度而不是打开时的快照。"""
@@ -120,8 +120,6 @@ class DownloadDetailDialog(QDialog):
     def __init__(self, log_lines: list, done: int = 0, total: int = 1, parent=None,
                  live=None):
         super().__init__(parent)
-        self.setWindowTitle("下载详情")
-        self.setMinimumSize(460, 320)
         self._live = live
 
         self.log_view = QPlainTextEdit()
@@ -135,13 +133,10 @@ class DownloadDetailDialog(QDialog):
         self.progress_bar.setValue(done)
         self.progress_label = QLabel(f"{done} / {total}")
 
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(self.accept)
         row = QHBoxLayout()
         row.addWidget(QLabel("进度:"))
         row.addWidget(self.progress_bar, 1)
         row.addWidget(self.progress_label)
-        row.addWidget(close_btn)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("下载内容:"))

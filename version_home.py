@@ -709,6 +709,7 @@ class VersionHome(QWidget):
         lay.addLayout(gdir_row)
 
         self.instance_list = QListWidget()
+        self.instance_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)   # 逐像素滚动,触控板更顺
         set_style(self.instance_list, list_style)
         self.instance_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.instance_list.currentItemChanged.connect(self._on_selection_changed)

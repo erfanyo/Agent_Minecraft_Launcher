@@ -216,6 +216,11 @@ class ResourceBrowser(QWidget):
 
         # 是否已加载过「默认浏览」(打开页即显示列表);已加载则不重复拉取
         self._auto_loaded = False
+        # 分页(滚动到底加载更多)
+        self._offset = 0            # 已加载结果数(游标)
+        self._no_more = False       # 是否已没有更多
+        self._more_loading = False  # 是否正在加载更多(防重入)
+        self._search_params = None  # 当前搜索参数 (query, gv, loader, order, tags)
         # 懒加载图标:只为"当前可见"的行拉图,按顺序串行,用户没看到的先不拉不存。
         self._icon_loaded = {}          # id(row) -> slug(已请求过图标的行,避免重复拉)
         self._icon_queue = collections.deque()   # 待拉图标的 (list_item, slug, url)
@@ -337,11 +342,16 @@ class ResourceBrowser(QWidget):
         self.result_list.setIconSize(QSize(44, 44))     # 资源卡片左侧显示 Mod 图标(默认 16px 太小不显眼)
         self.result_list.setSpacing(2)
         self.result_list.setUniformItemSizes(False)
+        # 逐像素滚动(触控板/滚轮更顺,与其它列表统一)
+        self.result_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        self.result_list.setHorizontalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         set_style(self.result_list, list_style)
         self.result_list.currentItemChanged.connect(self._on_selected)
         # 懒加载图标:滚动/改变大小时,只为当前可见的行拉图(并按顺序慢慢存)
         self.result_list.verticalScrollBar().valueChanged.connect(self._on_icon_visibility)
         self.result_list.verticalScrollBar().rangeChanged.connect(self._on_icon_visibility)
+        # 滚动到底加载更多(分页)
+        self.result_list.verticalScrollBar().valueChanged.connect(self._maybe_load_more)
 
         self.panel = QWidget()
         set_style(self.panel, panel_style)
@@ -780,6 +790,9 @@ class ResourceBrowser(QWidget):
         order = self.sort_combo.currentData() or "downloads"
         tags = ",".join(sorted(self._selected_tags))
         self._last_query = query
+        self._offset = 0
+        self._no_more = False
+        self._search_params = (query, gv, loader, order, tags)
         self.result_list.clear()
         QListWidgetItem(t("SEARCHING"), self.result_list)
 
@@ -787,7 +800,7 @@ class ResourceBrowser(QWidget):
             import modrinth
             return modrinth.search_mods_cn(
                 query, gv, loader, limit=30, project_type=self.project_type,
-                order_by=order, tags=tags)
+                order_by=order, tags=tags, offset=0)
 
         self._async(("search", query, gv, loader, self.project_type, order, tags),
                     fetch, self._fill_results, cache=False)
@@ -814,15 +827,18 @@ class ResourceBrowser(QWidget):
             return
         self.do_search()
 
-    def _fill_results(self, hits):
-        self.result_list.clear()
-        # 清掉旧的行索引懒加载状态:新列表行索引从 0 重新开始,不清会误跳过新前几行
-        # (旧索引 0..8 已标"加载过" → 新前几行不拉图,只拉下方 9+ 的行 → 观感"只加载下面")
-        self._icon_loaded = {}
-        self._icon_queue = collections.deque()
+    def _fill_results(self, hits, append=False):
+        if not append:
+            self.result_list.clear()
+            # 清掉旧的行索引懒加载状态:新列表行索引从 0 重新开始,不清会误跳过新前几行
+            # (旧索引 0..8 已标"加载过" → 新前几行不拉图,只拉下方 9+ 的行 → 观感"只加载下面")
+            self._icon_loaded = {}
+            self._icon_queue = collections.deque()
         if hits is None:
-            self._auto_loaded = False
-            QListWidgetItem(t("SEARCH_FAILED_CHECK_NETWORK"), self.result_list)
+            if not append:
+                self._auto_loaded = False
+                QListWidgetItem(t("SEARCH_FAILED_CHECK_NETWORK"), self.result_list)
+            self._more_loading = False
             return
         for h in hits:
             author = h.get("author", "")
@@ -834,12 +850,46 @@ class ResourceBrowser(QWidget):
             # 左侧先占一个固定大小的框:文本从它右侧开始,真图标到了才替换(不重排)
             item.setIcon(self._initial_icon(h))
             self.result_list.addItem(item)
-        if not hits and not self.result_list.count():
+        if not hits and not append and not self.result_list.count():
             QListWidgetItem(t("NO_RESULTS"), self.result_list)
         # 记录默认浏览是否已加载(空关键词的结果),供 maybe_auto_load 判断是否重复拉取
-        self._auto_loaded = (getattr(self, "_last_query", "") == "")
+        if not append:
+            self._auto_loaded = (getattr(self, "_last_query", "") == "")
+        # 分页游标 + 是否还有更多(不足一页 = 到底了)
+        self._offset += len(hits)
+        self._no_more = len(hits) < 30
+        self._more_loading = False
         # 只给当前可见的条目按顺序懒加载图标(用户没看到的先不拉不存)
         self._icon_visibility_timer.start(80)
+
+    def _maybe_load_more(self, value: int = 0):
+        """滚动到底附近 → 加载下一页(分页)。"""
+        if getattr(self, "_more_loading", False) or getattr(self, "_no_more", False):
+            return
+        if getattr(self, "_search_params", None) is None:
+            return
+        sb = self.result_list.verticalScrollBar()
+        if sb.maximum() <= 0 or value < sb.maximum() - 40:
+            return
+        self._load_more()
+
+    def _load_more(self):
+        """加载下一页结果并追加到列表。"""
+        self._more_loading = True
+        query, gv, loader, order, tags = self._search_params
+        offset = self._offset
+
+        def fetch():
+            import modrinth
+            return modrinth.search_mods_cn(
+                query, gv, loader, limit=30, project_type=self.project_type,
+                order_by=order, tags=tags, offset=offset)
+
+        def on_done(hits):
+            self._fill_results(hits, append=True)
+
+        self._async(("more", query, gv, loader, self.project_type, order, tags, offset),
+                    fetch, on_done, cache=False)
 
     # ---- 详情面板 ----
     def _mcmod_url(self, display_name: str) -> str:
