@@ -80,6 +80,7 @@ DEFAULTS = {
     "ui_wallpaper_user_path": "",      # 用户图片相对路径(相对 AMCL/cache/,复制进来的)
     "ui_wallpaper_official_id": "",    # 官方壁纸 id(素材待项目方提供)
     "ui_wallpaper_mask": 60,           # 遮罩强度 0~80(%);默认 60(深色遮罩/浅色遮罩自动换色)
+    "ui_animations_enabled": True,     # 界面动画开关(淡入/标签切换等);关闭后动画立即到位
 }
 
 

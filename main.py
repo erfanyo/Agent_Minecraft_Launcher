@@ -89,6 +89,8 @@ class MainWindow(QMainWindow):
         # 预留:自定义配色主题(以后 UI 可能出自定义配色方案)。从设置读 ui_custom_colors 应用。
         from ui_style import load_theme_from_settings
         load_theme_from_settings(self.settings)
+        from ui_anim import set_animations_enabled
+        set_animations_enabled(self.settings.get("ui_animations_enabled", True))
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
         # ---- 语言包(第三方/玩梗语言):加载 内置语言包 + AMCL/languages/*.json + 插件注册的包 ----
@@ -208,6 +210,7 @@ class MainWindow(QMainWindow):
                     pass
         except Exception:
             pass
+        self.main_tabs.currentChanged.connect(self._on_main_tab_changed)
 
         # ---- 启动器日志:已作为「我的实例 → 启动器日志」子标签页(与 MC 动态同级) ----
         self.log_view = tab_a.log_view   # 复用首页子标签页里的常驻日志 view(流持续追加)
@@ -340,6 +343,8 @@ class MainWindow(QMainWindow):
         """设置(标签卡)保存后:刷新本窗口与各处联动。"""
         s = self.settings_center.settings
         self.settings = s
+        from ui_anim import set_animations_enabled
+        set_animations_enabled(s.get("ui_animations_enabled", True))
         self.ai_dock.settings = s
         self.ai_dock.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
         self.ai_dock.update_local_status()   # 本地模型 provider 切换 → 刷新状态
@@ -2150,22 +2155,18 @@ class MainWindow(QMainWindow):
         self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
 
     def _animate_instance_details_in(self):
-        """标签页出现动画:淡入 + 轻微上浮(标签栏右侧其它标签右移由 QTabWidget 重排完成)。"""
-        try:
-            from PySide6.QtCore import QAbstractAnimation, QEasingCurve, QPropertyAnimation
-            from PySide6.QtWidgets import QGraphicsOpacityEffect
-            w = self.instance_details
-            eff = QGraphicsOpacityEffect(w)
-            w.setGraphicsEffect(eff)
-            anim = QPropertyAnimation(eff, b"opacity", self)
-            anim.setDuration(320)
-            anim.setStartValue(0.0)
-            anim.setEndValue(1.0)
-            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
-            self._inst_anim = anim
-        except Exception:
-            pass
+        """标签页出现动画:淡入(320ms OutCubic,走 ui_anim 统一封装;关闭动画则直接显示)。"""
+        from ui_anim import fade_in
+        from ui_tokens import DURATION
+        fade_in(self.instance_details, DURATION.get("slide", 320))
+
+    def _on_main_tab_changed(self, idx: int):
+        """主标签页切换 → 新页淡入(250ms;关闭动画则跳过)。"""
+        from ui_anim import fade_in
+        from ui_tokens import DURATION
+        w = self.main_tabs.widget(idx) if 0 <= idx < self.main_tabs.count() else None
+        if w is not None:
+            fade_in(w, DURATION.get("tab", 250))
 
     def _home_open_instance_manager(self, inst):
         """「我的版本」首页 → 实例设置/版本设置 需要打开实例管理时调用。

@@ -91,19 +91,16 @@ def _tag_groups(project_type: str) -> list:
     """项目类型 → [(中文组名, [Modrinth 分类...]), ...];空 = 该类型无分类。"""
     return _CATEGORY_GROUPS.get(project_type, [])
 
-# MC 社区资源结构科普(首页展示,让想自己挑资源的人先看懂"都是些什么";
-# ui_mode=全面 时显示,摘要 时隐藏)
-_RESOURCE_GUIDE = [
-    "🧩 Mod:修改/扩展游戏玩法(如机械动力、JEI 物品管理器),放进 mods 文件夹,"
-    "需要 Fabric/Forge/NeoForge 加载器才能用",
-    "🌄 光影包:只改画面渲染(光线/水面/天空),放进 shaderpacks,"
-    "需要 Iris/Oculus 等光影加载器配合",
-    "🗂 数据包:原版官方支持的玩法调整(配方/生成/难度),放进存档的 datapacks 文件夹,"
-    "不需要加载器",
-    "🎨 资源包:改纹理/音效/界面外观,不改变玩法,放进 resourcepacks,原版直接支持",
-    "📦 整合包:Mod + 配置 + 可选存档的一键合集,适合想直接玩成品的人",
-    "⚡ 辅助 Mod:性能优化(钠/锂)和信息显示(玉/JEI),推荐先装这些",
-]
+# 首页分类卡片的短描述(每类一句话;原来 7 行长科普已移除,详情见各分类页)
+_CATEGORY_DESC = {
+    "instances": "新建 / 导入游戏实例",
+    "modpack": "Mod + 配置的一键成品合集",
+    "mod": "改玩法 / 加功能,需加载器",
+    "shader": "只改画面渲染(光线/水面)",
+    "datapack": "配方 / 生成,原版支持",
+    "resourcepack": "纹理 / 音效 / 界面外观",
+    "utility": "额外启动器功能",
+}
 
 
 class FlowLayout(QLayout):
@@ -247,6 +244,39 @@ class ResourceBrowser(QWidget):
             return QIcon(pix)
         except Exception:
             return QIcon()
+
+    def _initial_icon(self, h):
+        """列表项初始图标:整合包无封面时逐级回退(加载器图标 → 草方块 → 占位)。"""
+        if self.is_modpack and not h.get("icon_url"):
+            return self._modpack_fallback_icon(h)
+        return self._icon_placeholder
+
+    def _modpack_fallback_icon(self, h):
+        """整合包封面回退:有加载器 → 加载器图标;否则草方块;再否则占位。
+        TODO:加载器图标暂为通用齿轮;待补 Fabric/Forge/NeoForge 官方 logo(需下载源+许可确认)。"""
+        if h.get("loaders"):
+            from theme_icon import theme_icon
+            ic = theme_icon("loader", 44)
+            if not ic.isNull():
+                return ic
+        g = self._grass_block_icon()
+        return g if not g.isNull() else self._icon_placeholder
+
+    @staticmethod
+    def _grass_block_icon(size: int = 44):
+        """草方块图标(icons/grass_block.png),失败返回空 QIcon。"""
+        import os
+        from PySide6.QtGui import QIcon, QPixmap
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "grass_block.png")
+        try:
+            if os.path.isfile(p):
+                pm = QPixmap(p)
+                if not pm.isNull():
+                    return QIcon(pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                                           Qt.TransformationMode.SmoothTransformation))
+        except Exception:
+            pass
+        return QIcon()
 
     def _build_ui(self):
         # ---- 搜索区 ----
@@ -786,6 +816,10 @@ class ResourceBrowser(QWidget):
 
     def _fill_results(self, hits):
         self.result_list.clear()
+        # 清掉旧的行索引懒加载状态:新列表行索引从 0 重新开始,不清会误跳过新前几行
+        # (旧索引 0..8 已标"加载过" → 新前几行不拉图,只拉下方 9+ 的行 → 观感"只加载下面")
+        self._icon_loaded = {}
+        self._icon_queue = collections.deque()
         if hits is None:
             self._auto_loaded = False
             QListWidgetItem(t("SEARCH_FAILED_CHECK_NETWORK"), self.result_list)
@@ -798,7 +832,7 @@ class ResourceBrowser(QWidget):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, h)
             # 左侧先占一个固定大小的框:文本从它右侧开始,真图标到了才替换(不重排)
-            item.setIcon(self._icon_placeholder)
+            item.setIcon(self._initial_icon(h))
             self.result_list.addItem(item)
         if not hits and not self.result_list.count():
             QListWidgetItem(t("NO_RESULTS"), self.result_list)
@@ -1251,35 +1285,28 @@ class ResourceCenter(QWidget):
         layout.addSpacing(14)
         layout.addWidget(QLabel(t("BROWSE_RESOURCES")))
         cards = FlowLayout(hspacing=12, vspacing=12)
+        from theme_icon import theme_icon
+        from PySide6.QtCore import QSize
         entries = [
-            (t("CREATE_INSTANCE"), 1),
-            ("🎁 " + t("MODPACKS"), 2),
-            ("🧩 " + t("MODS"), 3),
-            ("🌄 " + t("SHADERS"), 4),
-            ("🗂 " + t("DATAPACKS"), 5),
-            ("🎨 " + t("RESOURCEPACKS"), 6),
-            ("🧩 " + t("LAUNCHER_PLUGINS"), 7),
+            (t("CREATE_INSTANCE"), 1, "instances"),
+            (t("MODPACKS"), 2, "modpack"),
+            (t("MODS"), 3, "mod"),
+            (t("SHADERS"), 4, "shader"),
+            (t("DATAPACKS"), 5, "datapack"),
+            (t("RESOURCEPACKS"), 6, "resourcepack"),
+            (t("LAUNCHER_PLUGINS"), 7, "utility"),
         ]
-        for text, idx in entries:
-            b = QPushButton(text)
+        for text, idx, icon in entries:
+            desc = _CATEGORY_DESC.get(icon, "")
+            label = f"{text}\n{desc}" if desc else text
+            b = QPushButton(label)
             b.setMinimumSize(150, 96)   # 高一点的分类卡片;放不下时自动换行
+            b.setIcon(theme_icon(icon, 30))
+            b.setIconSize(QSize(30, 30))
             set_style(b, card_btn_style)
             b.clicked.connect(lambda _c, i=idx: self.switch_to(i))
             cards.addWidget(b)
         layout.addLayout(cards)
-        layout.addSpacing(18)
-        # MC 资源结构科普(「全面」模式显示,「摘要」模式隐藏;见 set_ui_mode)
-        self.guide_title = QLabel(
-            t("MC_RESOURCE_TYPES_READ_BEFORE_PICKING"))
-        self.guide_title.setStyleSheet(f"font-weight: bold; color: {text_color()};")
-        layout.addWidget(self.guide_title)
-        self._guide_labels = []
-        for line in _RESOURCE_GUIDE:
-            l = QLabel("• " + line)
-            l.setWordWrap(True)
-            l.setStyleSheet(hint_style())
-            layout.addWidget(l)
-            self._guide_labels.append(l)
         layout.addStretch()
         return home
 
@@ -1446,10 +1473,6 @@ class ResourceCenter(QWidget):
         """
         self._ui_mode = "expert" if str(mode or "") in ("expert", "summary") else "beginner"
         full = self._ui_mode != "expert"
-        if hasattr(self, "guide_title"):
-            self.guide_title.setVisible(full)
-        for l in getattr(self, "_guide_labels", []):
-            l.setVisible(full)
         if hasattr(self, "home_hint"):
             self.home_hint.setVisible(full)
 

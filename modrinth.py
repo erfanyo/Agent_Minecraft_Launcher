@@ -157,6 +157,7 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
         "author": h.get("author", ""),
         "categories": h.get("categories", []),
         "icon_url": h.get("icon_url", ""),   # 封面小图,用来在列表/图标视图展示
+        "loaders": h.get("loaders", []),     # 加载器列表(整合包封面回退用)
     } for h in hits]
 
 

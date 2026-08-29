@@ -64,6 +64,14 @@ _EMBEDDED = {
     "download": ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
                  'stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
                  '<path d="M12 4v10"/><path d="M7 10.5 12 15.5l5-5"/><path d="M4.5 19h15"/></svg>'),
+    "favorite": ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+                 'stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+                 '<path d="M12 4.2l2.3 4.9 5.3.7-3.9 3.6 1 5.2-4.7-2.6-4.7 2.6 1-5.2-3.9-3.6 5.3-.7Z"/></svg>'),
+    "loader": ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
+               'stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
+               '<circle cx="12" cy="12" r="3.4"/>'
+               '<path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.2 5.2l1.7 1.7'
+               'M17.1 17.1l1.7 1.7M18.8 5.2l-1.7 1.7M6.9 17.1l-1.7 1.7"/></svg>'),
     "settings": ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
                  'stroke="#000" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
                  '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M4.2 7.5l1.9 1.1'

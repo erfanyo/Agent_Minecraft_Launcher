@@ -238,6 +238,9 @@ class SettingsCenter(QWidget):
 
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
         l.addLayout(form)
+        self.animations_check = QCheckBox("启用界面动画(淡入/标签切换等)")
+        self.animations_check.setChecked(bool(self.settings.get("ui_animations_enabled", True)))
+        l.addWidget(self.animations_check)
         l.addSpacing(8)
         # 已临时弃用 / 废案功能登记
         from deprecated_features import get_deprecated
@@ -939,6 +942,7 @@ class SettingsCenter(QWidget):
         self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
         if getattr(self, "_wallpaper_user_path", ""):
             self.settings["ui_wallpaper_user_path"] = self._wallpaper_user_path
+        self.settings["ui_animations_enabled"] = self.animations_check.isChecked()
         # MCP 客户端(启动器 AI 调用的外部 MCP 服务器):配置在 MCP 插件设置页(w._mcp_clients_edit)。
         # 从 shell 里找该编辑框(插件未启用/未构建时保留原值)。
         mcp_edit = getattr(self, "mcp_clients_edit", None)
