@@ -17,6 +17,7 @@
 import os
 import queue
 import threading
+import time
 import urllib.parse
 import collections
 
@@ -43,7 +44,7 @@ from PySide6.QtWidgets import (
 from i18n import t
 from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
                       muted_color, panel_style, text_color, set_style,
-                      accent_color, warning_color)
+                      accent_color, warning_color, current_color)
 from version_tree import GameVersionTree
 
 # 资源分类(左侧菜单 + Modrinth project_type + 安装目录子文件夹)
@@ -174,12 +175,37 @@ class FlowLayout(QLayout):
 
 
 class PopupCard(QWidget):
-    """无边框 Qt.Popup 浮层:点外面自动关闭,并在关闭时发 closed 信号(供同步标题箭头)。"""
+    """无边框 Qt.Popup 浮层:点外面自动关闭,并在关闭时发 closed 信号(供同步标题箭头)。
+    支持画共享壁纸(与主窗统一,壁纸透出);无壁纸时按当前主题画背景。"""
     closed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._shared = None
+        self._vx = self._vy = 0
+        self._mask = 0.6
+
+    def set_shared_view(self, scaled, vx, vy, mask=0.6):
+        """壁纸模式下画主窗共享壁纸片段(相对位置)。scaled=None 则回退主题背景。"""
+        self._shared = scaled
+        self._vx = int(vx); self._vy = int(vy)
+        self._mask = max(0.0, min(1.0, mask))
+        self.update()
+
+    def paintEvent(self, e):
+        if self._shared is not None:
+            from PySide6.QtGui import QPainter
+            from ui_background import mask_color
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            p.drawPixmap(-self._vx, -self._vy, self._shared)
+            if self._mask > 0:
+                c = mask_color(); c.setAlphaF(self._mask)
+                p.fillRect(self.rect(), c)
+            p.end()
+        else:
+            super().paintEvent(e)   # 无壁纸:面板/牌桌底色照常
 
     def hideEvent(self, event):
         super().hideEvent(event)
@@ -308,8 +334,8 @@ class ResourceBrowser(QWidget):
 
         # ---- 目标实例(折叠):装到哪个实例的对应目录(全局共享) ----
         self.inst_cards_toggle = QPushButton("▸ 目标实例: 未选择")
-        self.inst_cards_toggle.setCheckable(True)
-        self.inst_cards_toggle.setChecked(False)
+        self.inst_cards_toggle.setCheckable(False)
+        self.inst_cards_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.inst_cards_toggle.clicked.connect(self._toggle_cards)
         set_style(self.inst_cards_toggle, card_btn_style)
         self.instance_cards_box = QWidget()
@@ -354,7 +380,9 @@ class ResourceBrowser(QWidget):
         self.result_list.verticalScrollBar().valueChanged.connect(self._maybe_load_more)
 
         self.panel = QWidget()
-        set_style(self.panel, panel_style)
+        # 详情面板:透明底(壁纸直接透出)+ 细边框,不再用磨砂实心
+        set_style(self.panel, lambda: f"border: 1px solid {current_color('panel_border')};"
+                                      f" border-radius: 12px; background: transparent;")
         self.panel.setMinimumWidth(260)
         self.panel.setMaximumWidth(500)
         self.icon_label = None   # 详情面板顶部不再放大图;Mod 图标改在左侧列表卡片显示
@@ -420,6 +448,10 @@ class ResourceBrowser(QWidget):
         self.split.addWidget(self.result_list)
         panel_scroll = QScrollArea()
         panel_scroll.setWidgetResizable(True)
+        # QScrollArea viewport 默认不透明会遮住透明面板,这里设透明让壁纸透出
+        panel_scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
         panel_scroll.setWidget(self.panel)
         self.split.addWidget(panel_scroll)
         self.split.setChildrenCollapsible(False)
@@ -467,7 +499,8 @@ class ResourceBrowser(QWidget):
 
         # 手动下载按钮(窄)
         self.manual_toggle = QPushButton("▸ " + t("MANUAL_DOWNLOAD"))
-        self.manual_toggle.setCheckable(True)
+        self.manual_toggle.setCheckable(False)
+        self.manual_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.manual_toggle.setToolTip(t("SET_GAME_LOADER_MOD_VERSION"))
         set_style(self.manual_toggle, card_btn_style)
         self.manual_toggle.clicked.connect(self._toggle_manual_popup)
@@ -490,6 +523,11 @@ class ResourceBrowser(QWidget):
             r.addWidget(QLabel(lbl))
             r.addWidget(combo, 1)
             mp.addLayout(r)
+        # 收藏当前资源 + 手动下载里选的指定版本
+        self.fav_btn = QPushButton("☆ 收藏该版本")
+        set_style(self.fav_btn, card_btn_style)
+        self.fav_btn.clicked.connect(self._fav_current)
+        mp.addWidget(self.fav_btn)
         self.manual_popup.setFixedWidth(340)
         self.manual_popup.hide()
         self.manual_popup.closed.connect(self._on_manual_popup_closed)
@@ -531,37 +569,38 @@ class ResourceBrowser(QWidget):
         self._sync_target_ui()
 
     def _toggle_cards(self):
-        """点目标实例按钮:弹出/收起悬浮层(叠加在资源页上方,不把底部栏撑大)。"""
-        show = self.inst_cards_toggle.isChecked()
-        if show:
-            # 让滚动区先按内容算出高度(widgetResizable),再据此给浮窗定型
-            self.cards_scroll.setVisible(True)
-            self.cards_scroll.updateGeometry()
-            self.inst_popup.layout().activate()
-            hint = self.inst_popup.layout().sizeHint()
-            self.inst_popup.resize(max(320, hint.width()), max(60, hint.height()))
-            self._popup_above(self.inst_popup, self.inst_cards_toggle)
-            self.inst_popup.show()
-            self.inst_popup.raise_()
-            self.inst_cards_toggle.setText(
-                "▾ " + self.inst_cards_toggle.text()[2:])
-        else:
+        """点目标实例按钮:打开/收起悬浮层。"""
+        if self.inst_popup.isVisible():
             self._close_inst_popup()
+            return
+        if time.time() - getattr(self, "_cards_last_closed", 0) < 0.3:
+            return   # 刚被点外部自动关闭:这次点击不重复打开
+        self.inst_cards_toggle.setText("▾ " + self.inst_cards_toggle.text()[2:])
+        self.cards_scroll.setVisible(True)
+        self.cards_scroll.updateGeometry()
+        self.inst_popup.layout().activate()
+        hint = self.inst_popup.layout().sizeHint()
+        self.inst_popup.resize(max(320, hint.width()), max(60, hint.height()))
+        self._popup_above(self.inst_popup, self.inst_cards_toggle)
+        self._apply_shared_wallpaper(self.inst_popup)
+        self.inst_popup.show()
+        self.inst_popup.raise_()
 
     def _toggle_manual_popup(self):
-        """点手动下载按钮:弹出/收起悬浮层(游戏版本树 + 加载器 + mod版本)。"""
-        show = self.manual_toggle.isChecked()
-        if show:
-            self.manual_popup.layout().activate()
-            hint = self.manual_popup.layout().sizeHint()
-            self.manual_popup.resize(max(340, hint.width()), max(160, hint.height()))
-            self._popup_above(self.manual_popup, self.manual_toggle)
-            self.manual_popup.show()
-            self.manual_popup.raise_()
-            self.manual_toggle.setText(
-                "▾ " + self.manual_toggle.text()[2:])
-        else:
+        """点手动下载按钮:打开/收起悬浮层。"""
+        if self.manual_popup.isVisible():
             self._close_manual_popup()
+            return
+        if time.time() - getattr(self, "_manual_last_closed", 0) < 0.3:
+            return   # 刚被点外部自动关闭:这次点击不重复打开
+        self.manual_toggle.setText("▾ " + self.manual_toggle.text()[2:])
+        self.manual_popup.layout().activate()
+        hint = self.manual_popup.layout().sizeHint()
+        self.manual_popup.resize(max(340, hint.width()), max(160, hint.height()))
+        self._popup_above(self.manual_popup, self.manual_toggle)
+        self._apply_shared_wallpaper(self.manual_popup)
+        self.manual_popup.show()
+        self.manual_popup.raise_()
 
     def _popup_above(self, popup, anchor):
         """把浮窗放在 anchor(按钮)正上方,并夹在窗口水平范围内。"""
@@ -571,16 +610,36 @@ class ResourceBrowser(QWidget):
         y = g.y() - popup.height()
         popup.move(x, y)
 
+    def _apply_shared_wallpaper(self, popup):
+        """把主窗共享壁纸片段同步给弹层(按相对中央区位置),壁纸透出。"""
+        if not hasattr(popup, "set_shared_view"):
+            return
+        win = self.window()
+        cg = getattr(win, "_background", None)
+        scaled = getattr(win, "_wallpaper_scaled", None)
+        if popup is None or cg is None or scaled is None:
+            popup.set_shared_view(None, 0, 0, 0.6)
+            return
+        ox = getattr(win, "_wallpaper_ox", 0)
+        oy = getattr(win, "_wallpaper_oy", 0)
+        mask = getattr(win, "_wallpaper_mask", 0.6)
+        dg = popup.mapToGlobal(popup.rect().topLeft())
+        cgt = cg.mapToGlobal(cg.rect().topLeft())
+        popup.set_shared_view(scaled, ox + dg.x() - cgt.x(), oy + dg.y() - cgt.y(), mask)
+
     def _close_manual_popup(self):
         """收起手动下载悬浮层并复位箭头。"""
         self.manual_popup.hide()
-        self.manual_toggle.setChecked(False)
+        self._manual_last_closed = time.time()
         self.manual_toggle.setText(
             "▸ " + self.manual_toggle.text()[2:])
 
     def _on_manual_popup_closed(self):
-        if not self.manual_popup.isVisible() and self.manual_toggle.isChecked():
-            self.manual_toggle.setChecked(False)
+        # 弹层被点外部自动关闭:记录时刻(供按钮防重开守卫),并复位箭头
+        if self.manual_popup.isVisible():
+            return
+        self._manual_last_closed = time.time()
+        if self.manual_toggle.text().startswith("▾"):
             self.manual_toggle.setText(
                 "▸ " + self.manual_toggle.text()[2:])
 
@@ -724,14 +783,16 @@ class ResourceBrowser(QWidget):
     def _close_inst_popup(self):
         """收起目标实例悬浮层并复位标题箭头。"""
         self.inst_popup.hide()
-        self.inst_cards_toggle.setChecked(False)
+        self._cards_last_closed = time.time()
         self.inst_cards_toggle.setText(
             "▸ " + self.inst_cards_toggle.text()[2:])
 
     def _on_popup_closed_autoclose(self):
-        """浮窗被点外面/其他途径关闭时,把标题箭头复位成收起态。"""
-        if not self.inst_popup.isVisible() and self.inst_cards_toggle.isChecked():
-            self.inst_cards_toggle.setChecked(False)
+        """浮窗被点外面/其他途径关闭时,记录时刻(供按钮防重开守卫),并复位箭头。"""
+        if self.inst_popup.isVisible():
+            return
+        self._cards_last_closed = time.time()
+        if self.inst_cards_toggle.text().startswith("▾"):
             self.inst_cards_toggle.setText(
                 "▸ " + self.inst_cards_toggle.text()[2:])
 
@@ -942,12 +1003,41 @@ class ResourceBrowser(QWidget):
         self.desc_label.setText(h.get("description", ""))
         self.desc_note_label.setText("")
         self.desc_note_label.setVisible(False)
+        self._update_fav_btn()
         # 异步加载项目详情,刷新【mod 可用版本】下拉(方案一:gv/loader 是全局筛选不清,
         # 只清并重填 ver_combo —— 它才是逐 Mod 的)
         self.ver_combo.clear()
         self._load_project(h)
         # 后台线程翻译 Mod 描述(不卡 UI);若关闭开关则保持原文
         self._start_desc_translation(h)
+
+    def _fav_current(self):
+        """收藏当前资源(带手动下载里选的版本)到默认收藏夹。"""
+        import favorites as favs
+        h = getattr(self, "_current", None)
+        if not h or not h.get("slug"):
+            return
+        slug = h["slug"]
+        name = h.get("title") or slug
+        ver = self.ver_combo.currentText() or ""
+        d = favs.load()
+        favs.add(d, favs.DEFAULT_FOLDER, slug, name, ver)
+        favs.save(d)
+        self.fav_btn.setText("★ 已收藏")
+        from PySide6.QtWidgets import QToolTip
+        QToolTip.showText(self.fav_btn.mapToGlobal(self.fav_btn.rect().center()),
+                          f"已收藏 {name} → {favs.DEFAULT_FOLDER}")
+
+    def _update_fav_btn(self):
+        if not hasattr(self, "fav_btn"):
+            return
+        import favorites as favs
+        h = getattr(self, "_current", None)
+        slug = h.get("slug", "") if h else ""
+        if slug and favs.is_favorited(favs.load(), favs.DEFAULT_FOLDER, slug):
+            self.fav_btn.setText("★ 已收藏")
+        else:
+            self.fav_btn.setText("☆ 收藏该版本")
 
     def _start_desc_translation(self, h):
         """后台线程翻译当前 Mod 描述(英→中),不卡 UI。
@@ -1222,6 +1312,73 @@ class ResourceBrowser(QWidget):
         self._instance_dir = fn
 
 
+class _FavFolderList(QListWidget):
+    """收藏夹列表:接受从收藏卡片拖来的内容,落到哪个文件夹就复制到哪。"""
+
+    def __init__(self, owner):
+        super().__init__()
+        self._owner = owner
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QListWidget.DragDropMode.DropOnly)
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasFormat("application/x-amcl-favorite"):
+            e.acceptProposedAction()
+        else:
+            super().dragEnterEvent(e)
+
+    def dragMoveEvent(self, e):
+        if e.mimeData().hasFormat("application/x-amcl-favorite"):
+            e.acceptProposedAction()
+        else:
+            super().dragMoveEvent(e)
+
+    def dropEvent(self, e):
+        if e.mimeData().hasFormat("application/x-amcl-favorite"):
+            slug = bytes(e.mimeData().data("application/x-amcl-favorite")).decode()
+            folder = self.itemAt(e.position().toPoint())
+            if folder is not None and self._owner is not None:
+                self._owner._on_fav_dropped(slug, folder.text())
+            e.acceptProposedAction()
+        else:
+            super().dropEvent(e)
+
+
+class _FavCard(QPushButton):
+    """收藏卡片:按住可拖出,拖到其它收藏夹 = 复制。"""
+
+    def __init__(self, text: str, slug: str):
+        super().__init__(text)
+        self._slug = slug
+        self._press = None
+        self.setMinimumSize(160, 72)
+        from ui_style import card_btn_style, set_style
+        set_style(self, card_btn_style)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._press = e.pos()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._press is not None and (e.buttons() & Qt.MouseButton.LeftButton):
+            if (e.pos() - self._press).manhattanLength() > 8:
+                from PySide6.QtCore import QMimeData
+                from PySide6.QtGui import QDrag
+                drag = QDrag(self)
+                mime = QMimeData()
+                mime.setData("application/x-amcl-favorite", self._slug.encode())
+                drag.setMimeData(mime)
+                drag.exec_(Qt.DropAction.CopyAction)
+                self._press = None
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._press = None
+        super().mouseReleaseEvent(e)
+
+
 class ResourceCenter(QWidget):
     """下载新资源:左侧可折叠菜单 + 右侧分类面板(首页/实例/Mod/光影/数据包/资源包)。"""
 
@@ -1287,7 +1444,7 @@ class ResourceCenter(QWidget):
             self.stack.addWidget(br)                        # 3..6
 
         # 收藏夹:占位(收藏/批量下载/AI平替逻辑下一步做,先给入口)
-        self.stack.addWidget(self._build_favorites_placeholder())   # 7
+        self.stack.addWidget(self._build_favorites())   # 7
 
         # 启动器插件:占位页(插件生态建设中,先给入口)
         self.stack.addWidget(self._build_plugins_placeholder())   # 8
@@ -1360,23 +1517,148 @@ class ResourceCenter(QWidget):
         layout.addStretch()
         return home
 
-    def _build_favorites_placeholder(self) -> QWidget:
-        """收藏夹(占位):后续实现「收藏/批量下载/版本检查/AI 找平替」。先给入口 + 说明。"""
+    def _build_favorites(self) -> QWidget:
+        """收藏页:左文件夹列表(默认 + 用户自定义)+ 右收藏卡片;拖卡片到文件夹可跨夹复制。"""
+        import favorites as favs
         page = QWidget()
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(16, 16, 16, 16)
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(8, 8, 8, 8)
         outer.setSpacing(8)
-        title = QLabel("⭐ 收藏夹")
-        title.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {text_color()};")
-        outer.addWidget(title)
-        note = QLabel("这里汇聚你在各资源页收藏的 Mod(可收藏指定版本)。\n"
-                      "后续支持:批量下载到目标实例、不兼容提示、用 AI 找功能类似的平替。\n\n"
-                      "(当前为占位页,收藏/下载功能开发中。)")
-        note.setWordWrap(True)
-        note.setStyleSheet(hint_style())
-        outer.addWidget(note)
-        outer.addStretch()
+
+        # 左:文件夹列表(接受从收藏卡片拖来 → 复制)
+        left = QWidget(); left.setFixedWidth(180)
+        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 0, 0); ll.setSpacing(4)
+        self._fav_folder_list = _FavFolderList(self)
+        set_style(self._fav_folder_list, list_style)
+        self._fav_folder_list.currentRowChanged.connect(self._on_fav_folder_changed)
+        ll.addWidget(self._fav_folder_list, 1)
+        brow = QHBoxLayout(); brow.setSpacing(4)
+        add_btn = QPushButton("+ 新建"); add_btn.clicked.connect(self._on_fav_add_folder)
+        del_btn = QPushButton("删除"); del_btn.clicked.connect(self._on_fav_del_folder)
+        brow.addWidget(add_btn); brow.addWidget(del_btn)
+        ll.addLayout(brow)
+        hint = QLabel("把卡片拖到左侧文件夹 → 复制到该夹")
+        hint.setWordWrap(True); hint.setStyleSheet(hint_style())
+        ll.addWidget(hint)
+        outer.addWidget(left)
+
+        # 右:收藏卡片(可拖出)
+        self._fav_cards = QWidget()
+        self._fav_cards_layout = FlowLayout(hspacing=8, vspacing=8)
+        self._fav_cards.setLayout(self._fav_cards_layout)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }")
+        scroll.setWidget(self._fav_cards)
+        outer.addWidget(scroll, 1)
+
+        self._fav_data = favs.load()
+        self._refresh_fav_folders()
         return page
+
+    # ---- 收藏页操作 ----
+    def _refresh_fav_folders(self):
+        self._fav_folder_list.blockSignals(True)
+        self._fav_folder_list.clear()
+        import favorites as favs
+        for f in favs.folders(self._fav_data):
+            self._fav_folder_list.addItem(f)
+        self._fav_folder_list.blockSignals(False)
+        if self._fav_folder_list.count():
+            self._fav_folder_list.setCurrentRow(0)
+        else:
+            self._on_fav_folder_changed()
+
+    def _on_fav_folder_changed(self, _row=-1):
+        row = self._fav_folder_list.currentRow()
+        folder = self._fav_folder_list.item(row).text() if row >= 0 else None
+        self._refresh_fav_cards(folder)
+
+    def _refresh_fav_cards(self, folder):
+        while self._fav_cards_layout.count():
+            it = self._fav_cards_layout.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.setParent(None)
+        if not folder:
+            return
+        import favorites as favs
+        for slug, h in favs.items(self._fav_data, folder).items():
+            name = h.get("name", slug)
+            ver = h.get("version", "")
+            text = name + (f"\n{ver}" if ver else "")
+            card = _FavCard(text, slug)
+            card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            card.customContextMenuRequested.connect(
+                lambda _p, s=slug: self._fav_card_menu(s))
+            self._fav_cards_layout.addWidget(card)
+
+    def _fav_card_menu(self, slug):
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+        act_remove = menu.addAction("从收藏夹移除")
+        cur = self._fav_folder_list.currentItem().text() if self._fav_folder_list.currentItem() else None
+        copy_menu = menu.addMenu("复制到 →")
+        import favorites as favs
+        for f in favs.folders(self._fav_data):
+            if f == cur:
+                continue
+            copy_menu.addAction(f, lambda _c=False, ff=f: self._copy_fav(slug, ff))
+        chosen = menu.exec_(QCursor.pos())
+        if chosen == act_remove:
+            self._remove_fav(slug)
+
+    def _current_fav_folder(self):
+        return self._fav_folder_list.currentItem().text() if self._fav_folder_list.currentItem() else None
+
+    def _copy_fav(self, slug, to_folder):
+        import favorites as favs
+        cur = self._current_fav_folder()
+        if cur and favs.copy(self._fav_data, cur, to_folder, slug):
+            favs.save(self._fav_data)
+            self._refresh_fav_cards(cur)
+
+    def _remove_fav(self, slug):
+        import favorites as favs
+        cur = self._current_fav_folder()
+        if cur:
+            favs.remove(self._fav_data, cur, slug)
+            favs.save(self._fav_data)
+            self._refresh_fav_cards(cur)
+
+    def _on_fav_dropped(self, slug, to_folder):
+        """收藏卡片拖到某文件夹 → 跨夹复制。"""
+        import favorites as favs
+        cur = self._current_fav_folder()
+        if cur and cur != to_folder and favs.copy(self._fav_data, cur, to_folder, slug):
+            favs.save(self._fav_data)
+            self._refresh_fav_cards(cur)
+
+    def _on_fav_add_folder(self):
+        from PySide6.QtWidgets import QInputDialog
+        import favorites as favs
+        text, ok = QInputDialog.getText(self, "新建收藏夹", "收藏夹名称:")
+        text = text.strip()
+        if ok and text and text not in self._fav_data:
+            self._fav_data[text] = {}
+            favs.save(self._fav_data)
+            self._refresh_fav_folders()
+
+    def _on_fav_del_folder(self):
+        import favorites as favs
+        cur = self._fav_folder_list.currentItem()
+        if cur is None:
+            return
+        folder = cur.text()
+        if folder == favs.DEFAULT_FOLDER:
+            QMessageBox.information(self, "删除收藏夹", "默认收藏夹不能删除")
+            return
+        if QMessageBox.question(self, "删除收藏夹", f"删除收藏夹「{folder}」?") == QMessageBox.StandardButton.Yes:
+            self._fav_data.pop(folder, None)
+            favs.save(self._fav_data)
+            self._refresh_fav_folders()
 
     def _build_plugins_placeholder(self) -> QWidget:
         """启动器插件商店:手动注册仓库源 → 列出仓库里的插件 → 一键安装单文件。
