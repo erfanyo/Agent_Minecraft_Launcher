@@ -71,6 +71,11 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed --name AgentMinec
 
 > 本项目未购买代码签名证书(个人免费项目),exe 未签名属正常现象;已关闭 UPX 压缩以减少误报。
 
+> **若出现「应用程序控制策略已阻止此文件」**(比上面更严,通常**没有**「仍要运行」按钮):
+> 这是 Windows 11 的**智能应用控制(Smart App Control)**在拦未签名的新文件。一次性放行/关闭方法:
+> **Windows 安全中心 → 应用和浏览器控制 → 智能应用控制设置 → 关**。
+> ⚠️ 部分系统关闭后**不能在设置里重新打开**(除非清理系统或重装),请知悉;这属于本机放行,不是给所有人都能一键过关的办法。
+
 #### 🔍 SHA256 校验码
 每次 Release 的 exe 校验码发布在对应 Release 说明里。校验方法(Windows PowerShell):
 

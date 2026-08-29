@@ -11,7 +11,34 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
-## [v0.5.0] - 2026-08-29
+## [v0.5.1] - 2026-08-29
+
+> 🐛 修复版:AI 工具挂载 / 提问框默认 / 实例选中 / 教程遮罩对齐 + 智能应用控制放行文档。
+> 用户向说明见 `RELEASE_NOTES_0.5.1.md`。
+
+### 🐛 修复
+- **云端按意图挂载工具漏挂玩/安装意图词**(`assistant.py`):「我想玩机械动力航空学」等只说想玩、不点名
+  mod/整合包时,mod/modpack/instance 关键词组全未命中 → 只挂通用工具,模型选不到 search_mods/
+  install_modpack。`TOOL_GROUP_KEYWORDS` 补 玩/想玩/要玩/来玩/玩个/帮我装/装个 + 机械动力/航空/
+  create/aeronautics 等,让玩&安装意图命中相应组(超限由 CLOUD_MAX_TOOLS 截断、核心工具保底)。
+- **AI 提问框默认高亮落在「取消」**(`assistant_ui.py`):AskUserDialog 未设 default 按钮 → Qt 默认取
+  「取消」并高亮,回车误触发拒绝。改 `ok_btn.setDefault(True)` + `cancel_btn.setAutoDefault(False)`,
+  焦点落到输入框(回车=确定)。
+- **实例选中后自动取消(详情页闪退)**(`main.py`):`refresh_instances()` 里 `instance_list.clear()` 把当前
+  项清成 None → `currentItemChanged(None)` → `instance_selected.emit(None)` → 详情页被隐藏;
+  versions/ 目录变动(防抖 500ms)或其它刷新触发时刚选中的实例被"自动取消"。改为重建列表时
+  blockSignals、按 id 复原选中(仍在则保留,真没了才→None),最后统一同步一次 UI。
+- **引导教程遮罩对不齐**(`guide_overlay.py` + `main.py` + `resource_center.py`):步骤③目标 filter_version
+  现藏进"手动下载"隐藏浮层 → 改指顶部常驻搜索框 resource_search(加 objectName);步骤④ plugins_page
+  在资源中心 stack 索引 7(现收藏夹)→ 改 8;`_show` 切到目标页/子页后先 `QApplication.processEvents()`
+  让布局就位再量几何。
+
+### 📄 文档
+- README 补「应用程序控制策略已阻止此文件」处理:Windows 11 智能应用控制(Smart App Control)拦
+  未签名文件、无「仍要运行」;放行:**安全中心 → 应用和浏览器控制 → 智能应用控制设置 → 关**
+  (部分系统关后无法在设置里重开,属本机放行)。
+
+
 
 > ✨ 功能版:前端现代化改造(stage 0-4)落地 + 下载新资源优化 + 新增收藏夹。
 > 用户向说明见 `RELEASE_NOTES_0.5.0.md`。
