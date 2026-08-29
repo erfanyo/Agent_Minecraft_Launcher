@@ -296,8 +296,10 @@ class AskUserDialog(QDialog):
         self.input.setToolTip("多选下面的选项,或在输入框补充说明;都会发给 AI")
 
         ok_btn = QPushButton("确定")
+        ok_btn.setDefault(True)          # 回车=确定;高亮落在确定而不是取消
         ok_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton("取消")
+        cancel_btn.setAutoDefault(False)  # 取消绝不因回车被触发(误触=拒绝,不合逻辑)
         cancel_btn.clicked.connect(self.reject)
         row = QHBoxLayout()
         row.addStretch()
@@ -311,6 +313,8 @@ class AskUserDialog(QDialog):
         layout.addSpacing(6)
         layout.addWidget(self.input)
         layout.addLayout(row)
+        # 焦点落到输入框:用户可直接打字,回车即「确定」
+        self.input.setFocus()
 
     def selected(self) -> list:
         """收集:勾选项 + 输入补充(非空)"""
