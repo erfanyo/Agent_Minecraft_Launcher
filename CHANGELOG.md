@@ -11,7 +11,38 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
-## [v0.4.2] - 2026-08-26
+## [v0.5.0] - 2026-08-29
+
+> ✨ 功能版:前端现代化改造(stage 0-4)落地 + 下载新资源优化 + 新增收藏夹。
+> 用户向说明见 `RELEASE_NOTES_0.5.0.md`。
+
+### ✨ 新增
+- **收藏夹**(`favorites.py` 数据层 + `resource_center.py` 收藏页):
+  - 按文件夹存 `{slug: {name, version}}`(`AMCL/favorites.json`),默认收藏夹 + 用户自定义。
+  - 资源详情卡片 `☆ 收藏该版本` 一键收藏(资源 + 当前选中版本);已收藏变 `★ 已收藏`。
+  - 收藏页左文件夹列表 / 右收藏卡片,卡片可**拖到其它文件夹 = 跨夹复制**,右键菜单支持移除 / 复制。
+- **全局设计 token 层**(`ui_tokens.py`):`COLOR_SLOTS`(21 槽)+ `COLOR_TOKENS` + `SPACING/RADIUS/SHADOW/DURATION/EASING`,单一事实来源;`ui_style.py` 委托它(公共 API 不变)。
+- **背景/壁纸系统**(`ui_background.py`):`BackgroundWidget`(cover + 共享视图),`preset_pixmap`(水平渐变),`prepare_shared_wallpaper`,`input_style_qss`(半透明输入框/列表),`mask_color/mask_strength`;设置里可开背景(渐变/自定义图片)。
+- **下载环详情并入主窗**(`download_indicator.py` 的 `DownloadDetailWidget`)。
+
+### 🎨 界面改造
+- **半透明磨砂**:壁纸模式下面板/按钮/输入框统一 0.62 透明(`_WALLPAPER_OVERRIDES`),嵌套半透明叠两层不再显得不透明(此前 0.72 嵌套≈0.92)。
+- **共享壁纸相对位置**:主窗"中央裁切",AI 停靠/条带/弹层按 `ox+dx,oy+dy` 画同一片壁纸片段,越界 clamp 到画布边缘(不出黑块)。
+- **动画**(`ui_anim.py`):`fade_in/fade_out` + `set_animations_enabled`,时长走 `ui_tokens.DURATION`;实例详情 / 主 tab 切换加过渡。
+- **滚动条逐像素**(`ScrollPerPixel`)应用到版本树 / 实例列表 / 资源搜索结果。
+- `theme_icon.py` 补 `favorite`(空心星)、`loader`(齿轮)SVG。
+
+### 🛠 下载新资源优化(`resource_center.py`)
+- 布局重排:左搜索列表 + 右详情,底部「手动下载 / 目标实例 / 下载」三卡折叠条(互不干扰)。
+- **无限滚动**:`_offset/_no_more/_load_more`,往下拉自动加载。
+- Mod 详情面板改**透明底 + 细边框**(`panel` QScrollArea viewport 设透明,修复"详情不透"根因)。
+- 「手动下载」/「目标实例」悬浮层:非 checkable 按钮,按弹出可见性开关 + `_xxx_last_closed`(0.3s)防重开守卫,自动关闭与手动收起路径均写时刻,单次点击可正确收起。
+- `modrinth.py` 搜索增 `offset` 参数、返回 `loaders`;`_modpack_fallback_icon` 预留加载器 logo 占位(TODO)。
+
+### 🔧 其它
+- `settings.py` 增 `ui_wallpaper_*` / `ui_animations_enabled`(默认开)。
+
+
 
 > 🐛 补丁版:修复 v0.4.1 引入的引导页/引导教程显示问题。
 
