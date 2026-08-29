@@ -312,6 +312,7 @@ class ResourceBrowser(QWidget):
     def _build_ui(self):
         # ---- 搜索区 ----
         self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("resource_search")   # 教程定位(顶部常驻搜索框)
         self.search_edit.setPlaceholderText(
             t(f"搜索{self.label},回车确认(如 sodium / 钠 / 名字)", f"Search {self.label}, press Enter..."))
         self.search_edit.returnPressed.connect(self.do_search)

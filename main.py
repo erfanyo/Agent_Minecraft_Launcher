@@ -525,12 +525,12 @@ class MainWindow(QMainWindow):
                      "NeoForge 是 Forge 的现代继承者(1.20.2 及以上);"
                      "Fabric 轻量、Mod 多。以后可能支持更多加载器。"},
             # ---- 下载 Mod(不遮盖选项,多个一起讲)----
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"), ("widgetname", "filter_version")],
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"), ("widgetname", "resource_search")],
              "arrow": "below",
              "text": "③ 这里逛 Mod:搜索框搜中文/英文;上面能选「游戏版本 + 加载器」、排序/标签,"
                      "找到后点「下载」装到目标实例。光影包 / 数据包 / 资源包 也是同样的逛法。"},
             # ---- 启动器插件(默认仓库)----
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "7"), ("widgetname", "plugins_page")],
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "8"), ("widgetname", "plugins_page")],
              "arrow": "below",
              "text": "④ 启动器插件页:默认已填好官方仓库(erfanyo/Agent_Minecraft_Launcher,"
                      "plugins.json 清单);点「添加仓库」还能加别的仓库,仓库里的插件可一键安装。"},

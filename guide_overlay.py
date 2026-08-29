@@ -10,7 +10,7 @@ import math
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal, QObject, QPointF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QPolygonF
 from PySide6.QtWidgets import (
-    QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
+    QApplication, QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
 )
 
 import ui_route
@@ -204,6 +204,9 @@ class GuideDriver(QObject):
         self.overlay.on_prev = self.prev
         self.overlay.on_skip = self.finish
         self.overlay.show()
+        # 目标常位于刚切到的页(如 DownloadTab 内部 stack / 资源浏览器)或其下控件;
+        # 先处理布局事件,确保几何已就位,否则遮罩会框到旧位置/隐藏页上(对齐偏移)。
+        QApplication.processEvents()
         TOP = self.overlay
         # 目标控件全局矩形 → 遮罩坐标
         tl = target.mapToGlobal(QPoint(0, 0))
