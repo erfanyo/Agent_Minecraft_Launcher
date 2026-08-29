@@ -523,11 +523,10 @@ class ResourceBrowser(QWidget):
             r.addWidget(QLabel(lbl))
             r.addWidget(combo, 1)
             mp.addLayout(r)
-        # 收藏当前资源 + 手动下载里选的指定版本
+        # 收藏按钮:创建,但放进底部下载卡(和「下载」并排,始终可见)而非手动下载浮层
         self.fav_btn = QPushButton("☆ 收藏该版本")
         set_style(self.fav_btn, card_btn_style)
         self.fav_btn.clicked.connect(self._fav_current)
-        mp.addWidget(self.fav_btn)
         self.manual_popup.setFixedWidth(340)
         self.manual_popup.hide()
         self.manual_popup.closed.connect(self._on_manual_popup_closed)
@@ -558,6 +557,7 @@ class ResourceBrowser(QWidget):
         db = QVBoxLayout(dl_card)
         db.setContentsMargins(8, 8, 8, 8)
         db.addWidget(self.dl_btn)
+        db.addWidget(self.fav_btn)   # 收藏当前资源+选中版本,和下载并排常驻可见
         self.dl_card = dl_card
         row.addWidget(dl_card, 2)
 
@@ -973,7 +973,7 @@ class ResourceBrowser(QWidget):
         self._current = h
         for w in (self.title_label, self.meta_label,
                   self.desc_label, self.gv_combo, self.loader_combo,
-                  self.ver_combo, self.dl_btn):
+                  self.ver_combo, self.dl_btn, self.fav_btn):
             w.setVisible(True)
         self.empty_label.setVisible(False)
         self.title_label.setText(h["title"])
