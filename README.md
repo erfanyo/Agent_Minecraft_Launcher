@@ -200,4 +200,4 @@ bridge-mod 单独 tag(如 `v0.1.0`),附 `agentmc-bridge-fabric/neoforge-*.jar` �
 
 ## 📜 规划
 
-后续规划见 [ROADMAP.md](ROADMAP.md)(配方数据新鲜度、直接读 mod jar 配方、MCP server、崩溃日志分析技能等)。
+后续规划见 [规划-汇总.md](规划-汇总.md)(唯一定位文档;历史拆分稿已归档到 `docs/archive/`)。

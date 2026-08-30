@@ -99,7 +99,7 @@
   client_id 在该租户的可用性(2025 后对第三方启动器收紧,要求**自注册 Azure AD 应用**,见 PrismLauncher #3300 等)。
   **解决方案(需一次性手工注册,待定)**:Azure portal 免费注册个人 Azure AD 应用取自己的 `client_id`
   (允许 device code,scope `service::user.auth.xboxlive.com::MSCS`),替换 `_CLIENT_ID`;规划做成「设置里可填
-  自定义 client_id」最稳妥。详见 `ROADMAP.md` 待办。
+  自定义 client_id」最稳妥。详见 `docs/archive/ROADMAP.md` 待办。
 
 ## [v0.4.1] - 2026-08-26
 
@@ -255,7 +255,7 @@
 - **🧭 引导式教程框架(演示,UI 路由方案)(2026-08-25)**:不再用静态说明页,改为**指着真实 UI 引导**。通用框架:`ui_route.py`(逻辑 route → 真实控件解析)+ `guide_overlay.py`(spotlight 遮罩:调暗其余、目标控件挖洞高亮、箭头+说明气泡+上一步/下一步/跳过)。步骤=纯数据 {route, arrow, text};UI 改了只改 route,框架不动。入口:菜单「帮助 → 📖 引导教程(演示)…」,demo 指向 **启动实例(启动游戏)** → 启动器设置 → 下载新资源/Mod。
 - **实例管理 → 实例详情**:对话框标题与"管理实例"入口文本统一改为「实例详情」(与后续"和下载新资源一致的左菜单+右面板"布局方向一致,当前仍为对话框)。
 - **设置改为顶部标签卡 + 统一布局(模块化)**:设置入口不再弹**模态**对话框,改为主窗口「设置」标签页(和「我的版本 / 下载新资源」平级)。新建 **`CenterShell`**(左菜单纵向 + 右面板,和下载新资源同款操作逻辑)+ **`SettingsCenter`**(左菜单:游戏/界面/AI 助手/镜像源 → 右面板;底部「保存设置」)。这解决了引导遮罩被模态设置框挡住的问题(设置变非模态)。`open_settings` 改为切换到「设置」标签卡(镜像源… 会切到镜像源小节)。
-- **🧭 引导式教程方案已记录**:`引导式教程-方案.md`(技术方案 + 不确定清单,防上下文丢失;不确定处标 ⚠️,做对应部分时再问)。`ui_route`(route→控件)+ `guide_overlay`(spotlight 遮罩+气泡+上一步/下一步)框架 + 演示先落地。
+- **🧭 引导式教程方案已记录**:`docs/archive/引导式教程-方案.md`(技术方案 + 不确定清单,防上下文丢失;不确定处标 ⚠️,做对应部分时再问)。`ui_route`(route→控件)+ `guide_overlay`(spotlight 遮罩+气泡+上一步/下一步)框架 + 演示先落地。
 - **左菜单独立模块 + 统一布局(模块化,为动画预留)**:新增 **`left_menu.py`(LeftMenu 独立模块)**——"左菜单"抽成独立小模块,样式统一、可选中高亮(蓝条+圆角),去掉折叠功能,内部可后续加动画。`CenterShell`(设置/实例详情/下载新资源共用)与 **ResourceCenter** 都改用它;删除原 ResourceCenter 的"◀ 收起/▶ 展开"折叠按钮。
 - **深色模式统一(实例详情等对话框)**:新增全局深色调色板 `apply_global_dark_palette`(系统深色时应用,默认控件 QMenu/QComboBox/QTabWidget/QMessageBox 等不再露浅色)+ 对话框深色样式 `dialog_dark_style`;实例详情标签页改用 `tab_style`(和「我的版本」一致),恢复其内部大量"没兼容深色"的菜单/按钮/列表。**实例详情改为"左菜单 + 右面板"布局**(复用 CenterShell,和下载新资源/设置同一套)。
 - **配色主题架构预留(未来自定义配色方案)**:所有颜色集中到 `ui_style.COLOR_SLOTS`(颜色槽),样式函数经 `current_color(name)` 读取;自定义主题 = `set_custom_colors({name: color})` 覆盖某颜色槽即全局生效。预留设置键 `ui_theme`(auto/dark/light/custom)与 `ui_custom_colors`(dict),启动时 `load_theme_from_settings` 接入(设置界面暂未做入口)。
@@ -511,7 +511,7 @@
 ### 🧠 游戏内 AI 通道设计(§5.1,2026-08-23 决策)
 - 新增设置项设计 `ai_in_game`(off/cloud/local),决定游戏启动时本地模型去留:
   off/cloud → 卸载(省内存给游戏);local → 常驻服务游戏内 AI(bridge-mod 未来入口,日程见 ROADMAP)
-- 已写入 AI规划.md §5.1 + 任务书 W7,前端实现待多模态模型执行
+- 已写入 `docs/archive/AI规划.md` §5.1 + 任务书 W7,前端实现待多模态模型执行
 
 ### 🧠 聊天循环接入本地路由(W3,§1 落地)
 - `assistant.py` AIChatDock 新增 `_local_enabled` / `_get_local_engine`(懒加载单例)/
@@ -539,7 +539,7 @@
   用自带 llama.cpp server(b10590)加载 xLAM Q4_K_M,输出结构 100% 合法 JSON
 - **grammar 约束解码实测有效**:31 条测试集 ×3 次平均,参数准确率 79.0% vs 原生 tools 69.4%(+9.6%),
   验证"结构上必对"——required 字段强制必填
-- 踩坑记录已写入 AI规划.md §8.2(GBNF 规则名禁下划线 / name-args 需绑定 / 必填卡顿需重试)
+- 踩坑记录已写入 `docs/archive/AI规划.md` §8.2(GBNF 规则名禁下划线 / name-args 需绑定 / 必填卡顿需重试)
 - 内置 llama.cpp 完整二进制(AMCL/runtime/llama-cpp,CPU 兜底;有 LM Studio 时可走其 CUDA 后端)
 
 ### 🧠 AI 本地模型验证(规划 §8.1)
@@ -550,7 +550,7 @@
 - 评测链路:`.tmp/eval_models.py`(LM Studio API,温度 0 可复现)+ `.tmp/eval_driver.py`
 - 模型文件存 `AMCL/models/`(通用版 508.9MB + xLAM 版 504.8MB,均 Q4_K_M,sha256 钉住)
 
-规划中的内容见 [ROADMAP.md](ROADMAP.md):
+规划中的内容见 [规划-汇总.md](规划-汇总.md)(唯一定位;历史稿已归档 `docs/archive/`):
 - 本地推理模块原型(grammar 约束解码先行)
 - 配方数据新鲜度提示
 - 直接读 mod jar 配方(无需进游戏导出)

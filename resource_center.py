@@ -1802,7 +1802,7 @@ class ResourceCenter(QWidget):
     def set_ui_mode(self, mode: str):
         """界面模式(对外叫「全面 / 摘要」,内部 beginner/expert 兼容旧配置):
         全面(beginner)= 显示科普/提示;摘要(expert)= 隐藏科普、精简提示。
-        ⚠️ 规范:以后新增界面提示/科普,都要来这里按模式做显隐(见 项目规划.md 界面规范)。
+        ⚠️ 规范:以后新增界面提示/科普,都要来这里按模式做显隐(见 docs/archive/项目规划.md 界面规范)。
         """
         self._ui_mode = "expert" if str(mode or "") in ("expert", "summary") else "beginner"
         full = self._ui_mode != "expert"
