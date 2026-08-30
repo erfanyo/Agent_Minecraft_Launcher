@@ -24,7 +24,8 @@ import requests
 from downloader import download_with_mirror
 
 # bridge-mod 兜底版本(当自动发现拿不到 jar 版本号时用);也用于版本表。
-BRIDGE_MOD_VERSION = "0.1.0"
+# 注意:2026-08-30 bridge-mod 升 0.2.0:新增 server_type 上报,供游戏内 AI 按游戏类型判权限。
+BRIDGE_MOD_VERSION = "0.2.0"
 
 # 兜底版本表:loader -> mc_version -> {version, url, sha1}
 # 仅用于【离线 + 无法访问 GitHub】时的 sha1 校验兜底;正常优先自动发现。

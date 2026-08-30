@@ -82,6 +82,13 @@ public final class AiChat {
         req.addProperty("player", playerName);
         req.addProperty("is_op", isOp);
         req.addProperty("exec_mode", console ? "console" : "player");
+        // 当前游戏类型:单机房主(integrated 未开 LAN)/ 局域网房主(integrated 已 Open to LAN)
+        // / 专用服务器。launcher 侧据此判权限:前两种=本机房主,允许执行指令;
+        // 专用服务器才按 OP 收紧,避免替非 OP 玩家越权。
+        boolean dedicated = server.isDedicatedServer();
+        String serverType = dedicated ? "dedicated"
+                : (server.isPublished() ? "lan" : "singleplayer");
+        req.addProperty("server_type", serverType);
         if (playerEnt != null) {
             try {
                 Vec3 pos = playerEnt.position();

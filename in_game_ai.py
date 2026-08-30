@@ -109,6 +109,7 @@ class InGameAI:
                             "player": player,
                             "is_op": bool(req.get("is_op", False)),
                             "exec_mode": req.get("exec_mode", "player"),
+                            "server_type": req.get("server_type", ""),
                             "pos": req.get("pos", ""),
                             "dim": req.get("dim", ""),
                             "held": req.get("held", ""),
@@ -200,9 +201,15 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
         ctxt_line.append(f"手持:{ctx['held']}")
     if ctxt_line:
         parts.append("玩家上下文(回答尽量结合):" + "; ".join(ctxt_line))
-    # 是否允许执行指令:控制台模式或 OP 玩家才允许;非 OP 玩家强制只读
-    can_exec = bool(ctx.get("is_op")) or ctx.get("exec_mode") == "console" \
-               or (ctx.get("exec_mode") != "player")   # 无玩家上下文(纯服务端)放行
+    # 是否允许执行指令:单机房主/局域网房主 = 本机用户(允许执行,最终能否成功由
+    # 世界"允许作弊"决定);连的专用服务器(或未知)才按 OP/console 收紧,避免替非 OP 玩家越权。
+    server_type = str(ctx.get("server_type", "") or "").lower()
+    _is_host = server_type in ("singleplayer", "lan")
+    if _is_host:
+        can_exec = True
+    else:
+        can_exec = bool(ctx.get("is_op")) or ctx.get("exec_mode") == "console" \
+                   or (ctx.get("exec_mode") != "player")   # 无玩家上下文(纯服务端)放行
     tool_note = (
         "你正在【游戏内】响应玩家,当前运行实例:「%s」。"
         "玩家不用切出游戏。能执行就直接执行、不要只给指南:"
@@ -241,8 +248,13 @@ def make_answerer(win=None, settings: dict | None = None):
             instance = ctx.get("instance", "")
             is_op = bool(ctx.get("is_op", False))
             exec_mode = ctx.get("exec_mode", "player")
-            # 是否允许执行指令:OP 玩家 或 --console 或 无玩家(curl/纯服务端)放行
-            allow_exec = is_op or exec_mode == "console" or not ctx.get("player")
+            # 单机房主/局域网房主 = 本机用户:允许执行指令(能否成功由世界"允许作弊"兜底);
+            # 连的专用服务器(或未知)才按 OP/console 收紧,避免替非 OP 玩家越权。
+            _server_type = str(ctx.get("server_type", "") or "").lower()
+            if _server_type in ("singleplayer", "lan"):
+                allow_exec = True
+            else:
+                allow_exec = is_op or exec_mode == "console" or not ctx.get("player")
             force_tools = _FULL_TOOLS if allow_exec else _READONLY_TOOLS
             from assistant import route_answer
             system = _in_game_ctx(win, instance, cfg, ctx)
