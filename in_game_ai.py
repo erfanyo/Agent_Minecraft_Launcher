@@ -173,6 +173,25 @@ def _make_cloud_executor(instance: str, base_exec, exec_mode: str = "player",
     return executor
 
 
+def _can_exec(ctx: dict) -> bool:
+    """统一判定:游戏内 AI 能否执行改动指令(供 _in_game_ctx 与 make_answerer 共用,避免两边矛盾)。
+    - 单机房主 / 局域网房主(server_type=singleplayer/lan)= 本机用户 → 允许(能否成功由世界"允许作弊"兜底);
+    - 连的专用服务器(dedicated)→ 仅 OP / --console 才允许,防替非 OP 玩家越权;
+    - 未知(旧 jar 不报 server_type/player):没报玩家 → 无法判定 → 放行(交给 MC 自行判);
+      报了玩家且知其非 OP → 仅 OP/console。"""
+    server_type = str(ctx.get("server_type") or "").lower()
+    if server_type in ("singleplayer", "lan"):
+        return True
+    is_op = bool(ctx.get("is_op", False))
+    is_console = ctx.get("exec_mode") == "console"
+    if server_type == "dedicated":
+        return is_op or is_console
+    # 未知(旧协议):没报玩家就放行;报了玩家按 OP/console 收紧
+    if not ctx.get("player"):
+        return True
+    return is_op or is_console
+
+
 def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) -> str:
     """游戏内 AI 的系统提示 = 启动器 ai_context(含 skill 系统)+ 当前实例说明 + 玩家上下文。"""
     parts = []
@@ -201,15 +220,9 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
         ctxt_line.append(f"手持:{ctx['held']}")
     if ctxt_line:
         parts.append("玩家上下文(回答尽量结合):" + "; ".join(ctxt_line))
-    # 是否允许执行指令:单机房主/局域网房主 = 本机用户(允许执行,最终能否成功由
-    # 世界"允许作弊"决定);连的专用服务器(或未知)才按 OP/console 收紧,避免替非 OP 玩家越权。
-    server_type = str(ctx.get("server_type", "") or "").lower()
-    _is_host = server_type in ("singleplayer", "lan")
-    if _is_host:
-        can_exec = True
-    else:
-        can_exec = bool(ctx.get("is_op")) or ctx.get("exec_mode") == "console" \
-                   or (ctx.get("exec_mode") != "player")   # 无玩家上下文(纯服务端)放行
+    # 是否允许执行指令:单机房主/局域网房主 = 本机用户(允许,能否成功由世界"允许作弊"决定);
+    # 连的专用服务器(或未知且报了非 OP 玩家)才按 OP/console 收紧,避免替非 OP 玩家越权。
+    can_exec = _can_exec(ctx)
     tool_note = (
         "你正在【游戏内】响应玩家,当前运行实例:「%s」。"
         "玩家不用切出游戏。能执行就直接执行、不要只给指南:"
@@ -246,15 +259,8 @@ def make_answerer(win=None, settings: dict | None = None):
                 return "游戏内 AI 未开启(设置→AI 助手→开启游戏内 AI)。"
             ctx = ctx or {}
             instance = ctx.get("instance", "")
-            is_op = bool(ctx.get("is_op", False))
-            exec_mode = ctx.get("exec_mode", "player")
-            # 单机房主/局域网房主 = 本机用户:允许执行指令(能否成功由世界"允许作弊"兜底);
-            # 连的专用服务器(或未知)才按 OP/console 收紧,避免替非 OP 玩家越权。
-            _server_type = str(ctx.get("server_type", "") or "").lower()
-            if _server_type in ("singleplayer", "lan"):
-                allow_exec = True
-            else:
-                allow_exec = is_op or exec_mode == "console" or not ctx.get("player")
+            # 权限统一判(与 _in_game_ctx 一致):单机房主/LAN 放行;专用服务器/已知非 OP 收紧
+            allow_exec = _can_exec(ctx)
             force_tools = _FULL_TOOLS if allow_exec else _READONLY_TOOLS
             from assistant import route_answer
             system = _in_game_ctx(win, instance, cfg, ctx)
