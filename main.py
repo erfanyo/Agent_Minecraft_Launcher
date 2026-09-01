@@ -1247,7 +1247,8 @@ class MainWindow(QMainWindow):
             java_exe = ensure_java(paths.RUNTIME_DIR, required_java,
                                    progress_callback=on_progress,
                                    status_callback=self.statusBar().showMessage,
-                                   max_major=java_max)
+                                   max_major=java_max,
+                                   prefer_managed=(required_java <= 8))
             self.dl_indicator.hide()   # Java 检测/下载完成,收起圆环
             # 2) 把版本 JSON 翻译成启动命令
             #    运行目录按隔离策略来;安装目录和资源目录是所有版本共享的

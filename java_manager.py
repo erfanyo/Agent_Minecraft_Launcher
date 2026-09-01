@@ -61,7 +61,8 @@ def java_major(java_exe: str) -> int:
 
 
 def find_java(runtime_dir: str, min_major: int,
-              max_major: int | None = None) -> str | None:
+              max_major: int | None = None,
+              managed_only: bool = False) -> str | None:
     """查找兼容 Java，优先选择最接近目标大版本的运行时。
 
     ``min_major`` 不能单独代表兼容性：Forge 1.16.x 需要 Java 8，不能因为
@@ -74,6 +75,9 @@ def find_java(runtime_dir: str, min_major: int,
         for root, _dirs, files in os.walk(runtime_dir):
             if "java.exe" in files:
                 candidates.append(os.path.join(root, "java.exe"))
+
+    if managed_only:
+        return _pick_compatible_java(candidates, min_major, max_major)
 
     # 2) JAVA_HOME 环境变量
     jh = os.environ.get("JAVA_HOME")
@@ -100,8 +104,14 @@ def find_java(runtime_dir: str, min_major: int,
             except OSError:
                 pass
 
-    seen = set()
+    return _pick_compatible_java(candidates, min_major, max_major)
+
+
+def _pick_compatible_java(candidates: list[str], min_major: int,
+                          max_major: int | None) -> str | None:
+    """从候选 Java 中挑满足范围且最接近目标版本的一项。"""
     compatible = []
+    seen = set()
     for exe in candidates:
         if exe in seen:
             continue
@@ -131,14 +141,18 @@ def valid_zip(path: str) -> bool:
 
 def ensure_java(runtime_dir: str, required_major: int,
                 progress_callback=None, status_callback=None,
-                max_major: int | None = None) -> str:
+                max_major: int | None = None,
+                prefer_managed: bool = False) -> str:
     """保证有一个大版本 >= required_major 的 Java,返回 java.exe 路径。
     找不到就下载并解压 Temurin JRE(约 50MB,只装一次)。
 
     下载可能因网络中断留下半截 zip / 解压可能留下半截目录——这里做:
     残留损坏包自动重下、解压前校验完整性、解压前清旧残留、解压后验证 java 可用,
     最多重试 MAX_DOWNLOAD_ATTEMPTS 次。"""
-    found = find_java(runtime_dir, required_major, max_major=max_major)
+    # 旧 Forge 等对 Java 很挑剔的版本优先使用启动器管理的干净 JRE，避免
+    # 用户系统 PATH/JAVA_HOME 指向了不兼容或被其它软件改造过的运行时。
+    found = find_java(runtime_dir, required_major, max_major=max_major,
+                      managed_only=prefer_managed)
     if found:
         return found
 
