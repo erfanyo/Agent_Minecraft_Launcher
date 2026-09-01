@@ -69,7 +69,9 @@ def _latest_forge_version(mc: str) -> str:
     matches = [v for v in versions if v.startswith(prefix)]
     if not matches:
         raise RuntimeError(f"Forge 没有可用的 {mc} 版本")
-    return matches[-1]  # maven 元数据按顺序排列,取最后一个
+    # list_forge_versions 已按新到旧返回。不能直接拿 XML 的最后一项：旧版
+    # Forge 元数据的排列并不保证新版本在末尾，曾把 1.16.5 错选成 36.0.0。
+    return list(reversed(matches))[0]
 
 
 def list_neoforge_versions(mc: str) -> list:

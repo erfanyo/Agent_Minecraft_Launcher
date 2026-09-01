@@ -1241,14 +1241,33 @@ class MainWindow(QMainWindow):
 
         try:
             # 1) 保证有合适的 Java(没有就自动下载)
-            # Forge 1.16.x 及更早的 ModLauncher 只支持 Java 8；不能把“至少
-            # Java 8”误读成 Java 17/21 也可用。现代版本仍按最低版本选择。
-            java_max = 8 if required_java <= 8 else None
-            java_exe = ensure_java(paths.RUNTIME_DIR, required_java,
-                                   progress_callback=on_progress,
-                                   status_callback=self.statusBar().showMessage,
-                                   max_major=java_max,
-                                   prefer_managed=(required_java <= 8))
+            # 实例级启动选项：内存和 Java 都可覆盖全局自动策略。
+            # 旧 Forge 仍默认使用启动器管理的 Java 8，避免系统 Java 17/21 秒退。
+            launch_opts = {}
+            lop = os.path.join(paths.GAME_DIR, "versions", v["id"], "launch_options.json")
+            try:
+                if os.path.isfile(lop):
+                    with open(lop, encoding="utf-8") as f:
+                        launch_opts = json.load(f) or {}
+            except Exception:
+                launch_opts = {}
+            selected_java = str(launch_opts.get("java_path") or "").strip()
+            if selected_java:
+                if not os.path.isfile(selected_java):
+                    raise RuntimeError(f"本实例指定的 Java 不存在：{selected_java}")
+                from java_manager import java_major, minecraft_java_warning
+                selected_major = java_major(selected_java)
+                warning = minecraft_java_warning(v.get("base") or d.get("inheritsFrom") or d.get("id", ""), selected_major)
+                if warning:
+                    self.statusBar().showMessage("⚠ " + warning)
+                java_exe = selected_java
+            else:
+                java_max = 8 if required_java <= 8 else None
+                java_exe = ensure_java(paths.RUNTIME_DIR, required_java,
+                                       progress_callback=on_progress,
+                                       status_callback=self.statusBar().showMessage,
+                                       max_major=java_max,
+                                       prefer_managed=(required_java <= 8))
             self.dl_indicator.hide()   # Java 检测/下载完成,收起圆环
             # 2) 把版本 JSON 翻译成启动命令
             #    运行目录按隔离策略来;安装目录和资源目录是所有版本共享的
@@ -1305,14 +1324,7 @@ class MainWindow(QMainWindow):
                     "若想完全跳过正版、纯离线使用,请把 config.json 的 microsoft_login 改为 false。")
                 return
             # 实例级内存覆盖:读本实例 launch_options.json(memory_gb>0 则覆盖全局;0/缺失=用全局)
-            inst_mem = 0
-            try:
-                lop = os.path.join(paths.GAME_DIR, "versions", v["id"], "launch_options.json")
-                if os.path.isfile(lop):
-                    with open(lop, encoding="utf-8") as f:
-                        inst_mem = int(json.load(f).get("memory_gb") or 0)
-            except Exception:
-                inst_mem = 0
+            inst_mem = int(launch_opts.get("memory_gb") or 0)
             mem_gb = inst_mem if inst_mem > 0 else self.settings.get("memory_gb", 4)
             cmd = build_launch_command(
                 d, game_dir, java_exe,

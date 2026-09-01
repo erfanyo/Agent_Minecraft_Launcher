@@ -21,6 +21,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QInputDialog,
@@ -198,15 +199,31 @@ class InstanceManagerDialog(QWidget):
         mem_hint = QLabel("0 = 跟随全局设置(设置→游戏→内存);>0 = 本实例专用内存(整合包/光影建议 ≥6G)")
         mem_hint.setWordWrap(True); mem_hint.setStyleSheet(hint_style())
 
+        self.inst_java_path = QLineEdit(str(opts.get("java_path") or ""))
+        self.inst_java_path.setPlaceholderText("留空 = 自动下载/使用启动器管理的兼容 JRE")
+        browse_java = QPushButton("选择…")
+        browse_java.clicked.connect(self._choose_instance_java)
+        java_row = QHBoxLayout()
+        java_row.addWidget(self.inst_java_path, 1)
+        java_row.addWidget(browse_java)
+        self.inst_java_hint = QLabel()
+        self.inst_java_hint.setWordWrap(True)
+        self.inst_java_hint.setStyleSheet(hint_style())
+        self.inst_java_path.textChanged.connect(self._update_instance_java_hint)
+        self._update_instance_java_hint()
+
         save_btn = QPushButton("保存启动选项")
         save_btn.clicked.connect(self._save_instance_settings)
         set_style(save_btn, card_btn_style); save_btn.setMinimumHeight(32)
-        tip = QLabel("这是【单个实例】的启动选项。完全体以后会加更多(如 JVM 参数、Java 版本覆盖等)。")
+        tip = QLabel("这是【单个实例】的启动选项。Java 留空时由启动器自动准备兼容 JRE；"
+                     "指定路径仅在你确认该实例需要特殊 Java 时使用。")
         tip.setWordWrap(True); tip.setStyleSheet(hint_style())
 
         form = QFormLayout()
         form.addRow("本实例内存(GB):", self.inst_memory_spin)
         form.addRow("", mem_hint)
+        form.addRow("本实例 Java:", java_row)
+        form.addRow("", self.inst_java_hint)
         layout = QVBoxLayout(tab)
         layout.addLayout(form)
         layout.addWidget(save_btn)
@@ -218,8 +235,42 @@ class InstanceManagerDialog(QWidget):
         opts = self._load_launch_options()
         mem = self.inst_memory_spin.value()
         opts["memory_gb"] = mem
+        java_path = self.inst_java_path.text().strip()
+        if java_path:
+            from java_manager import java_major, minecraft_java_warning
+            warning = minecraft_java_warning(self._inst_base, java_major(java_path))
+            if warning:
+                answer = QMessageBox.warning(
+                    self, "Java 可能不兼容",
+                    warning + "\n\n仍要为此实例保存该 Java 吗？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No)
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+        opts["java_path"] = java_path
         self._save_launch_options(opts)
-        self.status_msg(f"已保存本实例启动选项(内存 {mem if mem else '跟随全局'}G)")
+        self.status_msg(f"已保存本实例启动选项(内存 {mem if mem else '跟随全局'}G；"
+                        f"Java {'自动' if not java_path else java_path})")
+
+    def _choose_instance_java(self):
+        start = self.inst_java_path.text().strip() or self.inst_dir
+        path, _ = QFileDialog.getOpenFileName(self, "为此实例选择 java.exe", start,
+                                               "Java (java.exe javaw.exe);;所有文件 (*)")
+        if path:
+            self.inst_java_path.setText(path)
+
+    def _update_instance_java_hint(self):
+        path = self.inst_java_path.text().strip()
+        if not path:
+            self.inst_java_hint.setText("自动：启动器会下载并固定使用与该 Minecraft 版本兼容的 JRE。")
+            return
+        from java_manager import java_major, minecraft_java_warning
+        if not os.path.isfile(path):
+            self.inst_java_hint.setText("⚠ 找不到该文件；启动时会直接提示路径无效。")
+            return
+        major = java_major(path)
+        warning = minecraft_java_warning(self._inst_base, major)
+        self.inst_java_hint.setText(("⚠ " + warning) if warning else f"✓ 已检测到 Java {major}，与该版本兼容。")
 
     def _launch_instance(self):
         """从概览快捷启动本实例(复用主窗口 launch_selected_instance)。"""

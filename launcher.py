@@ -47,9 +47,17 @@ def load_version_json(version_id: str, game_dir: str) -> dict:
 
 
 def _lib_key(lib: dict) -> str:
-    """依赖库的去重键:优先 maven 名,其次下载路径"""
-    return (lib.get("name")
-            or ((lib.get("downloads") or {}).get("artifact") or {}).get("path", ""))
+    """依赖库的去重键：Maven 坐标忽略版本，保留 group:artifact[:classifier]。
+
+    父版本的 ``log4j:2.8`` 与 Forge 子 profile 的 ``log4j:2.11`` 是同一个
+    库的覆盖关系，不是两项都应加入 classpath；把完整坐标当 key 会导致两版
+    同时加载并出现 NoSuchMethodError。
+    """
+    name = lib.get("name") or ""
+    parts = name.split(":")
+    if len(parts) >= 3:
+        return ":".join(parts[:2] + parts[3:4])
+    return name or ((lib.get("downloads") or {}).get("artifact") or {}).get("path", "")
 
 
 def _merge_libraries(parent_libs: list, child_libs: list) -> list:
@@ -209,6 +217,12 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
     jvm = [f"-Xmx{memory_gb}G", "-XX:+UseG1GC"]
     if "arguments" in d:
         jvm += resolve_args(d["arguments"].get("jvm", []), tokens)
+        # Forge 1.16.x 的子 profile 会提供 ``arguments.game``，但其原版父
+        # JSON 仍是 minecraftArguments 格式、没有 JVM 的 -cp 参数。合并后
+        # 不能因为存在 arguments 就误以为 classpath 已配置，否则 Java 连
+        # ModLauncher 主类都找不到并秒退。
+        if "-cp" not in jvm and "-classpath" not in jvm and "-p" not in jvm:
+            jvm += ["-Djava.library.path=" + natives_dir, "-cp", classpath_str]
     else:
         # 老版本:没有 arguments 字段,自己拼最基础的参数
         jvm += ["-Djava.library.path=" + natives_dir, "-cp", classpath_str]

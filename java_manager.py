@@ -42,6 +42,39 @@ def parse_java_major(output: str) -> int:
     return int(parts[0])
 
 
+def minecraft_java_range(mc_version: str) -> tuple[int, int | None]:
+    """返回 Java 版的可用范围 ``(最低, 最高或 None)``。
+
+    这是启动器的保守兼容表，主要用于旧 Forge 的防秒退提示；没有覆盖到的
+    快照/实验版本只给出最低版本，不把用户锁死在某个小版本上。
+    """
+    try:
+        parts = tuple(int(x) for x in re.findall(r"\d+", mc_version or "")[:3])
+        major, minor, patch = (parts + (0, 0, 0))[:3]
+    except Exception:
+        return 8, None
+    if (major, minor, patch) <= (1, 16, 5):
+        return 8, 8
+    if (major, minor) == (1, 17):
+        return 16, 16
+    if (major, minor, patch) <= (1, 20, 4):
+        return 17, 17
+    return 21, None
+
+
+def minecraft_java_warning(mc_version: str, java_major_version: int) -> str:
+    """给实例设置显示的 Java 兼容说明；空字符串代表在保守范围内。"""
+    low, high = minecraft_java_range(mc_version)
+    if java_major_version <= 0:
+        return "无法读取该 Java 的版本；启动时很可能失败。"
+    if java_major_version < low:
+        return f"Minecraft {mc_version} 至少需要 Java {low}；当前 Java {java_major_version} 很可能启动失败。"
+    if high is not None and java_major_version > high:
+        return (f"Minecraft {mc_version}（尤其 Forge/旧 Mod）建议固定 Java {high}；"
+                f"当前 Java {java_major_version} 很可能秒退或崩溃。")
+    return ""
+
+
 def java_major(java_exe: str) -> int:
     """运行 java -version 并解析大版本;失败返回 0。
     检测时不弹控制台黑窗口(CREATE_NO_WINDOW)。"""
