@@ -10,6 +10,7 @@ import hashlib
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
 
 import requests
 
@@ -291,7 +292,10 @@ def download_maven(path: str, dest: str, sha1: str | None = None,
             # 不能只抛出最后一个镜像错误：那会掩盖官方仓库究竟是不存在、
             # 超时还是被网络拦截，用户也无法据此判断是否该换源。
             detail = str(e).replace("\n", " ").strip()
-            errors.append(f"{url}（{type(e).__name__}: {detail}）")
+            # UI 会把长 URL 自动渲染成链接，错误文本因此可能被截断；只显示
+            # 仓库域名和 HTTP 状态/异常即可让用户准确判断该换源还是修安装流程。
+            source = urlparse(url).netloc or url
+            errors.append(f"{source}（{type(e).__name__}: {detail}）")
     if not errors:
         raise RuntimeError("没有可用的 Maven 下载源，请检查下载源设置")
     raise RuntimeError(
