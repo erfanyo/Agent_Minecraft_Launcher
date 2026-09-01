@@ -243,6 +243,23 @@ MAVEN_REPOS = [
 ]
 
 
+def _maven_repos_for_path(path: str) -> list[str]:
+    """为已知归属的 Maven 坐标选择正确的首选仓库。
+
+    Forge 安装器里的 ``net/minecraftforge/forge`` 是 Forge 自己发布的运行库，
+    Fabric、NeoForge 和 Mojang 的仓库本来就不会保存它。让它们先报 404 不但
+    浪费时间，还会让 UI 把正常的 404 误显示成真正的下载原因。
+    """
+    normalized = path.replace("\\", "/").lstrip("/")
+    if normalized.startswith("net/minecraftforge/forge/"):
+        return ["https://maven.minecraftforge.net/{path}"]
+    if normalized.startswith("net/neoforged/"):
+        return ["https://maven.neoforged.net/releases/{path}"]
+    if normalized.startswith("net/fabricmc/"):
+        return ["https://maven.fabricmc.net/{path}"]
+    return list(MAVEN_REPOS)
+
+
 def download_maven(path: str, dest: str, sha1: str | None = None,
                    progress_callback=None, mirror: str | None = None,
                    strategy: str | None = None) -> None:
@@ -251,7 +268,7 @@ def download_maven(path: str, dest: str, sha1: str | None = None,
     strat = strategy or _active_strategy()
     base = _mirror_base(mirror)
     mirror_repo = (base + "/maven/{path}") if base else None
-    repos = list(MAVEN_REPOS)
+    repos = _maven_repos_for_path(path)
     if strat == "official_only":
         pass                        # 只用官方仓库,顺序不变
     elif strat == "mirror_only":
