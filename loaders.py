@@ -46,7 +46,16 @@ def list_forge_versions(mc: str) -> list:
     versions = re.findall(r"<version>([^<]+)</version>", resp.text)
     prefix = mc + "-"
     matches = [v for v in versions if v.startswith(prefix)]
-    return list(reversed(matches))
+    return sorted(matches, key=_forge_version_key, reverse=True)
+
+
+def _forge_version_key(version: str) -> tuple:
+    """Forge Maven 版本的数值排序键，例如 1.16.5-36.2.39。"""
+    try:
+        suffix = version.split("-", 1)[1]
+        return tuple(int(part) for part in suffix.split("."))
+    except Exception:
+        return (0,)
 
 
 def _latest_fabric_loader(mc: str) -> str:
@@ -68,9 +77,9 @@ def _latest_forge_version(mc: str) -> str:
     matches = [v for v in versions if v.startswith(prefix)]
     if not matches:
         raise RuntimeError(f"Forge 没有可用的 {mc} 版本")
-    # list_forge_versions 已按新到旧返回。不能直接拿 XML 的最后一项：旧版
-    # Forge 元数据的排列并不保证新版本在末尾，曾把 1.16.5 错选成 36.0.0。
-    return list(reversed(matches))[0]
+    # Maven XML 的排列不保证版本新旧，必须做数值排序；否则 1.16.5 会被
+    # 错选为早期的 36.0.0，而不是稳定的 36.2.39。
+    return max(matches, key=_forge_version_key)
 
 
 def list_neoforge_versions(mc: str) -> list:
@@ -418,7 +427,8 @@ def install_loader(loader: str, mc: str, game_dir: str,
                                              progress_callback=progress_callback,
                                              status_callback=status_callback)
         if failures:
-            raise RuntimeError(f"{len(failures)} 个依赖库下载失败,如 {failures[0][0]}")
+            name, reason = failures[0]
+            raise RuntimeError(f"{len(failures)} 个依赖库下载失败，如 {name}：{reason}")
 
         return version_id
     finally:
