@@ -11,6 +11,7 @@
 
 NeoForge 的接口暂未探明,以后补(框架完全通用)。
 """
+import hashlib
 import json
 import os
 import re
@@ -291,21 +292,35 @@ def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
 
 def _download_maven_path(path: str, dest: str, progress_callback=None) -> None:
     """下载一个只有 Maven 路径的库(轮流试几个仓库)"""
-    # Forge 1.16.x 的安装器已经在本地生成了 universal jar，但其版本 JSON
-    # 仍会列出无 classifier 的 forge-<mc>-<version>.jar。有些镜像没有这个
-    # 过渡坐标，不能因此把本来已完成的安装判失败；把 universal 作为该类路径
-    # 的本地兼容副本，供启动参数构建器正常解析。
-    if (not os.path.exists(dest)
-            and os.path.basename(dest).startswith("forge-")
-            and os.path.basename(dest).endswith(".jar")):
-        universal = dest[:-4] + "-universal.jar"
-        if os.path.isfile(universal):
-            import shutil
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.copy2(universal, dest)
-            return
     from downloader import download_maven
     download_maven(path, dest, progress_callback=progress_callback)
+
+
+def _use_forge_generated_universal(profile: dict, game_dir: str) -> None:
+    """将旧 Forge profile 的虚拟主 jar 改为安装器实际生成的 universal jar。
+
+    Forge 1.16.x 的 version.json 常列出 ``forge-<version>.jar``（一个并未
+    发布到 Maven 的过渡坐标），而 processors 实际生成的是
+    ``forge-<version>-universal.jar``。不规范化会导致后续通用依赖下载报错，
+    即使 Forge 安装器已经成功完成补丁。
+    """
+    lib_dir = os.path.join(game_dir, "libraries")
+    for lib in profile.get("libraries") or []:
+        artifact = ((lib.get("downloads") or {}).get("artifact") or {})
+        path = artifact.get("path") or ""
+        filename = os.path.basename(path)
+        if (not filename.startswith("forge-") or not filename.endswith(".jar")
+                or filename.endswith("-universal.jar")):
+            continue
+        universal_path = os.path.join(lib_dir, path[:-4] + "-universal.jar")
+        if not os.path.isfile(universal_path):
+            continue
+        with open(universal_path, "rb") as f:
+            digest = hashlib.sha1(f.read()).hexdigest()
+        artifact["path"] = path[:-4] + "-universal.jar"
+        artifact["url"] = ""
+        artifact["sha1"] = digest
+        artifact["size"] = os.path.getsize(universal_path)
 
 
 def install_loader(loader: str, mc: str, game_dir: str,
@@ -411,6 +426,8 @@ def install_loader(loader: str, mc: str, game_dir: str,
             _forge_run_processors(installer_profile, forge_installer, game_dir, java_exe,
                                   maven_ver=loader_ver, status_callback=status_callback,
                                   progress_callback=progress_callback)
+            if loader == "forge":
+                _use_forge_generated_universal(profile, game_dir)
 
         # 4) 保存加载器版本 JSON + 拷贝原版 jar 到实例目录
         inst_dir = os.path.join(game_dir, "versions", version_id)
