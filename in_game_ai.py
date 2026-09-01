@@ -203,6 +203,18 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
         parts.append("你是 Agent Minecraft 启动器里内置的 AI 助手,用中文简洁回答玩家。")
     # 玩家实时上下文(用于精准回答)
     ctx = ctx or {}
+    # 请求文件只能由已在运行的 bridge-mod 写入；协议 v2 更包含完整身份
+    # 上下文。把这一事实明确交给模型，避免它根据知识库版本表臆测“没有
+    # 安装 bridge”，进而要求玩家做无意义的重装。
+    try:
+        protocol_version = int(ctx.get("protocol_version") or 0)
+    except (TypeError, ValueError):
+        protocol_version = 0
+    if protocol_version >= 2:
+        parts.append(
+            "桥接状态：已确认。本条消息由当前游戏中正在运行的 AgentMC Bridge "
+            "通过本地通道发送；不要声称 bridge-mod 未安装、未加载或要求玩家为了"
+            "建立通道而重装。")
     ctxt_line = []
     if ctx.get("player"):
         ctxt_line.append(f"发起玩家:{ctx['player']}")
