@@ -245,6 +245,7 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
         if not os.path.exists(dest) or not _installed_bridge_jar(inst_dir):
             import shutil
             shutil.copy2(cand["file"], dest)
+        _remove_replaced_bridge_jars(mods_dir, cand["name"], loader, mc_version)
         return cand["name"]
 
     # ② GitHub 自动发现并下载
@@ -258,6 +259,7 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
             expected_sha1 = table.get("sha1")
         download_with_mirror(cand["url"], dest, sha1=expected_sha1,
                              progress_callback=progress_callback)
+        _remove_replaced_bridge_jars(mods_dir, cand["name"], loader, mc_version)
         return cand["name"]
 
     # ③ 版本表兜底(固定 URL)
@@ -267,11 +269,27 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
         dest = os.path.join(mods_dir, filename)
         download_with_mirror(info["url"], dest, sha1=info.get("sha1"),
                              progress_callback=progress_callback)
+        _remove_replaced_bridge_jars(mods_dir, filename, loader, mc_version)
         return filename
 
     raise ValueError(
         f"桥 mod 暂不支持 {mc_version}+{loader}(请检查当前发布的 bridge-mod 资产)。\n"
         "或先手动从 GitHub Releases 下载对应 jar 放进实例 mods 目录。")
+
+
+def _remove_replaced_bridge_jars(mods_dir: str, keep_name: str,
+                                 loader: str, mc_version: str) -> None:
+    """移除同一 loader + MC 版本的旧 bridge-mod，避免 Forge 同时加载两个副本。"""
+    prefix, match = _jar_urls_by_pattern(loader, mc_version)
+    try:
+        for name in os.listdir(mods_dir):
+            if name != keep_name and match(name):
+                try:
+                    os.remove(os.path.join(mods_dir, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def verify_sha1(path: str, expected: str) -> bool:

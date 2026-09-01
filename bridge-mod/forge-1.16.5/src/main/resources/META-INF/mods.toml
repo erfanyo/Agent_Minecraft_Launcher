@@ -11,7 +11,7 @@ description="AgentMC launcher bridge: local commands, AI file exchange and data 
 [[dependencies.agentmc_bridge]]
 modId="forge"
 mandatory=true
-versionRange="[36.2.0,37)"
+versionRange="[36,37)"
 ordering="NONE"
 side="BOTH"
 
