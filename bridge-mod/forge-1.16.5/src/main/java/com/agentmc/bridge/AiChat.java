@@ -20,13 +20,18 @@ public final class AiChat {
     private static final long POLL_INTERVAL_MS = 500L;
     private AiChat() { }
     public static LiteralArgumentBuilder<CommandSource> command() {
-        return Commands.literal("ai").executes(c -> 0)
+        return Commands.literal("ai").executes(c -> usage(c.getSource()))
             .then(Commands.argument("text", StringArgumentType.greedyString()).executes(AiChat::submit));
+    }
+
+    private static int usage(CommandSource source) {
+        tell(source, "[AI] 用法: /ai <想问的问题>");
+        return 1;
     }
     private static int submit(CommandContext<CommandSource> context) {
         CommandSource source = context.getSource();
         String text = StringArgumentType.getString(context, "text").trim();
-        if (text.length() == 0) return 0;
+        if (text.length() == 0) return usage(source);
         long seq = SEQ.incrementAndGet();
         JsonObject request = new JsonObject();
         request.addProperty("seq", seq); request.addProperty("text", text); request.addProperty("ts", System.currentTimeMillis()); request.addProperty("protocol_version", 2);
@@ -39,7 +44,15 @@ public final class AiChat {
         Thread thread = new Thread(new ReplyPoller(source.getServer(), seq, player, replyFile), "bridge-ai-poll-" + seq);
         thread.setDaemon(true);
         thread.start();
+        tell(source, "[AI] 已提交请求，正在思考…");
         return 1;
+    }
+
+    private static void tell(CommandSource source, String text) {
+        if (source.getEntity() instanceof ServerPlayerEntity) {
+            ServerPlayerEntity player = (ServerPlayerEntity) source.getEntity();
+            player.sendMessage(new net.minecraft.util.text.StringTextComponent(text), player.getUUID());
+        }
     }
 
     private static final class ReplyPoller implements Runnable {
