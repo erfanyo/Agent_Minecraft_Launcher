@@ -60,8 +60,13 @@ def java_major(java_exe: str) -> int:
         return 0
 
 
-def find_java(runtime_dir: str, min_major: int) -> str | None:
-    """在三个地方找满足版本的 java.exe:自带运行时、JAVA_HOME、PATH。"""
+def find_java(runtime_dir: str, min_major: int,
+              max_major: int | None = None) -> str | None:
+    """查找兼容 Java，优先选择最接近目标大版本的运行时。
+
+    ``min_major`` 不能单独代表兼容性：Forge 1.16.x 需要 Java 8，不能因为
+    Java 17/21“更高”就被选中。``max_major`` 用于这类有明确上限的旧版本。
+    """
     candidates = []
 
     # 1) 启动器自带的运行时(我们下载解压的)
@@ -81,14 +86,30 @@ def find_java(runtime_dir: str, min_major: int) -> str | None:
         if os.path.isfile(exe):
             candidates.append(exe)
 
+    # 4) Windows 常见安装位置。许多 Temurin 安装不会把 java 加入 PATH，
+    #    只靠 JAVA_HOME/PATH 会漏掉用户已经安装好的 Java 8。
+    program_files = [os.environ.get("ProgramFiles", ""),
+                     os.environ.get("ProgramW6432", ""),
+                     os.environ.get("ProgramFiles(x86)", "")]
+    for root in dict.fromkeys(p for p in program_files if p):
+        for vendor in ("Eclipse Adoptium", "Java", "Microsoft"):
+            base = os.path.join(root, vendor)
+            try:
+                for name in os.listdir(base):
+                    candidates.append(os.path.join(base, name, "bin", "java.exe"))
+            except OSError:
+                pass
+
     seen = set()
+    compatible = []
     for exe in candidates:
         if exe in seen:
             continue
         seen.add(exe)
-        if os.path.isfile(exe) and java_major(exe) >= min_major:
-            return exe
-    return None
+        major = java_major(exe) if os.path.isfile(exe) else 0
+        if major >= min_major and (max_major is None or major <= max_major):
+            compatible.append((abs(major - min_major), major, exe))
+    return min(compatible)[2] if compatible else None
 
 
 def _find_java_exe(directory: str) -> str | None:
@@ -109,14 +130,15 @@ def valid_zip(path: str) -> bool:
 
 
 def ensure_java(runtime_dir: str, required_major: int,
-                progress_callback=None, status_callback=None) -> str:
+                progress_callback=None, status_callback=None,
+                max_major: int | None = None) -> str:
     """保证有一个大版本 >= required_major 的 Java,返回 java.exe 路径。
     找不到就下载并解压 Temurin JRE(约 50MB,只装一次)。
 
     下载可能因网络中断留下半截 zip / 解压可能留下半截目录——这里做:
     残留损坏包自动重下、解压前校验完整性、解压前清旧残留、解压后验证 java 可用,
     最多重试 MAX_DOWNLOAD_ATTEMPTS 次。"""
-    found = find_java(runtime_dir, required_major)
+    found = find_java(runtime_dir, required_major, max_major=max_major)
     if found:
         return found
 

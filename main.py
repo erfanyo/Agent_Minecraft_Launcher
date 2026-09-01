@@ -1241,9 +1241,13 @@ class MainWindow(QMainWindow):
 
         try:
             # 1) 保证有合适的 Java(没有就自动下载)
+            # Forge 1.16.x 及更早的 ModLauncher 只支持 Java 8；不能把“至少
+            # Java 8”误读成 Java 17/21 也可用。现代版本仍按最低版本选择。
+            java_max = 8 if required_java <= 8 else None
             java_exe = ensure_java(paths.RUNTIME_DIR, required_java,
                                    progress_callback=on_progress,
-                                   status_callback=self.statusBar().showMessage)
+                                   status_callback=self.statusBar().showMessage,
+                                   max_major=java_max)
             self.dl_indicator.hide()   # Java 检测/下载完成,收起圆环
             # 2) 把版本 JSON 翻译成启动命令
             #    运行目录按隔离策略来;安装目录和资源目录是所有版本共享的
