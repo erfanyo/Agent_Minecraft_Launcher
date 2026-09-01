@@ -25,6 +25,7 @@ from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -216,6 +217,8 @@ class ResourceBrowser(QWidget):
     """资源浏览器(Mod / 光影包 / 数据包 / 资源包共用):
     目标实例(可折叠,全局共享) + 筛选 + 搜索(异步) + 结果列表 + 详情面板(版本/加载器/下载)。"""
 
+    favorite_changed = Signal()
+
     def __init__(self, project_type: str, label: str, sub_dir: str,
                  on_download, get_instance_loader, parent=None, is_modpack: bool = False):
         super().__init__(parent)
@@ -400,6 +403,30 @@ class ResourceBrowser(QWidget):
         self.desc_note_label.setWordWrap(True)
         self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
         self.desc_note_label.setVisible(False)
+        self.compat_box = QGroupBox("兼容与依赖")
+        self.compat_box.setStyleSheet(
+            f"QGroupBox {{ color: {text_color()}; border: 1px solid {current_color('panel_border')};"
+            " border-radius: 7px; margin-top: 6px; padding: 7px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }")
+        compat_layout = QVBoxLayout(self.compat_box)
+        compat_layout.setContentsMargins(4, 7, 4, 2)
+        compat_layout.setSpacing(4)
+        self.compat_summary = QLabel("")
+        self.compat_summary.setWordWrap(True)
+        self.compat_summary.setStyleSheet(f"color: {muted_color()}; font-size: 12px;")
+        self.compat_detail = QLabel("")
+        self.compat_detail.setWordWrap(True)
+        self.compat_detail.setStyleSheet(f"color: {muted_color()}; font-size: 12px;")
+        self.compat_detail.setVisible(False)
+        self.compat_toggle = QPushButton("查看依赖详情")
+        self.compat_toggle.setFlat(True)
+        self.compat_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.compat_toggle.setStyleSheet(f"color: {accent_color()}; text-align: left; padding: 2px;")
+        self.compat_toggle.clicked.connect(self._toggle_compat_detail)
+        compat_layout.addWidget(self.compat_summary)
+        compat_layout.addWidget(self.compat_detail)
+        compat_layout.addWidget(self.compat_toggle)
+        self.compat_box.setVisible(False)
         # 「在 MC百科查看」链接:仅选中时显示,点击用系统浏览器打开 mcmod 按名搜索页。
         self.mcmod_link = QLabel()
         self.mcmod_link.setTextFormat(Qt.TextFormat.RichText)
@@ -424,6 +451,8 @@ class ResourceBrowser(QWidget):
         self.dl_btn.clicked.connect(self._download)
         self.gv_combo.version_changed.connect(self._refresh_versions_global)
         self.loader_combo.currentIndexChanged.connect(self._refresh_versions_global)
+        self.ver_combo.currentIndexChanged.connect(self._update_fav_btn)
+        self.ver_combo.currentIndexChanged.connect(self._refresh_compatibility_report)
 
         # 版本/加载器/mod版本 + 下载,改放【底部向上展开的折叠条】(bottom_bar),不占右侧窄条。
         # 右侧 panel 只留描述/作者/百科链接 → Mod 列表更宽、能多展示。
@@ -437,6 +466,7 @@ class ResourceBrowser(QWidget):
         p.addWidget(self.meta_label)
         p.addWidget(self.desc_label)
         p.addWidget(self.desc_note_label)
+        p.addWidget(self.compat_box)
         p.addWidget(self.mcmod_link)
         self.empty_label = QLabel(t("SELECT_A_PROJECT_ON_THE_LEFT"))
         self.empty_label.setStyleSheet(hint_style())
@@ -524,10 +554,17 @@ class ResourceBrowser(QWidget):
             r.addWidget(QLabel(lbl))
             r.addWidget(combo, 1)
             mp.addLayout(r)
-        # 收藏按钮:创建,但放进底部下载卡(和「下载」并排,始终可见)而非手动下载浮层
-        self.fav_btn = QPushButton("☆ 收藏该版本")
+        # 泛用收藏和指定版本分开：后者会收进前者的展开项，而不是覆盖收藏本体。
+        self.fav_btn = QToolButton()
+        self.fav_btn.setText("☆ 收藏 Mod")
+        self.fav_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.fav_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         set_style(self.fav_btn, card_btn_style)
         self.fav_btn.clicked.connect(self._fav_current)
+        self.fav_menu = QMenu(self.fav_btn)
+        self.fav_version_action = self.fav_menu.addAction("＋ 收藏当前版本")
+        self.fav_version_action.triggered.connect(self._fav_selected_version)
+        self.fav_btn.setMenu(self.fav_menu)
         self.manual_popup.setFixedWidth(340)
         self.manual_popup.hide()
         self.manual_popup.closed.connect(self._on_manual_popup_closed)
@@ -552,15 +589,16 @@ class ResourceBrowser(QWidget):
         self.inst_popup.hide()
         self.inst_popup.closed.connect(self._on_popup_closed_autoclose)
 
-        # 下载按钮(窄)
+        # 下载/收藏放到同一横行，避免底部操作区为了两个按钮占两层高度。
         dl_card = QWidget()
         set_style(dl_card, card_btn_style)
-        db = QVBoxLayout(dl_card)
+        db = QHBoxLayout(dl_card)
         db.setContentsMargins(8, 8, 8, 8)
-        db.addWidget(self.dl_btn)
-        db.addWidget(self.fav_btn)   # 收藏当前资源+选中版本,和下载并排常驻可见
+        db.setSpacing(6)
+        db.addWidget(self.fav_btn, 1)
+        db.addWidget(self.dl_btn, 1)
         self.dl_card = dl_card
-        row.addWidget(dl_card, 2)
+        row.addWidget(dl_card, 3)
 
         # 整合包:不需要选目标实例,把目标实例按钮隐藏(手动下载+下载保留)
         if self.is_modpack:
@@ -763,6 +801,7 @@ class ResourceBrowser(QWidget):
         else:
             self.inst_cards_toggle.setText("▸ 目标实例: 未选择")
             self._apply_inst_cards(None)
+        self._refresh_compatibility_report()
 
     def _select_inst(self, inst):
         """选中某实例:更新本地卡片+筛选,并广播到全局(其他分类页一并生效)。"""
@@ -972,6 +1011,9 @@ class ResourceBrowser(QWidget):
             self.mcmod_link.setVisible(False)
             return
         self._current = h
+        self.compat_box.setVisible(False)
+        self.compat_detail.setVisible(False)
+        self.compat_toggle.setText("查看依赖详情")
         for w in (self.title_label, self.meta_label,
                   self.desc_label, self.gv_combo, self.loader_combo,
                   self.ver_combo, self.dl_btn, self.fav_btn):
@@ -1013,21 +1055,44 @@ class ResourceBrowser(QWidget):
         self._start_desc_translation(h)
 
     def _fav_current(self):
-        """收藏当前资源(带手动下载里选的版本)到默认收藏夹。"""
+        """收藏当前资源本体到默认收藏夹，不绑定任何指定版本。"""
         import favorites as favs
         h = getattr(self, "_current", None)
         if not h or not h.get("slug"):
             return
         slug = h["slug"]
         name = h.get("title") or slug
-        ver = self.ver_combo.currentText() or ""
         d = favs.load()
-        favs.add(d, favs.DEFAULT_FOLDER, slug, name, ver)
+        favs.add(d, favs.DEFAULT_FOLDER, slug, name)
         favs.save(d)
         self.fav_btn.setText("★ 已收藏")
         from PySide6.QtWidgets import QToolTip
         QToolTip.showText(self.fav_btn.mapToGlobal(self.fav_btn.rect().center()),
                           f"已收藏 {name} → {favs.DEFAULT_FOLDER}")
+        self.favorite_changed.emit()
+
+    def _fav_selected_version(self):
+        """收藏当前下拉框选择的指定版本；它归属在同一个泛用收藏下。"""
+        import favorites as favs
+        h = getattr(self, "_current", None)
+        if not h or not h.get("slug"):
+            return
+        version = (self.ver_combo.currentText() or "").strip()
+        if not version:
+            from PySide6.QtWidgets import QToolTip
+            QToolTip.showText(self.fav_btn.mapToGlobal(self.fav_btn.rect().center()),
+                              "请先在“手动下载”里选择一个具体版本")
+            return
+        slug = h["slug"]
+        name = h.get("title") or slug
+        data = favs.load()
+        added = favs.add_version(data, favs.DEFAULT_FOLDER, slug, name, version)
+        favs.save(data)
+        self._update_fav_btn()
+        from PySide6.QtWidgets import QToolTip
+        QToolTip.showText(self.fav_btn.mapToGlobal(self.fav_btn.rect().center()),
+                          "已收藏指定版本" if added else "该指定版本已经收藏")
+        self.favorite_changed.emit()
 
     def _update_fav_btn(self):
         if not hasattr(self, "fav_btn"):
@@ -1035,10 +1100,14 @@ class ResourceBrowser(QWidget):
         import favorites as favs
         h = getattr(self, "_current", None)
         slug = h.get("slug", "") if h else ""
-        if slug and favs.is_favorited(favs.load(), favs.DEFAULT_FOLDER, slug):
+        data = favs.load()
+        if slug and favs.is_favorited(data, favs.DEFAULT_FOLDER, slug):
             self.fav_btn.setText("★ 已收藏")
         else:
-            self.fav_btn.setText("☆ 收藏该版本")
+            self.fav_btn.setText("☆ 收藏 Mod")
+        version = (self.ver_combo.currentText() or "").strip()
+        saved_versions = favs.versions(data, favs.DEFAULT_FOLDER, slug) if slug else []
+        self.fav_version_action.setText("✓ 已收藏该版本" if version and version in saved_versions else "＋ 收藏当前版本")
 
     def _start_desc_translation(self, h):
         """后台线程翻译当前 Mod 描述(英→中),不卡 UI。
@@ -1129,7 +1198,9 @@ class ResourceBrowser(QWidget):
             return
         if source == "failed":
             self.desc_label.setText(text)
-            self.desc_note_label.setText(t("TRANSLATION_FAILED_SHOWING_ORIGINAL"))
+            reason = str(result.get("error") or "").strip()
+            self.desc_note_label.setText(
+                t("TRANSLATION_FAILED_SHOWING_ORIGINAL") + (f"\n原因：{reason}" if reason else ""))
             self.desc_note_label.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
             self.desc_note_label.setVisible(True)
             return
@@ -1277,6 +1348,68 @@ class ResourceBrowser(QWidget):
             self.ver_combo.addItem(v, v)
         self.ver_combo.setEnabled(True)
         self.ver_combo.setCurrentIndex(0)
+        self._refresh_compatibility_report()
+
+    def _toggle_compat_detail(self):
+        shown = not self.compat_detail.isVisible()
+        self.compat_detail.setVisible(shown)
+        self.compat_toggle.setText("收起依赖详情" if shown else "查看依赖详情")
+
+    def _refresh_compatibility_report(self, *_args):
+        """异步生成详情卡上的 Mod 兼容报告，不阻塞浏览或下载。"""
+        if self.project_type != "mod" or not getattr(self, "_current", None):
+            self.compat_box.setVisible(False)
+            return
+        version = self.ver_combo.currentData()
+        inst = self.selected_inst
+        gv = (inst or {}).get("base") or self._current_gv()
+        loader = (inst or {}).get("loader") or self.loader_combo.currentData()
+        if not version:
+            self.compat_box.setVisible(True)
+            self.compat_summary.setText("选择一个具体 Mod 版本后，显示依赖与兼容报告。")
+            self.compat_detail.setVisible(False)
+            self.compat_toggle.setVisible(False)
+            return
+        self.compat_box.setVisible(True)
+        self.compat_toggle.setVisible(False)
+        self.compat_detail.setVisible(False)
+        self.compat_summary.setText("正在检查 Minecraft 版本、加载器与依赖…")
+        slug = self._current["slug"]
+
+        def fetch():
+            import modrinth
+            return modrinth.resolve_dependencies(slug, gv or None, loader or None, version)
+
+        def done(deps):
+            cur = getattr(self, "_current", None)
+            if not cur or cur.get("slug") != slug or self.ver_combo.currentData() != version:
+                return
+            deps = deps or {"required": [], "optional": [], "incompatible": []}
+            required = deps.get("required", [])
+            optional = deps.get("optional", [])
+            incompatible = deps.get("incompatible", [])
+            status = (f"适配：Minecraft {gv} · {loader} · Mod {version}"
+                      if gv and loader else f"已解析 Mod {version} 的依赖；选择目标实例后会检查版本与加载器适配。")
+            if incompatible:
+                status += f"\n不建议同装 {len(incompatible)} 个已声明冲突项。"
+            elif required:
+                status += f"\n将自动加入 {len(required)} 个必需前置到同一下载任务。"
+            else:
+                status += "\n未声明必需前置，可直接下载。"
+            if optional:
+                status += f"\n另有 {len(optional)} 个可选联动 Mod（不会自动下载）。"
+            self.compat_summary.setText(status)
+            lines = []
+            if required:
+                lines.append("必需前置（确认下载后自动加入）：\n" + "\n".join("· " + d["title"] for d in required))
+            if optional:
+                lines.append("可选联动（仅介绍，不自动下载）：\n" + "\n".join("· " + d["title"] for d in optional))
+            if incompatible:
+                lines.append("声明冲突：\n" + "\n".join("· " + d["title"] for d in incompatible))
+            self.compat_detail.setText("\n\n".join(lines) or "Modrinth 未为这个版本声明额外依赖或冲突。")
+            self.compat_toggle.setVisible(True)
+
+        self._async(("compat", slug, gv, loader, version), fetch, done)
 
     # ---- 下载 ----
     def _download(self):
@@ -1380,6 +1513,50 @@ class _FavCard(QPushButton):
         super().mouseReleaseEvent(e)
 
 
+class _FavGroupCard(QWidget):
+    """一个泛用收藏及其可展开的指定版本；版本不再伪装成独立 Mod 收藏。"""
+
+    def __init__(self, name: str, slug: str, versions: list[str], on_menu, on_remove_version):
+        super().__init__()
+        self.setMinimumWidth(180)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        self.card = _FavCard(name, slug)
+        self.card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.card.customContextMenuRequested.connect(lambda _p: on_menu(slug))
+        layout.addWidget(self.card)
+
+        self.versions_box = QWidget()
+        versions_layout = QVBoxLayout(self.versions_box)
+        versions_layout.setContentsMargins(8, 0, 0, 0)
+        versions_layout.setSpacing(3)
+        self.toggle = QToolButton()
+        self.toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.toggle.setText(f"指定版本（{len(versions)}）")
+        self.toggle.setCheckable(True)
+        self.toggle.toggled.connect(self._toggle_versions)
+        if versions:
+            layout.addWidget(self.toggle)
+            for version in versions:
+                version_btn = QPushButton(version)
+                version_btn.setMinimumHeight(28)
+                set_style(version_btn, card_btn_style)
+                version_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                version_btn.customContextMenuRequested.connect(
+                    lambda _p, v=version: on_remove_version(slug, v))
+                version_btn.setToolTip("右键可取消收藏这个指定版本")
+                versions_layout.addWidget(version_btn)
+            self.versions_box.setVisible(False)
+            layout.addWidget(self.versions_box)
+
+    def _toggle_versions(self, open_: bool):
+        self.toggle.setArrowType(Qt.ArrowType.DownArrow if open_ else Qt.ArrowType.RightArrow)
+        self.versions_box.setVisible(open_)
+        self.updateGeometry()
+
+
 class ResourceCenter(QWidget):
     """下载新资源:左侧可折叠菜单 + 右侧分类面板(首页/实例/Mod/光影/数据包/资源包)。"""
 
@@ -1446,6 +1623,8 @@ class ResourceCenter(QWidget):
 
         # 收藏夹:占位(收藏/批量下载/AI平替逻辑下一步做,先给入口)
         self.stack.addWidget(self._build_favorites())   # 7
+        for browser in self.browsers.values():
+            browser.favorite_changed.connect(self._reload_favorites)
 
         # 启动器插件:占位页(插件生态建设中,先给入口)
         self.stack.addWidget(self._build_plugins_placeholder())   # 8
@@ -1470,6 +1649,8 @@ class ResourceCenter(QWidget):
     # ---- 菜单 ----
     def switch_to(self, idx: int):
         self.stack.setCurrentIndex(idx)
+        if idx == 7:
+            self._reload_favorites()
         # 切到资源浏览器页且搜索框为空 → 自动默认浏览(打开即显示列表,无需先搜索)
         cur = self.stack.currentWidget()
         if isinstance(cur, ResourceBrowser):
@@ -1571,6 +1752,17 @@ class ResourceCenter(QWidget):
         else:
             self._on_fav_folder_changed()
 
+    def _reload_favorites(self):
+        """从磁盘重读收藏；资源详情刚收藏后和切回收藏页时都会刷新。"""
+        import favorites as favs
+        current = self._current_fav_folder() if hasattr(self, "_fav_folder_list") else None
+        self._fav_data = favs.load()
+        self._refresh_fav_folders()
+        if current:
+            matches = self._fav_folder_list.findItems(current, Qt.MatchFlag.MatchExactly)
+            if matches:
+                self._fav_folder_list.setCurrentItem(matches[0])
+
     def _on_fav_folder_changed(self, _row=-1):
         row = self._fav_folder_list.currentRow()
         folder = self._fav_folder_list.item(row).text() if row >= 0 else None
@@ -1587,12 +1779,8 @@ class ResourceCenter(QWidget):
         import favorites as favs
         for slug, h in favs.items(self._fav_data, folder).items():
             name = h.get("name", slug)
-            ver = h.get("version", "")
-            text = name + (f"\n{ver}" if ver else "")
-            card = _FavCard(text, slug)
-            card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            card.customContextMenuRequested.connect(
-                lambda _p, s=slug: self._fav_card_menu(s))
+            card = _FavGroupCard(name, slug, h.get("versions") or [],
+                                 self._fav_card_menu, self._remove_fav_version)
             self._fav_cards_layout.addWidget(card)
 
     def _fav_card_menu(self, slug):
@@ -1628,6 +1816,22 @@ class ResourceCenter(QWidget):
             favs.remove(self._fav_data, cur, slug)
             favs.save(self._fav_data)
             self._refresh_fav_cards(cur)
+
+    def _remove_fav_version(self, slug, version):
+        """右键指定版本 → 只移除该版本，泛用收藏本体继续保留。"""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QCursor
+        menu = QMenu(self)
+        remove_action = menu.addAction(f"取消收藏版本「{version}」")
+        if menu.exec_(QCursor.pos()) != remove_action:
+            return
+        import favorites as favs
+        folder = self._current_fav_folder()
+        entry = favs.get(self._fav_data, folder, slug) if folder else None
+        if entry and version in entry.get("versions", []):
+            entry["versions"].remove(version)
+            favs.save(self._fav_data)
+            self._refresh_fav_cards(folder)
 
     def _on_fav_dropped(self, slug, to_folder):
         """收藏卡片拖到某文件夹 → 跨夹复制。"""

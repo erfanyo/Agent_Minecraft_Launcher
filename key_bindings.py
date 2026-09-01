@@ -9,6 +9,8 @@
 import json
 import os
 
+import paths
+
 # 原版常用按键翻译键 → 中文(兜底;bridge-mod 导出的 display 字段优先)
 KEY_NAMES_CN = {
     "key.forward": "前进", "key.back": "后退", "key.left": "左移", "key.right": "右移",
@@ -70,7 +72,7 @@ def _disp(act: dict) -> str:
 
 def load_keybindings(game_dir: str, instance: str) -> dict | None:
     """读实例 .bridge/keybindings.json;不存在返回 None"""
-    p = os.path.join(game_dir, "versions", instance, ".bridge", "keybindings.json")
+    p = os.path.join(paths.bridge_dir(instance, game_dir), "keybindings.json")
     if not os.path.isfile(p):
         return None
     try:

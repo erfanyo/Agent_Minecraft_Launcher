@@ -498,6 +498,7 @@ class VersionHome(QWidget):
     login_changed = Signal()
     one_click_config_requested = Signal(str)  # "bridge"/"rcon"/"auto" → 主窗口处理
     import_modpack_requested = Signal()       # 导入整合包
+    open_resources_requested = Signal(int)    # 资源中心页:1新建游戏 / 3下载 Mod
     tutorial_requested = Signal()            # 打开新手教程
     instance_selected = Signal(object)       # 选中实例(或 None)→ 主窗口 显示/隐藏「实例详情」标签页
     refresh_requested = Signal()             # 切回「实例」标签页请求刷新(无刷新按钮,自动刷)
@@ -540,7 +541,23 @@ class VersionHome(QWidget):
 
         lay.addStretch(1)
 
-        # 「导入整合包」(左)+「一键配置」(右)并排,放在「启动游戏」上方
+        # 高频入口始终可见：不依赖 AI，也不用到多层菜单里找。
+        quick_row = QHBoxLayout()
+        quick_row.setSpacing(10)
+        new_game_btn = QPushButton("新建游戏")
+        new_game_btn.setToolTip("选择 Minecraft 版本和加载器，创建一个新游戏")
+        find_mod_btn = QPushButton("下载 Mod")
+        find_mod_btn.setToolTip("浏览、搜索并下载 Mod；也可进入整合包、光影和资源包页面")
+        for btn in (new_game_btn, find_mod_btn):
+            btn.setMinimumHeight(40)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            set_style(btn, card_btn_style)
+            quick_row.addWidget(btn, 1)
+        new_game_btn.clicked.connect(lambda: self.open_resources_requested.emit(1))
+        find_mod_btn.clicked.connect(lambda: self.open_resources_requested.emit(3))
+        lay.addLayout(quick_row)
+
+        # 「导入整合包」(左)+「一键配置」(右)并排，属于次高频操作。
         tool_row = QHBoxLayout()
         tool_row.setSpacing(10)
         self.import_btn = QPushButton(t("VERSION_HOME_IMPORT_MODPACK"))

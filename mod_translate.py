@@ -66,11 +66,25 @@ def _active_model_id() -> str:
     return DEFAULT_MODEL_ID
 
 
+def translation_source() -> str:
+    """当前描述翻译来源；独立于聊天策略，默认本地以避免意外消耗云端额度。"""
+    try:
+        from settings import load_settings
+        return "cloud" if load_settings().get("ai_mod_translate_source") == "cloud" else "local"
+    except Exception:
+        return "local"
+
+
 def model_cache_version() -> str:
     """当前模型指纹(缓存失效键):manifest 顶层版本 + 资源 model_version/quant/sha256 前 12 位。
     清单版本号变更 / 模型资源定义变更 → 指纹变 → 缓存整批作废。"""
     try:
         import model_registry
+        if translation_source() == "cloud":
+            from settings import load_settings
+            s = load_settings()
+            return "cloud|" + "|".join(str(s.get(k, "")) for k in
+                                         ("ai_cloud_provider", "ai_cloud_base_url", "ai_cloud_model"))
         mid = _active_model_id()
         res = model_registry.RESOURCES.get(mid, {})
         manifest_ver = "?"
@@ -273,6 +287,29 @@ def get_translation_engine():
         return _engine
 
 
+def _translate_with_cloud(text: str, timeout: int, target_lang: str, target_name: str) -> str:
+    """用用户已配置的 OpenAI 兼容云端模型翻译；不新建中转、不保存密钥。"""
+    from settings import load_settings
+    import requests
+    s = load_settings()
+    base = (s.get("ai_cloud_base_url") or "").rstrip("/")
+    key = (s.get("ai_cloud_api_key") or "").strip()
+    model = (s.get("ai_cloud_model") or "").strip()
+    if not (base and key and model):
+        raise TranslationUnavailable("云端翻译未配置：请先在设置 → AI 助手填写云端接口、密钥和模型。")
+    target = target_name or ("简体中文" if target_lang == "zh" else target_lang)
+    prompt = (f"把下面 Minecraft Mod 描述翻译成{target}。只输出译文，不解释；保留 Mod 名、版本号、URL、"
+              "配置项和代码标识。\n\n" + text)
+    try:
+        r = requests.post(base + "/chat/completions", headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+                          json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 1024},
+                          timeout=(15, timeout))
+        r.raise_for_status()
+        return (r.json()["choices"][0]["message"].get("content") or "").strip()
+    except Exception as e:
+        raise TranslationUnavailable(f"云端翻译失败：{type(e).__name__}: {e}") from e
+
+
 # ---------------- 对外纯函数 ----------------
 def translate_text(text: str, slug: str = "", field: str = "description",
                    engine=None, timeout: int = 90,
@@ -327,14 +364,17 @@ def translate_text(text: str, slug: str = "", field: str = "description",
                 "cached": True, "source": "cache",
                 "glossary_hit": bool(hit.get("g", False))}
 
-    eng = engine if engine is not None else get_translation_engine()
     try:
-        g = {}
-        if not target_lang:
-            from local_ai import MC_GLOSSARY
-            g = MC_GLOSSARY
-        output = eng.translate(text, timeout=timeout, glossary=g,
-                               target_lang=target_lang or "zh", target_name=tname)
+        if engine is None and translation_source() == "cloud":
+            output = _translate_with_cloud(text, timeout, target_lang or "zh", tname)
+        else:
+            eng = engine if engine is not None else get_translation_engine()
+            g = {}
+            if not target_lang:
+                from local_ai import MC_GLOSSARY
+                g = MC_GLOSSARY
+            output = eng.translate(text, timeout=timeout, glossary=g,
+                                   target_lang=target_lang or "zh", target_name=tname)
     except TranslationUnavailable:
         raise
     except Exception as e:

@@ -76,6 +76,12 @@ from skill_manager import SkillManager, SkillManagerDialog  # 技能(运行时�
 from version_tree import fill_version_tree  # 版本树构建(与下载选项卡共用)
 
 
+def application_icon() -> QIcon:
+    """统一窗口/任务栏图标；源码和 PyInstaller 单文件版都从 icons/ 读取。"""
+    root = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return QIcon(os.path.join(root, "icons", "grass_block.png"))
+
+
 
 
 
@@ -132,7 +138,7 @@ class MainWindow(QMainWindow):
                                            trailing_widget=self._running_label)
         # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
         # - 导入整合包 → 下载新资源 → 实例 →「导入整合包」按钮
-        # - 检查更新 / 引导教程(重播) → 放到 设置 → 界面
+        # - 检查更新 / 引导教程(重播) → 放到 设置 → 系统
         # - 打开游戏目录 / 清空实例 / 刷新版本列表 意义不大,不再放外层入口
         # 相关方法(load_versions/import_modpack/open_game_dir/clear_instances/open_update_dialog)仍保留可调用。
 
@@ -154,6 +160,7 @@ class MainWindow(QMainWindow):
         tab_a.login_changed.connect(self._on_login_changed)
         tab_a.one_click_config_requested.connect(self._one_click_config_kind)
         tab_a.import_modpack_requested.connect(self.import_modpack)
+        tab_a.open_resources_requested.connect(self._open_resource_page)
         tab_a.tutorial_requested.connect(self.open_tutorial)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
@@ -490,6 +497,15 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_online_tab_idx"):
             self.main_tabs.setCurrentIndex(self._online_tab_idx)
 
+    def _open_resource_page(self, page_index: int):
+        """首页常用操作直达资源中心，避免新建游戏/下载 Mod 被埋进二级菜单。"""
+        if not hasattr(self, "resource_center") or not hasattr(self, "main_tabs"):
+            return
+        idx = self.main_tabs.indexOf(self.resource_center)
+        if idx >= 0:
+            self.main_tabs.setCurrentIndex(idx)
+        self.resource_center.switch_to(int(page_index))
+
     def open_tutorial(self):
         """打开新手教程(模块化:内容 tutorial_content.py / 渲染 tutorial_gui.py,与 UI 解耦)"""
         from tutorial_gui import TutorialDialog
@@ -499,7 +515,7 @@ class MainWindow(QMainWindow):
         """打开引导式新手教程(正式步骤):spctlight + 箭头 + 文本,用 UI 路由指向真实界面。
 
         intro=True 时先弹「基础知识页」(可跳过),再进正式引导。重播/自动播放都可用。
-        步骤覆盖:版本分类 → 加载器 → 下载 Mod(不遮盖选项)→ 启动器插件 → AI + 技能。
+        步骤覆盖:新建游戏 → 下载 Mod → 导入整合包 → 启动 → 可选 AI。
         """
         # ① 先弹基础知识页(可跳过):MC 版本/阵营/正版 + 版本分类
         if intro:
@@ -513,35 +529,16 @@ class MainWindow(QMainWindow):
         from guide_overlay import GuideDriver
 
         steps = [
-            # ---- 版本分类(下载新资源 → 实例/下载向导 → 版本树)----
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "1"), ("widgetname", "version_tree")],
-             "arrow": "below",
-             "text": "① 先认识版本:左侧版本列表里,「正式版」最稳(其中几个「黄金版本」Mod 生态最好);"
-                     "「预览版」=公测(可能有 bug);「远古版」=考古;「愚人节版」=官方整活小改(类似整合包)。"},
-            # ---- 加载器(同页:下载向导的加载器卡片)----
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "1"), ("widgetname", "loader_panel")],
-             "arrow": "below",
-             "text": "② 选完版本选「加载器」:原版(不打 Mod)/ Fabric / Forge / NeoForge。"
-                     "NeoForge 是 Forge 的现代继承者(1.20.2 及以上);"
-                     "Fabric 轻量、Mod 多。以后可能支持更多加载器。"},
-            # ---- 下载 Mod(不遮盖选项,多个一起讲)----
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"), ("widgetname", "resource_search")],
-             "arrow": "below",
-             "text": "③ 这里逛 Mod:搜索框搜中文/英文;上面能选「游戏版本 + 加载器」、排序/标签,"
-                     "找到后点「下载」装到目标实例。光影包 / 数据包 / 资源包 也是同样的逛法。"},
-            # ---- 启动器插件(默认仓库)----
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "8"), ("widgetname", "plugins_page")],
-             "arrow": "below",
-             "text": "④ 启动器插件页:默认已填好官方仓库(erfanyo/Agent_Minecraft_Launcher,"
-                     "plugins.json 清单);点「添加仓库」还能加别的仓库,仓库里的插件可一键安装。"},
-            # ---- AI + 技能 ----
-            {"route": [("maintab", "设置"), ("btn", "AI 助手")],
-             "arrow": "below",
-             "text": "⑤ AI 助手:配云端或本地模型后,能问答、自动帮你装 Mod/查配方/诊断崩溃;"
-                     "「技能管理」里能开关 自动重启 / 备份提醒 / 崩溃诊断清单 等辅助技能。"},
-            {"route": [("maintab", "我的实例"), ("btn", "启动游戏")],
-             "arrow": "below",
-             "text": "⑥ 回到「我的实例」:右侧选中一个实例,点这个「启动游戏」大按钮就进游戏了。"},
+            {"route": [("maintab", "我的实例"), ("btn", "新建游戏")], "arrow": "below",
+             "text": "① 从这里开始：新建一个游戏。只想直接玩就选原版；想安装 Mod 时，再选择 Fabric 或 NeoForge。"},
+            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"), ("widgetname", "resource_search")], "arrow": "below",
+             "text": "② 想扩展玩法就来下载 Mod。先选目标实例，再搜索、查看说明并下载；不需要 AI 也能完整使用。"},
+            {"route": [("maintab", "我的实例"), ("btn", "导入整合包")], "arrow": "below",
+             "text": "③ 已经下载了整合包？从这里导入。它会成为独立游戏，方便以后备份和管理。"},
+            {"route": [("maintab", "我的实例"), ("btn", "启动游戏")], "arrow": "above",
+             "text": "④ 选中一个实例后点这里启动。启动失败时，先在实例详情中查看日志或崩溃报告。"},
+            {"route": [("maintab", "设置"), ("btn", "AI 助手")], "arrow": "below",
+             "text": "⑤ AI 是可选增强：想让它帮你找 Mod、查配方或分析报错时，再来这里配置。没配置 AI 也不影响前面的所有操作。"},
         ]
         self._guide_driver = GuideDriver(self, steps)
         self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))
@@ -1243,6 +1240,14 @@ class MainWindow(QMainWindow):
             #    整合包 json 可能从加载器版本复制而来,id 若没改对,游戏会被启动到
             #    加载器的空白目录里(mod 全不加载)—— 游戏目录必须是所选实例自己的目录。
             game_dir = self.game_dir_for(v["id"])
+            # 游戏语言默认跟随启动器：language=auto 时 i18n 已解析为系统语言。
+            # 关闭设置后不改 options.txt，玩家可在游戏里为该实例单独选择语言。
+            if self.settings.get("sync_minecraft_language", True):
+                try:
+                    from minecraft_language import sync_minecraft_language
+                    sync_minecraft_language(game_dir, i18n.get_base_language())
+                except Exception:
+                    pass  # 配置文件不可写不应妨碍正常启动
             # 正版登录:若存了凭证,启动时用正版 UUID/令牌(online 服能过验证);否则离线
             auth = None
             username_load = self.settings.get("username", "Player")
@@ -2261,6 +2266,7 @@ if __name__ == "__main__":
         raise SystemExit(0)
     print("正在获取版本列表(首次约几秒,请稍等)...")
     app = QApplication(sys.argv)
+    app.setWindowIcon(application_icon())
     from ui_style import apply_global_dark_palette
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
@@ -2276,6 +2282,7 @@ if __name__ == "__main__":
             _auto_tutorial = True
 
     window = MainWindow()
+    window.setWindowIcon(application_icon())
     window.load_versions()  # 启动时先加载一次
     window.show()
     # 首次启动选了「新手」→ 自动走一遍引导式新手教程(用 QTimer 延迟到首帧后,保证控件就绪)

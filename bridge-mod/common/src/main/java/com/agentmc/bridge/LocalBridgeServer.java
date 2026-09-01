@@ -154,7 +154,7 @@ public class LocalBridgeServer {
             // 再试 UUID
             try {
                 UUID uuid = UUID.fromString(nameOrUuid);
-                return playerList.getPlayerByUUID(uuid);
+                return playerList.getPlayer(uuid);
             } catch (Exception ignored) { }
             // 大小写/别名兜底:在线玩家里找名字忽略大小写匹配
             for (ServerPlayer p : playerList.getPlayers()) {

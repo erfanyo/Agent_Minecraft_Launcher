@@ -18,6 +18,7 @@ DEFAULTS = {
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
     "language": "auto",          # 界面语言:auto(跟随系统)/ zh / en / 语言包id(如玩梗版;见 i18n.py)
+    "sync_minecraft_language": True,  # 启动前用启动器/系统语言同步实例 options.txt 的 lang 项
     "ui_mode": "beginner",       # 界面模式:beginner=全面(多提示/科普)/ expert=摘要(精简)。
                                  # 对外显示名叫「全面 / 摘要」(不用"新手/专家",免得显得看不起新手);
                                  # 值保持 beginner/expert 以兼容旧配置。
@@ -38,7 +39,8 @@ DEFAULTS = {
     "ai_base_url": "https://api.deepseek.com/v1",
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
-    "ai_permission": "readonly",   # AI 文件权限:readonly / workspace_write
+    # 默认仅允许启动器数据(AMCL)和游戏目录(.minecraft)内的正常操作；每项 AI 动作仍会先展示预览确认。
+    "ai_permission": "launcher_write",    # AI 文件权限:readonly / launcher_write / workspace_write
     "context_window": 65536,       # AI 上下文窗口上限(tokens),DeepSeek-chat 为 64K
     "ai_multimodal": False,        # 模型是否支持图片输入(多模态):True = AI 对话框显示图片相关按钮;
                                    # 目前准备使用的本地模型不支持,未来换多模态模型时把这里改成 True 即可
@@ -52,6 +54,8 @@ DEFAULTS = {
     "ai_in_game_admin": "",                       # 可豁免的"服主/管理员"名单(逗号分隔)
     "ai_strategy": "local_first",                 # AI 策略三档:local_first(本地优先,省)/ cloud_first(云端优先,强)/ hybrid(混合平衡)
     "ai_mod_translate": True,                     # Mod 描述本地 AI 翻译(英→中):True=详情显示中文+机翻标注 / False=原文
+    "ai_mod_translate_source": "local",          # Mod 描述翻译来源:local(默认) / cloud(使用已配置云端模型)
+    "ai_cloud_tool_log": True,                     # 云端工具调用训练日志:仅本机 JSONL，可在设置关闭
     # ---- 云端 / 本地 两组独立设置(设置 UI 分开,ai_source 决定当前用哪边)----
     "ai_source": "cloud",          # 当前模型来源:cloud(云端)/ local(本地)
     # 云端模型(ai_source=cloud 时生效;DeepSeek/OpenRouter/硅基流动/智谱/通义/自定义)

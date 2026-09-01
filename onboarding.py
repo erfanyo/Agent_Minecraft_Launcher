@@ -4,7 +4,7 @@
 1. 选择 Minecraft 游戏文件存放位置 —— 可以是全新目录,也可以是已有的
    .minecraft(比如 PCL2 / 官方启动器创建的),启动器会直接读取里面的实例。
    一个用户有多个 .minecraft 时,引导里浏览选择用哪一个即可。
-2. 第一次配置 AI 助手(DeepSeek / Ollama / LM Studio / 自定义)。
+2. 按需配置 AI 助手(DeepSeek / Ollama / LM Studio / 自定义)。
 """
 import json
 import os
@@ -29,9 +29,9 @@ from settings import load_settings, save_settings
 
 
 class OnboardingDialog(QDialog):
-    """首次启动引导:① 新手/老手 ② 游戏目录 ③ AI 配置。保存进 config.json。
+    """首次启动引导:① 新手/老手 ② 游戏目录 ③ 可选 AI 配置。保存进 config.json。
 
-    新手→自动播放引导式教程;老手→跳过(设置→界面 可重播)。
+    新手→自动播放引导式教程;老手→跳过(设置→系统 可重播)。
     """
 
     def __init__(self, parent=None):
@@ -78,7 +78,7 @@ class OnboardingDialog(QDialog):
         title0 = QLabel("欢迎!先确认一下你对 Minecraft 熟悉程度")
         title0.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_text};")
         desc0 = QLabel(
-            "接下来会带你选好游戏目录、配置 AI 助手。\n"
+            "接下来先选好游戏目录。AI 助手是可选增强，想用时再配置即可。\n"
             "如果你是第一次接触本启动器(或想熟悉一下),选「新手」,"
             "配置完成后会**自动带你走一遍新手教程**。")
         desc0.setWordWrap(True)
@@ -86,8 +86,8 @@ class OnboardingDialog(QDialog):
         self.rb_new = QRadioButton("新手 —— 第一次用 / 想熟悉一下(推荐,自动进教程)")
         self.rb_old = QRadioButton("老手 —— 我懂 Minecraft,自己摸索就行")
         self.rb_new.setChecked(True)
-        self.rb_new.setToolTip("配置完成后自动播放引导式新手教程;以后随时可在 设置→界面→重播引导教程")
-        self.rb_old.setToolTip("不自动进教程;需要时可在 设置→界面→重播引导教程")
+        self.rb_new.setToolTip("配置完成后自动播放引导式新手教程;以后随时可在 设置→系统→重播引导教程")
+        self.rb_old.setToolTip("不自动进教程;需要时可在 设置→系统→重播引导教程")
 
         p0 = QVBoxLayout(page_welcome)
         p0.addWidget(title0)
@@ -133,10 +133,10 @@ class OnboardingDialog(QDialog):
 
         # ---- 页面 2:AI 首次配置 ----
         page_ai = QWidget()
-        title2 = QLabel("第二步 · 配置 AI 助手(可以稍后改)")
+        title2 = QLabel("可选 · 连接 AI 助手")
         title2.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_text};")
-        desc2 = QLabel("AI 助手能回答问题、诊断报错、帮你装 Mod。首次配置一次,"
-                       "以后随时在菜单 设置 / AI 设置 里修改。")
+        desc2 = QLabel("AI 能回答问题、诊断报错、帮你装 Mod；不配置也不影响创建、启动游戏、"
+                       "安装 Mod 或导入整合包。以后随时可在设置的 AI 助手页修改。")
         desc2.setWordWrap(True)
         self.ai_form = AISettingsForm(self.settings)
         hint = QLabel("没有 DeepSeek 账号?可以先用 Ollama / LM Studio 本地模型,完全免费离线。\n"
@@ -170,7 +170,7 @@ class OnboardingDialog(QDialog):
         self.prev_btn.clicked.connect(self._prev)
         self.next_btn = QPushButton("下一步")
         self.next_btn.clicked.connect(self._next)
-        skip_btn = QPushButton("跳过(AI 以后再配)")
+        skip_btn = QPushButton("先不用 AI，完成")
         skip_btn.setToolTip("先保存游戏目录,AI 用默认设置,以后在 设置 里改")
         skip_btn.clicked.connect(self._finish)
         from ui_style import current_color, set_style, card_btn_style

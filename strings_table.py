@@ -48,6 +48,7 @@ STRINGS = {
     "FULL_SHOWS_RESOURCE_GUIDE_DETAILED_HINTS_SUMMARY_HIDES_THEM_CONCISE": ("全面:首页多给你讲资源结构,提示更详细;摘要:去掉科普,只留必要的。", "Full: home shows resource guide & more detail; Summary: hides the extra, keeps it simple."),
     "GAME": ("游戏", "Game"),
     "UI": ("界面", "UI"),
+    "SYSTEM": ("系统", "System"),
     "GAME_VERSION_CLICK_A_MAJOR_TO_AUTO_PICK": ("选游戏版本(点一个系列,自动帮你挑好)", "Game version (click a series to auto-pick)"),
     "GENERATE_ROOM_SHARE": ("一键生成房间并分享", "Generate room & share"),
     "HOME": ("首页", "Home"),

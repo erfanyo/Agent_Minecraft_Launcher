@@ -13,14 +13,21 @@
 但每个 MC 版本类结构都要适配、脆弱、无生态,且做不了数据导出等高级功能 → 放弃。
 采用多平台 mod(社区 MultiLoader 模板,版本适配成熟)。
 
-## 兼容目标(2026-08 更新)
+## 兼容目标（2026-09 修正）
 
-**策略:先兼容 mod 生态活跃/多的版本**(而不是铺开所有版本):
-- ✅ Fabric 1.21.1(已编译发布)
-- ✅ NeoForge 1.21.1(已编译发布)
-- 🎯 目标:**1.20.1**(老版本里 mod 生态最活跃)、**1.21.4**(1.21 系列主流)
-- ⏳ Forge(1.19 及以前)晚点再说
-- 每个新版本 = 改 loom/neogradle 的 MC 版本重编译 + 版本表加条目(15 秒级)
+bridge-mod 有两种**实现路线**，不是功能档位：现代版本使用完整 API；旧版因加载器与
+Minecraft API 太旧，使用独立兼容实现。两者都以“在该版本 API 允许范围内尽量提供完整功能”为目标。
+
+短期目标版本：**1.21.1、1.20.1、1.19.2、1.18.2、1.16.5、1.12.2、1.7.10**。
+
+| 版本段 | 加载器 | 实现路线 | Java 运行时 | 当前状态 |
+|---|---|---|---|---|
+| 1.21.1 | Fabric / NeoForge | 完整 API | 21 | Fabric 已有可用产物；其余待重新核验发布 |
+| 1.20.1 / 1.19.2 / 1.18.2 | Forge 优先，Fabric 次之 | 尽量完整的适配 API | 17 | Forge 1.20.1 已构建验证；其余待构建 |
+| 1.16.5 / 1.12.2 / 1.7.10 | Forge | 旧版兼容实现 | 8 | 待建立独立旧工具链 |
+
+**1.21.1 以下的适配优先级：Forge > Fabric > NeoForge。**旧版兼容实现至少保留双向指令、结果回传和启动器下载/安装兼容；能导出的配方、物品、
+按键与游戏内 AI 上下文则按各版本 API 逐项补齐，并通过能力标记告诉启动器实际可用项。
 
 ## 功能路线图(频繁迭代)
 
@@ -68,8 +75,19 @@ bridge-mod/
 
 需要:JDK(带 javac)+ Gradle(或 gradle wrapper,首次联网下载)。
 
-**构建状态(2026-08)**:✅ **fabric 平台编译通过**(产物 `fabric/build/libs/fabric-0.1.0.jar`)。
-forge / neoforge 平台插件版本待适配(见下)。
+### 要准备的 JDK（构建与运行矩阵）
+
+| MC 目标版本 | 游戏/Mod 运行 Java | bridge 构建 JDK | 备注 |
+|---|---:|---:|---|
+| 1.21.1 | 21 | 21 | 现代 Fabric / NeoForge |
+| 1.20.1、1.19.2、1.18.2 | 17 | 17 | 现代 Forge / Fabric |
+| 1.16.5、1.12.2、1.7.10 | 8 | 8 | 旧 ForgeGradle，独立工程 |
+
+因此开发机至少保留 **JDK 8、JDK 17、JDK 21**。不要只改全局 `JAVA_HOME`；各构建脚本
+显式选择对应 JDK，旧版还要使用独立的 Gradle 用户目录和旧 ForgeGradle，避免污染现代构建缓存。
+
+**构建状态(2026-09)**:✅ Fabric 1.21.1 与 **Forge 1.20.1** 已编译通过。Forge 1.20.1
+产物为 `forge/build/libs/agentmc-bridge-forge-1.20.1-0.2.0.jar`；NeoForge 与其他目标版本仍待核验。
 
 **本机已验证的环境**(关键!):
 - JAVA_HOME = `E:\Agent_Minecraft_Launcher 0.0.1\.tmp\jdk\jdk-21.0.12.1+1`
@@ -91,10 +109,13 @@ E:\Agent_Minecraft_Launcher 0.0.1\.tmp\gradle-dist\gradle-8.10.2\bin\gradle.bat 
 > 产物字节码版本 = 21(匹配 MC 1.21.1 的 Java 21 运行时)。
 > 构建需联网(首次下载 MC 依赖几百 MB,GRADLE_USER_HOME 里缓存)。
 
-**当前构建范围**:只构建 fabric(common 源码直接并入 fabric 编译单元,
-见 `fabric/build.gradle.kts` 的 sourceSets)。forge / neoforge 子项目
-已从 `settings.gradle.kts` 的 include 移除,待适配它们的 gradle 插件版本
-(ForgeGradle 6.0.x、NeoGradle 7.0.x)后再加入。
+**Forge 1.20.1 构建命令**:
+```
+set JAVA_HOME=D:\programs\Java\jdk-17.0.12
+set GRADLE_USER_HOME=E:\Agent_Minecraft_Launcher 0.0.1\.tmp\gradle-home-forge-1.20.1
+E:\Agent_Minecraft_Launcher 0.0.1\.tmp\gradle-dist\gradle-8.10.2\bin\gradle.bat -p bridge-mod :forge:build --no-daemon
+```
+Forge 子项目直接编译 `common` 与 `common-1.20.1` 源码，避免把 1.21 API 混入 1.20.1 产物。
 
 ## 老版本兼容策略(1.7.10 等)
 
@@ -103,11 +124,9 @@ E:\Agent_Minecraft_Launcher 0.0.1\.tmp\gradle-dist\gradle-8.10.2\bin\gradle.bat 
 - 加载器:Fabric 不支持 1.14 以前;NeoForge 仅 1.20.1+;老版本只有老 Forge
 - API:数据导出代码依赖 1.20.5+ 的 API,老版本要按版本重写
 
-**现实路径**:
-1. 现代版本(1.20.1+ / 1.21.x):用本 mod(当前骨架)
-2. 老版本(1.7.10 等):继续用"Lan Server Properties + 模拟按键 + 日志反馈"
-   轻量方案;如以后确实重视老版本,再单独建老工具链的分支项目(功能打折,
-   数据导出在老 API 上做不了,只能做指令桥/自动 RCON)
+**现实路径**：为旧版建立独立 ForgeGradle/JDK 8 工程，而不是放弃 bridge-mod。
+旧版优先实现双向指令通道，再按 API 能力补数据导出与 `/ai` 上下文；启动器下载页始终
+兼容上述目标版本，即使某版本暂时只能提供部分 bridge 能力。
 
 
 ## 分发策略(2026-08 已定)

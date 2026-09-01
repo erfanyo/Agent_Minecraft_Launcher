@@ -24,6 +24,7 @@ import zipfile
 from collections import deque  # noqa: F401 (保留导入,避免其它模块误用)
 
 import recipe_datapack  # 配方旁路:直接读 mod jar / 版本 jar 的 datapack 配方(无需进游戏)
+import paths
 
 # 配方类型 → 中文机器名(合成/加工设备)
 MACHINE_CN = {
@@ -581,11 +582,16 @@ class RecipeData:
 def locate_bridge(game_dir: str, instance_id: str | None = None):
     """定位实例的 .bridge 数据,返回 (instance_id, base_dir, rec_path) 或 None。
     instance_id 缺省时自动探测所有实例,取 recipes.json 最新导出的。"""
-    versions_dir = os.path.join(game_dir, "versions")
     if instance_id:
-        base = os.path.join(versions_dir, instance_id)
-        rec = os.path.join(base, ".bridge", "recipes.json")
+        base = paths.instance_dir(instance_id, game_dir)
+        rec = os.path.join(paths.bridge_dir(instance_id, game_dir), "recipes.json")
         return (instance_id, base, rec) if os.path.isfile(rec) else None
+    # 关闭版本隔离时，bridge-mod 的数据位于游戏根 .bridge，不能从
+    # versions/ 子目录猜测。数据对当前共享游戏目录里的实例都有效。
+    if not paths.version_isolation_enabled():
+        rec = os.path.join(game_dir, ".bridge", "recipes.json")
+        return ("共享游戏目录", game_dir, rec) if os.path.isfile(rec) else None
+    versions_dir = os.path.join(game_dir, "versions")
     if os.path.isdir(versions_dir):
         best = None
         try:
@@ -606,6 +612,9 @@ def locate_bridge(game_dir: str, instance_id: str | None = None):
 
 def instances_with_bridge(game_dir: str) -> list:
     """列出已导出过配方数据的实例 id(按导出时间新→旧)"""
+    if not paths.version_isolation_enabled():
+        rec = os.path.join(game_dir, ".bridge", "recipes.json")
+        return ["共享游戏目录"] if os.path.isfile(rec) else []
     versions_dir = os.path.join(game_dir, "versions")
     if not os.path.isdir(versions_dir):
         return []

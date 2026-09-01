@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-设置中心(顶部标签卡版):左菜单(游戏/界面/AI助手/镜像源)+ 右侧面板,复用 CenterShell,
+设置中心(顶部标签卡版):左菜单(游戏/界面/系统/AI助手/镜像源)+ 右侧面板,复用 CenterShell,
 和「下载新资源」同一套布局/操作逻辑。解决原「设置弹窗(模态)」挡住引导遮罩的问题。
 
 保存:底部「保存设置」按钮 → 收集各面板 → save_settings → 发射 applied。
@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
-    QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 from assistant import AISettingsForm
@@ -121,6 +121,7 @@ class SettingsCenter(QWidget):
         self.shell = CenterShell(self, menu_width=150)
         self.shell.add_section(t("GAME"), self._build_game)
         self.shell.add_section(t("UI"), self._build_ui)
+        self.shell.add_section(t("SYSTEM"), self._build_system)
         self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
         self.shell.add_section(t("MIRROR"), self._build_mirror)
         self.shell.add_section(t("PLUGINS"), self._build_plugins)
@@ -236,8 +237,15 @@ class SettingsCenter(QWidget):
         form.addRow("界面模式:", self.ui_mode_combo)
         form.addRow("", mode_hint)
 
+        self.sync_minecraft_language_check = QCheckBox("启动游戏时同步 Minecraft 语言（跟随启动器/系统）")
+        self.sync_minecraft_language_check.setChecked(
+            bool(self.settings.get("sync_minecraft_language", True)))
+        self.sync_minecraft_language_check.setToolTip(
+            "开启：每次启动前把实例 options.txt 的语言设为当前启动器语言；关闭后可在游戏内独立选择。")
+
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
         l.addLayout(form)
+        l.addWidget(self.sync_minecraft_language_check)
         self.animations_check = QCheckBox("启用界面动画(淡入/标签切换等)")
         self.animations_check.setChecked(bool(self.settings.get("ui_animations_enabled", True)))
         l.addWidget(self.animations_check)
@@ -251,17 +259,6 @@ class SettingsCenter(QWidget):
             row = QHBoxLayout(); row.addWidget(info, 1)
             # 老版教程(基础版)已移除:不再提供「临时查看」入口,只保留新版「重播引导教程」
             l.addLayout(row)
-        # 检查更新 / 重播引导教程(原在菜单栏,现并入设置 → 界面;重播按钮不放在最外层)
-        l.addSpacing(8)
-        upd_btn = QPushButton(t("CHECK_FOR_UPDATES"))
-        tut_btn = QPushButton(t("REPLAY_GUIDED_TUTORIAL"))
-        for b in (upd_btn, tut_btn):
-            set_style(b, card_btn_style); b.setMinimumHeight(32)
-        upd_btn.clicked.connect(self._open_update)
-        tut_btn.clicked.connect(self._open_guide)
-        more_row = QHBoxLayout(); more_row.addWidget(upd_btn); more_row.addWidget(tut_btn); more_row.addStretch()
-        l.addLayout(more_row)
-
         # 配色(自定义主题):改 强调色/文字色/次要文字/背景色
         l.addSpacing(12)
         theme_title = QLabel("🎨 配色(自定义主题,文字颜色也可以改):")
@@ -300,22 +297,6 @@ class SettingsCenter(QWidget):
         self._readability_label.setWordWrap(True)
         l.addWidget(self._readability_label)
         self._refresh_color_btn_text()
-        # 缓存管理:清除 Mod 图片/描述缓存(换新图/翻译更新时用)
-        l.addSpacing(12)
-        cache_title = QLabel("🗂 缓存(Mod 图片 & 描述翻译):")
-        cache_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
-        l.addWidget(cache_title)
-        cache_hint = QLabel("图片/描述按 Mod 名缓存(不同版本同一 Mod 复用)。若某 Mod 更新了图标或想重翻描述,清除后重新打开该 Mod 即可。")
-        cache_hint.setWordWrap(True); cache_hint.setStyleSheet(f"color: {muted_color()};")
-        l.addWidget(cache_hint)
-        cache_row = QHBoxLayout(); cache_row.setSpacing(8)
-        clear_icon_btn = QPushButton("清除图片缓存"); set_style(clear_icon_btn, card_btn_style); clear_icon_btn.setMinimumHeight(32)
-        clear_icon_btn.clicked.connect(lambda: self._clear_cache("icons"))
-        clear_desc_btn = QPushButton("清除描述翻译缓存"); set_style(clear_desc_btn, card_btn_style); clear_desc_btn.setMinimumHeight(32)
-        clear_desc_btn.clicked.connect(lambda: self._clear_cache("desc"))
-        cache_row.addWidget(clear_icon_btn)
-        cache_row.addWidget(clear_desc_btn)
-        l.addLayout(cache_row)
         # 自定义背景(阶段 2):壁纸源 + 遮罩强度(决策 1/2/3)
         l.addSpacing(12)
         bg_title = QLabel("🖼 背景(壁纸 & 遮罩):")
@@ -542,6 +523,41 @@ class SettingsCenter(QWidget):
         if p is not None and hasattr(p, "open_guide_demo"):
             p.open_guide_demo()
 
+    # ================= 系统 =================
+    def _build_system(self) -> QWidget:
+        """与视觉外观无关的维护项集中在这里，避免“界面”页变成杂物间。"""
+        w = QWidget()
+        l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
+
+        head = QLabel("启动器维护")
+        head.setStyleSheet(f"font-size:16px; font-weight:bold; color:{text_color()};")
+        hint = QLabel("更新、教程和缓存都放在这里；不会影响你的游戏存档或已安装的 Mod。")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color:{muted_color()};")
+        l.addWidget(head); l.addWidget(hint)
+
+        update_btn = QPushButton(t("CHECK_FOR_UPDATES"))
+        tutorial_btn = QPushButton(t("REPLAY_GUIDED_TUTORIAL"))
+        for btn in (update_btn, tutorial_btn):
+            btn.setMinimumHeight(34); set_style(btn, card_btn_style)
+        update_btn.clicked.connect(self._open_update)
+        tutorial_btn.clicked.connect(self._open_guide)
+        actions = QHBoxLayout(); actions.addWidget(update_btn); actions.addWidget(tutorial_btn); actions.addStretch()
+        l.addLayout(actions)
+
+        cache_title = QLabel("缓存")
+        cache_title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
+        cache_hint = QLabel("清除后不会删 Mod、实例或存档；下次打开资源详情时会重新下载图片或翻译。")
+        cache_hint.setWordWrap(True); cache_hint.setStyleSheet(f"color:{muted_color()};")
+        clear_icon_btn = QPushButton("清除 Mod 图片缓存")
+        clear_desc_btn = QPushButton("清除描述翻译缓存")
+        for btn in (clear_icon_btn, clear_desc_btn):
+            btn.setMinimumHeight(34); set_style(btn, card_btn_style)
+        clear_icon_btn.clicked.connect(lambda: self._clear_cache("icons"))
+        clear_desc_btn.clicked.connect(lambda: self._clear_cache("desc"))
+        cache_row = QHBoxLayout(); cache_row.addWidget(clear_icon_btn); cache_row.addWidget(clear_desc_btn); cache_row.addStretch()
+        l.addWidget(cache_title); l.addWidget(cache_hint); l.addLayout(cache_row); l.addStretch()
+        return self._wrap_scroll(w)
+
     def _reopen_tutorial(self):
         p = self.window()
         if p is not None and hasattr(p, "open_tutorial"):
@@ -550,8 +566,16 @@ class SettingsCenter(QWidget):
     # ================= AI 助手 =================
     def _build_ai(self) -> QWidget:
         self.ai_form = AISettingsForm(self.settings)
-        self.mod_translate_check = QCheckBox("Mod 描述本地 AI 翻译(英→中)")
+        self.mod_translate_check = QCheckBox("Mod 描述 AI 翻译(英→中)")
         self.mod_translate_check.setChecked(bool(self.settings.get("ai_mod_translate", True)))
+        self.mod_translate_source = QComboBox()
+        self.mod_translate_source.addItem("本地模型（默认，离线）", "local")
+        self.mod_translate_source.addItem("已配置的云端模型（更准确，消耗额度）", "cloud")
+        source_idx = self.mod_translate_source.findData(self.settings.get("ai_mod_translate_source", "local"))
+        self.mod_translate_source.setCurrentIndex(source_idx if source_idx >= 0 else 0)
+        self.cloud_tool_log_check = QCheckBox("记录云端 AI 工具调用训练日志（仅本机）")
+        self.cloud_tool_log_check.setToolTip("记录用户请求、工具参数、工具结果和最终回复；API 密钥会自动脱敏。")
+        self.cloud_tool_log_check.setChecked(bool(self.settings.get("ai_cloud_tool_log", True)))
         self.model_dl_btn = QPushButton(t("DOWNLOAD_LOCAL_MODEL"))
         self.model_dl_status = QLabel(""); self.model_dl_status.setWordWrap(True)
         self.model_dl_status.setStyleSheet(f"color: {muted_color()};")
@@ -566,7 +590,8 @@ class SettingsCenter(QWidget):
         hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
 
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
-        l.addWidget(self.ai_form); l.addWidget(self.mod_translate_check); l.addWidget(self.model_dl_btn)
+        translate_row = QHBoxLayout(); translate_row.addWidget(self.mod_translate_check); translate_row.addWidget(self.mod_translate_source, 1)
+        l.addWidget(self.ai_form); l.addLayout(translate_row); l.addWidget(self.cloud_tool_log_check); l.addWidget(self.model_dl_btn)
         l.addWidget(self.model_dl_status); l.addWidget(hint); l.addStretch()
         # 复用 settings_dialog 的模型下载逻辑(三态按钮)
         self._init_model_dl_button()
@@ -735,6 +760,14 @@ class SettingsCenter(QWidget):
                 d = QLabel(pdesc); d.setWordWrap(True)
                 d.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
                 cl.addWidget(d)
+            api_version = meta.get("api_version", 0)
+            if api_version != plugin_manager.PLUGIN_API_VERSION:
+                compatibility = QLabel(
+                    f"需要更新：此插件声明 API {api_version or '未声明'}，"
+                    f"当前启动器需要 API {plugin_manager.PLUGIN_API_VERSION}。")
+                compatibility.setWordWrap(True)
+                compatibility.setStyleSheet("color: #d68a3b; font-size: 11px;")
+                cl.addWidget(compatibility)
             l.addWidget(card)
 
         if not plugin_manager.discover_plugins():
@@ -742,30 +775,6 @@ class SettingsCenter(QWidget):
                            "或让 AI 按模板生成一个(见「插件模板」)。")
             empty.setWordWrap(True); empty.setStyleSheet(f"color: {muted_color()};")
             l.addWidget(empty)
-        # 插件注册的 GUI 页面(章节):嵌入预览
-        gui_pages = plugin_manager.GUI_PAGES
-        if gui_pages:
-            l.addSpacing(8)
-            pg_title = QLabel("插件页面:")
-            pg_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
-            l.addWidget(pg_title)
-            self._plugin_page_host = QStackedWidget()
-            self._plugin_page_labels = []
-            for label, build_fn in gui_pages.items():
-                try:
-                    self._plugin_page_host.addWidget(build_fn())
-                    self._plugin_page_labels.append(label)
-                except Exception:
-                    pass
-            if self._plugin_page_labels:
-                btn_row = QHBoxLayout(); btn_row.setSpacing(8)
-                for i, label in enumerate(self._plugin_page_labels):
-                    b = QPushButton(label)
-                    set_style(b, card_btn_style); b.setMinimumHeight(30)
-                    b.clicked.connect(lambda _c, i=i: self._plugin_page_host.setCurrentIndex(i))
-                    btn_row.addWidget(b)
-                l.addLayout(btn_row)
-                l.addWidget(self._plugin_page_host, 1)
         l.addStretch()
 
         # 放进滚动区(垂直拥挤也能滚)
@@ -841,12 +850,6 @@ class SettingsCenter(QWidget):
         ntools = sum(1 for k in plugin_manager.TOOLS if k.startswith(f"{name}__"))
         if ntools:
             bits.append(f"AI 工具 ×{ntools}")
-        ngui = sum(1 for k in plugin_manager.GUI_PAGES)
-        if ngui:
-            bits.append(f"页面 ×{ngui}")
-        nset = sum(1 for k in plugin_manager.SETTINGS if k.startswith(f"{name}."))
-        if nset:
-            bits.append(f"设置项 ×{nset}")
         nsk = sum(1 for c in plugin_manager.SKILLS if c.id.startswith(f"{name}_"))
         if nsk:
             bits.append(f"技能 ×{nsk}")
@@ -930,9 +933,12 @@ class SettingsCenter(QWidget):
         self.settings["version_isolation"] = self.isolation_check.isChecked()
         self.settings["game_dir"] = self.game_dir_edit.text().strip()
         self.settings["language"] = self.language_combo.currentData()
+        self.settings["sync_minecraft_language"] = self.sync_minecraft_language_check.isChecked()
         self.settings["ui_mode"] = self.ui_mode_combo.currentData()
         self.settings.update(self.ai_form.values())
         self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
+        self.settings["ai_mod_translate_source"] = self.mod_translate_source.currentData()
+        self.settings["ai_cloud_tool_log"] = self.cloud_tool_log_check.isChecked()
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors

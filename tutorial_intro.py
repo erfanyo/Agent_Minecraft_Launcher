@@ -88,7 +88,7 @@ class TutorialIntroDialog(QDialog):
             "基岩版(手机/主机为主)和网易版那边更偏商业化。"
             "不同阵营/版本不互通,Mod 生态也完全不一样。<br><br>"
             "<b>• 本启动器做的正是「国际 Java 版」的启动器</b> —— "
-            "帮你装 Mod、查配方、问 AI、玩各种版本。<br><br>"
+            "帮你创建和启动游戏、管理版本、安装 Mod。AI 是按需使用的增强功能，不配置也能正常玩。<br><br>"
             "<b>• 选版本先看类别</b> —— 「正式版」最稳(其中有几个「黄金版本」Mod 生态最好);"
             "「预览版」=公测,可能有 bug;「远古版」=考古,老玩家情怀;"
             "「愚人节版」=官方整活小改(类似整合包),图个乐。<br>"
@@ -102,7 +102,7 @@ class TutorialIntroDialog(QDialog):
 
         # ---- 按钮:开始引导教程 / 跳过 ----
         btn_row = QHBoxLayout()
-        hint = QLabel("看完点「开始引导教程」;不想看直接「跳过」,以后随时可在 设置→界面→重播引导教程。")
+        hint = QLabel("看完点「开始引导教程」；不想看直接「跳过」，以后随时可在 设置→系统→重播引导教程。")
         hint.setWordWrap(True)
         hint.setStyleSheet(hint_style())
         btn_row.addWidget(hint, 1)

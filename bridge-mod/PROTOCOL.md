@@ -103,8 +103,9 @@ mod 注册 `/ai <描述>`，玩家在游戏内调用；启动器轮询 `ai_reque
 
 ```json
 {"seq": 1, "text": "怎么合成终极感应供应器", "ts": 1620000000000,
- "player": "Steve", "is_op": true,
- "exec_mode": "player", "pos": "100,64,200", "dim": "minecraft:overworld",
+ "protocol_version": 2, "player": "Steve", "is_op": true, "permission_level": 4,
+ "server_type": "singleplayer", "is_integrated_owner": true, "exec_mode": "player",
+ "pos": "100,64,200", "dim": "minecraft:overworld",
  "held": "minecraft:diamond_sword"}
 ```
 
@@ -115,6 +116,10 @@ mod 注册 `/ai <描述>`，玩家在游戏内调用；启动器轮询 `ai_reque
 | `ts` | number | 毫秒时间戳 |
 | `player` | string | 发出玩家名（纯服务端/无实体 = 空或 "console"）|
 | `is_op` | bool | 该玩家是否 level ≥ 2（**mod 侧用 `src.hasPermissions(2)` 判定**）|
+| `permission_level` | number | 当前 `CommandSourceStack` 的实际权限等级（0–4）|
+| `server_type` | string | `singleplayer` / `lan` / `dedicated`；`lan` 仅代表已开放局域网，**不代表发起者是房主** |
+| `is_integrated_owner` | bool | 集成服世界的房主；只有该字段为 true 才可把单机/LAN 发起者当作本机房主 |
+| `protocol_version` | number | 当前为 2；缺失说明是旧 bridge-mod，启动器不得执行写指令 |
 | `exec_mode` | string | `"player"`（默认）/ `"console"`（仅 level 4 玩家可选）|
 | `pos` | string | 玩家坐标 `"x,y,z"`（上下文注入用）|
 | `dim` | string | 维度 id `"minecraft:overworld"` |
@@ -224,7 +229,7 @@ mod 在服务器启动完成后导出（供启动器 AI / 配方 / 属性比较�
 
 > **豁免名单语义**：不是默认"开服者"，而是启动器主人**手动填**的账号。局域网开放时开服者往往不敲 `/ai`，豁免名单应填**实际会用的朋友**。额度用尽提示"去跟服主要"——服主 = 在设置里加豁免名单的启动器主人。
 
-**权限拦截（OP 细分）**：非 OP 玩家（mod 上报 `is_op=false`）→ 启动器 AI **不挂指令写工具**（`send_game_command` 等），即使 AI 想调也没工具；OP/level4 玩家才可借 AI 执行指令，且执行身份按 §3.3 规则（`--console` 仅 level 4）。执行时 MC 权限体系**强制裁决**，双保险。
+**权限拦截（OP 细分）**：集成服房主、OP/level4 玩家才可获得指令写工具；LAN 客人不能仅因世界已公开而获得房主权限。旧 bridge-mod 未上报协议版本/玩家身份时，启动器只提供只读工具并提示升级。实际执行始终带 `as_player`，由 MC 权限体系**强制裁决**，双保险。
 
 ---
 
@@ -242,7 +247,7 @@ mod 在服务器启动完成后导出（供启动器 AI / 配方 / 属性比较�
 
 ## 8. 待办 / 已知限制
 
-- [ ] mod 侧 `AiChat` 需上报 `player/is_op/exec_mode/pos/dim/held`（当前仅 seq/text/ts）——按本文档 §3.1 补充
-- [ ] mod 侧 `--console` 解析（§3.3）：level 4 才接受标记
-- [ ] 编译发布各平台 / 版本 jar（需构建环境，见 README）
-- [ ] 启动器侧 `in_game_ai` 读上下文字段注入 prompt + 按 is_op 挂工具（部分已做每日额度/冷却）
+- [x] mod 侧 `AiChat` 上报身份、权限等级、环境、房主身份与协议版本（v2）
+- [x] mod 侧 `--console` 解析：level 4 才接受标记
+- [ ] 编译发布各平台 / 版本 v0.2.0 jar（需构建环境，见 README）
+- [x] 启动器侧 `in_game_ai` 按身份/环境挂工具，并强制以发起玩家身份执行

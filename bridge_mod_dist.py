@@ -212,7 +212,9 @@ def check_bridge_mod(inst_dir: str, loader: str, mc_version: str) -> str:
     if info is None:
         return "up_to_date"
     table = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
-    if table and table.get("sha1"):
+    # 固定 sha1 只属于版本表的旧发布资产。若本地 dist 或 GitHub 自动发现到了
+    # 更新的同版本 jar，继续拿旧 sha1 比较会把刚安装的新桥误报为“过期”。
+    if info.get("source") == "table" and table and table.get("sha1"):
         return "up_to_date" if verify_sha1(jar, table["sha1"]) else "outdated"
     # 无 sha1 兜底时:比较文件名是否含最新版本号(自动发现结果)
     exp = info.get("version")
@@ -251,7 +253,10 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
         cand = gh[0]
         dest = os.path.join(mods_dir, cand["name"])
         table = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
-        download_with_mirror(cand["url"], dest, sha1=(table or {}).get("sha1"),
+        expected_sha1 = None
+        if table and table.get("version") == cand.get("version"):
+            expected_sha1 = table.get("sha1")
+        download_with_mirror(cand["url"], dest, sha1=expected_sha1,
                              progress_callback=progress_callback)
         return cand["name"]
 
@@ -265,7 +270,7 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
         return filename
 
     raise ValueError(
-        f"桥 mod 暂不支持 {mc_version}+{loader}(当前支持 Fabric/Forge 1.20.1、Fabric/NeoForge 1.21.1)。\n"
+        f"桥 mod 暂不支持 {mc_version}+{loader}(请检查当前发布的 bridge-mod 资产)。\n"
         "或先手动从 GitHub Releases 下载对应 jar 放进实例 mods 目录。")
 
 

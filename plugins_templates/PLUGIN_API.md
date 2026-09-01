@@ -1,6 +1,7 @@
 # plugin_manager 插件开发 API 文档
 
-> 面向**人类开发者**如何手写启动器插件。插件 = `plugins/<名字>.py`，提供 `register(api)`，启动时被静态装载。
+> 面向**人类开发者**如何手写启动器插件。插件 = `plugins/<名字>.py`，提供 `register(api)`，启动时静态装载。
+> 本文是 **Plugin API v1** 的唯一公开契约；未列出的启动器模块都属于内部实现，不能依赖。
 > 安全：插件是本地代码，但**可能来自 AI 生成或第三方**（不可信），见 §6 安全约束 & §7 信任分级。
 
 ---
@@ -8,7 +9,8 @@
 ## 1. 最小插件
 
 ```python
-PLUGIN_ID = "my_plugin"          # 插件唯一 id(用作工具名/设置项前缀)
+PLUGIN_API_VERSION = 1           # 必填；必须等于启动器要求的版本
+PLUGIN_ID = "my_plugin"          # 插件唯一 id(用作工具名/配置前缀)
 PLUGIN_NAME = "我的插件"         # 显示名(设置→插件 列表)
 PLUGIN_DESCRIPTION = "一句话说明这个插件干嘛"
 PLUGIN_DEFAULT_ENABLED = True    # 可选:False=默认关闭(按需启用,如 MCP 服务器)
@@ -29,12 +31,11 @@ def register(api):
 | 方法 | 说明 | 返回/副作用 |
 |---|---|---|
 | `register_tool(name, description, parameters, handler)` | 注册 AI 工具。实际工具名为 `<插件id>__<name>` | 写全局 `TOOLS` |
-| `register_gui_page(label, build_fn)` | 注册 GUI 页面/章节 | 写 `GUI_PAGES` |
 | `register_main_tab(label, build_fn)` | 注册主标签页(与 下载新资源/设置 平级) | 写 `MAIN_TABS` |
 | `register_settings_page(build_fn)` | 注册独立设置页(左菜单单开一行) | 写 `_PLUGIN_META` |
-| `register_setting(key, description, default=None, choices=None)` | 登记设置项(占位) | 写 `SETTINGS` |
 | `register_skill(skill_cls)` | 注册技能(Skill 子类) | 追加 `SKILLS` |
 | `register_language_pack(pack_id, name, pack, lang="")` | 注册语言包(文本覆盖) | 写 `LANGUAGE_PACKS` |
+| `get_config(key, default=None)` / `set_config(key, value)` | 读取或保存插件私有配置 | 自动使用 `plugin.<插件id>.*` 命名空间 |
 
 ### 2.1 `register_tool`
 ```python
@@ -54,8 +55,9 @@ def register(api):
     )
 ```
 
-### 2.2 `register_gui_page` / `register_main_tab` / `register_settings_page`
-三者 `build_fn()` 都返回一个 `QWidget`；`register_main_tab` 与 下载新资源/联机/设置 平级，`register_settings_page` 在设置左菜单单开一行。
+### 2.2 `register_main_tab` / `register_settings_page`
+两者 `build_fn()` 都返回一个 `QWidget`；`register_main_tab` 与 下载新资源/联机/设置 平级，`register_settings_page` 在设置左菜单单开一行。
+不要再用“注册一个嵌进插件管理页的普通页面”这类模糊入口：需要常用入口就注册主标签页，需要配置就注册设置页。
 
 ### 2.3 `register_skill`
 ```python
@@ -77,7 +79,8 @@ api.register_skill(MySkill)
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `PLUGIN_ID` | str | ✅ | 插件唯一 id（作为工具/设置项前缀）|
+| `PLUGIN_API_VERSION` | int | ✅ | 当前必须为 `1`；版本不匹配时插件不会加载 |
+| `PLUGIN_ID` | str | ✅ | 插件唯一 id（作为工具/配置前缀）|
 | `PLUGIN_NAME` | str | ✅ | 显示名 |
 | `PLUGIN_DESCRIPTION` | str | 否 | 描述 |
 | `PLUGIN_DEFAULT_ENABLED` | bool | 否 | 默认启用（缺省 True）|
@@ -94,7 +97,7 @@ def register(api):
     # 把你的缓存/状态写到这里;启动器迁移/清理时只清这个目录,不碰用户数据
 ```
 
-> 若需要 `api.data_dir()`，插件须在 `register` 里调用 `api.data_dir()`；当前若未提供该方法，可自行用 `paths.CONFIG_DIR + "/plugins_data/" + PLUGIN_ID` 获取。详见 `paths.CONFIG_DIR`。
+`api.data_path()` 会拒绝跳出插件数据目录的 `..` 路径。插件配置请使用 `api.get_config()` / `api.set_config()`，不要直接读写启动器的 config.json。
 
 ---
 

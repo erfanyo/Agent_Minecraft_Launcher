@@ -56,7 +56,7 @@ public final class AiChat {
         // --console 前缀:仅 level 4 玩家可选(AI 执行指令用控制台身份);非 level4 忽略该标记
         boolean console = false;
         if (prompt.startsWith("--console")) {
-            if (src.hasPermissions(4)) {
+            if (src.hasPermission(4)) {
                 console = true;
                 prompt = prompt.substring("--console".length()).trim();
             } else {
@@ -73,22 +73,33 @@ public final class AiChat {
         req.addProperty("seq", seq);
         req.addProperty("text", prompt);
         req.addProperty("ts", System.currentTimeMillis());
+        req.addProperty("protocol_version", 2);
 
         // ---- 上下文与权限上报(§3.1 协议字段)----
         ServerPlayer playerEnt = (src.getEntity() instanceof ServerPlayer p) ? p : null;
         String playerName = playerEnt != null
                 ? playerEnt.getGameProfile().getName() : "";
-        boolean isOp = src.hasPermissions(2);
+        boolean isOp = src.hasPermission(2);
+        int permissionLevel = 0;
+        for (int level = 4; level >= 0; level--) {
+            if (src.hasPermission(level)) {
+                permissionLevel = level;
+                break;
+            }
+        }
         req.addProperty("player", playerName);
         req.addProperty("is_op", isOp);
+        req.addProperty("permission_level", permissionLevel);
         req.addProperty("exec_mode", console ? "console" : "player");
-        // 当前游戏类型:单机房主(integrated 未开 LAN)/ 局域网房主(integrated 已 Open to LAN)
-        // / 专用服务器。launcher 侧据此判权限:前两种=本机房主,允许执行指令;
-        // 专用服务器才按 OP 收紧,避免替非 OP 玩家越权。
+        // server.isPublished() 只说明“已对 LAN 开放”，不能说明发起者就是房主。
+        // 因此同时上报集成服房主身份，启动器绝不能只凭 server_type=lan 放行。
         boolean dedicated = server.isDedicatedServer();
         String serverType = dedicated ? "dedicated"
                 : (server.isPublished() ? "lan" : "singleplayer");
         req.addProperty("server_type", serverType);
+        boolean integratedOwner = playerEnt != null && !dedicated
+                && server.isSingleplayerOwner(playerEnt.getGameProfile());
+        req.addProperty("is_integrated_owner", integratedOwner);
         if (playerEnt != null) {
             try {
                 Vec3 pos = playerEnt.position();

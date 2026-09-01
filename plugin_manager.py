@@ -29,17 +29,22 @@ plugin_api: 每个插件注册时收到的 api 对象,见下方 build_api();它�
 import importlib.util
 import os
 
+# 对外插件契约从 1 开始独立版本化。启动器内部可以继续演进，插件只需面对这里
+# 明确列出的接口；不再靠“能 import 到什么就用什么”。
+PLUGIN_API_VERSION = 1
+
 # plugins 目录(启动器私有数据,不进 git;模板/示例可放仓库根 plugins_templates)
 PLUGIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
 
 # ---------------- 全局注册表(插件登记的内容) ----------------
 # 各注册点 = {} 或 [],由消费方读取;插件 register() 时写入。
 TOOLS = {}            # name -> (描述, 参数schema, 处理函数)  (AI 工具)
-GUI_PAGES = {}        # label -> build_fn(返回 QWidget)        (GUI 章节,挂到某页/主菜单)
-SETTINGS = {}         # key -> {description, ...}              (设置项,占位登记)
 SKILLS = []           # [Skill子类]                            (技能)
 LANGUAGE_PACKS = {}   # pack_id -> {"name", "pack"}            (语言包:文本覆盖)
 MAIN_TABS = []        # [(label, build_fn)]                    (主标签页,与 下载新资源/联机/设置 平级)
+
+# 最近一次装载的可读报告。过去插件异常会被静默吞掉，开发者只能猜“为什么没出现”。
+LOAD_REPORTS = {}     # plugin_id -> {"state": loaded/skipped/error, "message": str}
 
 # ---- 插件元数据(从插件模块读取):默认启禁 / 独立设置页 ----
 # discover_plugins 返回 [(name, path, meta)];meta 含 default_enabled / has_settings / settings_page
@@ -56,8 +61,9 @@ class PluginAPI:
     - 沙箱是"约定 + 受限 api"软约束(不硬做进程隔离;真沙箱观望 Win 容器化)。
     """
 
-    def __init__(self, plugin_id: str):
+    def __init__(self, plugin_id: str, settings: dict | None = None):
         self.plugin_id = plugin_id
+        self._settings = settings if settings is not None else {}
 
     # ---- 软沙箱:数据目录收口 ----
     def data_dir(self) -> str:
@@ -67,23 +73,37 @@ class PluginAPI:
 
     def data_path(self, name: str) -> str:
         """本插件专属目录下某文件/子路径。name 需为相对路径。"""
-        import os
         d = self.data_dir()
-        return os.path.join(d, (name or "").lstrip("/\\") or "")
+        rel = (name or "").replace("/", os.sep).replace("\\", os.sep).lstrip(os.sep)
+        candidate = os.path.abspath(os.path.join(d, rel))
+        if os.path.commonpath((os.path.abspath(d), candidate)) != os.path.abspath(d):
+            raise ValueError("data_path 只能指向插件自己的数据目录")
+        return candidate
+
+    def get_config(self, key: str, default=None):
+        """读取本插件自己的持久化配置。配置键会自动加插件 id 前缀。"""
+        return self._settings.get(f"plugin.{self.plugin_id}.{key}", default)
+
+    def set_config(self, key: str, value) -> None:
+        """保存本插件自己的持久化配置；不允许直接改启动器核心设置。"""
+        self._settings[f"plugin.{self.plugin_id}.{key}"] = value
+        from settings import save_settings
+        save_settings(self._settings)
 
     def register_tool(self, name, description, parameters, handler):
         """AI 工具。name 会加前缀 <插件id>__ 防冲突。handler(args_dict)->str。"""
+        if not isinstance(name, str) or not name.replace("_", "").isalnum():
+            raise ValueError("AI 工具名只能包含字母、数字和下划线")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("AI 工具必须提供说明")
+        if not isinstance(parameters, dict) or parameters.get("type") != "object":
+            raise ValueError("AI 工具 parameters 必须是 type=object 的 JSON Schema")
+        if not callable(handler):
+            raise TypeError("AI 工具 handler 必须可调用")
         full = f"{self.plugin_id}__{name}"
+        if full in TOOLS:
+            raise ValueError(f"AI 工具重名:{full}")
         TOOLS[full] = (description, parameters, handler)
-
-    def register_gui_page(self, label, build_fn):
-        """GUI 页面/章节。build_fn() 返回 QWidget;label 是菜单/标签名。"""
-        GUI_PAGES[label] = build_fn
-
-    def register_setting(self, key, description, default=None, choices=None):
-        """设置项(占位登记;实际读写由插件 via get/set)。"""
-        SETTINGS[self.plugin_id + "." + key] = {
-            "description": description, "default": default, "choices": choices}
 
     def register_skill(self, skill_cls):
         """技能(Skill 子类,与 skill_manager.BUILTIN_SKILLS 同款接口)。"""
@@ -108,15 +128,19 @@ class PluginAPI:
     def register_main_tab(self, label: str, build_fn):
         """注册一个【主标签页】(与 下载新资源/联机/设置 平级)。build_fn() 返回 QWidget。
         MainWindow 构建时会把启用的插件标签页 addTab 到主标签栏。"""
+        if not isinstance(label, str) or not label.strip() or not callable(build_fn):
+            raise ValueError("主标签页需要非空标题和可调用的 build_fn")
+        if any(old_label == label for old_label, _ in MAIN_TABS):
+            raise ValueError(f"主标签页重名:{label}")
         MAIN_TABS.append((label, build_fn))
 
 
-def build_api(plugin_id: str) -> PluginAPI:
-    return PluginAPI(plugin_id)
+def build_api(plugin_id: str, settings: dict | None = None) -> PluginAPI:
+    return PluginAPI(plugin_id, settings)
 
 
 def _read_plugin_meta(mod) -> dict:
-    """从插件模块读元数据:PLUGIN_NAME/PLUGIN_DESCRIPTION/PLUGIN_DEFAULT_ENABLED + 签名溯源。"""
+    """从插件模块读元数据:名称、默认启停、API 版本和签名溯源。"""
     try:
         default_enabled = bool(getattr(mod, "PLUGIN_DEFAULT_ENABLED", True))
     except Exception:
@@ -124,6 +148,7 @@ def _read_plugin_meta(mod) -> dict:
     meta = {
         "name": getattr(mod, "PLUGIN_NAME", None),
         "description": getattr(mod, "PLUGIN_DESCRIPTION", ""),
+        "api_version": getattr(mod, "PLUGIN_API_VERSION", 0),
         # 注意:register() 里的 register_settings_page 会写入 _PLUGIN_META[name]["settings_build_fn"]
         "default_enabled": default_enabled,
         # 签名溯源:默认 unknown;验签通过=official,无签名/验签失败=ai_generated/unknown
@@ -177,11 +202,11 @@ def discover_plugins_meta() -> dict:
             # 用隔离的临时容器测"是否注册了设置页":替换 plugin 模块看到的全局注册表,
             # 避免 register 的副作用(工具/页面/技能/语言包)泄漏到真实 registry。
             import plugin_manager as _pm
-            saved = (_pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS, _pm.SKILLS,
-                     _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META)
+            saved = (_pm.TOOLS, _pm.SKILLS, _pm.LANGUAGE_PACKS,
+                     _pm.MAIN_TABS, _pm._PLUGIN_META)
             try:
-                _pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS = {}, {}, {}
-                _pm.SKILLS, _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META = [], {}, [], {}
+                _pm.TOOLS, _pm.SKILLS = {}, []
+                _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META = {}, [], {}
                 # 也隔离 i18n 语言包注册(register_language_pack 会写 i18n)
                 try:
                     import i18n as _i18n
@@ -193,8 +218,8 @@ def discover_plugins_meta() -> dict:
                     mod.register(build_api(name))
                 m["has_settings"] = bool(_pm._PLUGIN_META.get(name, {}).get("settings_build_fn"))
             finally:
-                (_pm.TOOLS, _pm.GUI_PAGES, _pm.SETTINGS, _pm.SKILLS,
-                 _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META) = saved
+                (_pm.TOOLS, _pm.SKILLS, _pm.LANGUAGE_PACKS,
+                 _pm.MAIN_TABS, _pm._PLUGIN_META) = saved
                 try:
                     if _saved_i18n is not None:
                         import i18n as _i18n
@@ -238,7 +263,7 @@ def _load_plugin_module(path: str):
 
 
 def validate_plugin_code(code: str) -> tuple:
-    """校验 AI 生成的插件代码:语法是否正确 + 是否含 register(api)。
+    """校验 AI 生成的插件代码:语法、API 版本和 register(api) 入口。
     返回 (ok, {error 或 name})。仅静态检查(AST),不执行。"""
     import ast
     if not code or not code.strip():
@@ -251,6 +276,18 @@ def validate_plugin_code(code: str) -> tuple:
                        for n in ast.walk(tree))
     if not has_register:
         return False, {"error": "缺少 register(api) 函数(插件入口)"}
+    declared_version = None
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "PLUGIN_API_VERSION"):
+            try:
+                declared_version = ast.literal_eval(node.value)
+            except (ValueError, TypeError):
+                pass
+            break
+    if declared_version != PLUGIN_API_VERSION:
+        return False, {"error": f"需要声明 PLUGIN_API_VERSION = {PLUGIN_API_VERSION}"}
     return True, {"name": None}
 
 
@@ -476,18 +513,33 @@ def install_remote_plugin(entry: dict) -> dict:
     return save_plugin(name, code)
 
 
-def load_plugin(name: str, path: str, disabled: set) -> bool:
+def load_plugin(name: str, path: str, disabled: set, settings: dict | None = None) -> bool:
     """装载一个插件:调用其 register(api) 登记内容。
     disabled:插件 id 集合(被禁用则跳过)。返回是否装载成功。"""
     if name in disabled:
-        return False
-    mod = _load_plugin_module(path)
-    if mod is None or not hasattr(mod, "register"):
+        LOAD_REPORTS[name] = {"state": "skipped", "message": "已禁用"}
         return False
     try:
-        mod.register(build_api(name))
+        mod = _load_plugin_module(path)
+    except Exception as e:
+        LOAD_REPORTS[name] = {"state": "error", "message": f"导入失败:{type(e).__name__}: {e}"}
+        return False
+    if mod is None or not hasattr(mod, "register"):
+        LOAD_REPORTS[name] = {"state": "error", "message": "缺少 register(api) 入口"}
+        return False
+    api_version = getattr(mod, "PLUGIN_API_VERSION", 0)
+    if api_version != PLUGIN_API_VERSION:
+        LOAD_REPORTS[name] = {
+            "state": "error",
+            "message": f"插件 API 版本不兼容:需要 {PLUGIN_API_VERSION}，插件声明 {api_version or '未声明'}",
+        }
+        return False
+    try:
+        mod.register(build_api(name, settings))
+        LOAD_REPORTS[name] = {"state": "loaded", "message": "已加载"}
         return True
-    except Exception:
+    except Exception as e:
+        LOAD_REPORTS[name] = {"state": "error", "message": f"注册失败:{type(e).__name__}: {e}"}
         return False
 
 
@@ -495,8 +547,9 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
     """启动时装载所有插件。disabled = 被禁用的插件 id 集合(显式禁用)。
     额外考虑"默认关闭"插件:PLUGIN_DEFAULT_ENABLED=False 且未被显式启用(settings['plugins_enabled'])
     的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
-    global TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META
-    TOOLS, GUI_PAGES, SETTINGS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, {}, {}, [], {}, [], {}
+    global TOOLS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS
+    TOOLS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, [], {}, [], {}
+    LOAD_REPORTS = {}
     # 禁用集合 = 显式传入 disabled 并上 settings["plugins_disabled"](传 settings 时生效)
     disabled = set(disabled or [])
     disabled |= set((settings or {}).get("plugins_disabled", []) or [])
@@ -508,15 +561,20 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
         # 判断是否装载:显式禁用 → 否;默认关且未显式启用 → 否;否则装
         if name in disabled:
             loaded[name] = False
+            LOAD_REPORTS[name] = {"state": "skipped", "message": "已禁用"}
             continue
-        mod = _load_plugin_module(path)
-        default_on = True
-        if mod is not None:
-            default_on = bool(getattr(mod, "PLUGIN_DEFAULT_ENABLED", True))
+        try:
+            mod = _load_plugin_module(path)
+            default_on = bool(getattr(mod, "PLUGIN_DEFAULT_ENABLED", True)) if mod is not None else True
+        except Exception as e:
+            loaded[name] = False
+            LOAD_REPORTS[name] = {"state": "error", "message": f"读取元数据失败:{type(e).__name__}: {e}"}
+            continue
         if not default_on and name not in enabled_set:
             loaded[name] = False
+            LOAD_REPORTS[name] = {"state": "skipped", "message": "默认关闭，尚未启用"}
             continue
-        loaded[name] = load_plugin(name, path, disabled)
+        loaded[name] = load_plugin(name, path, disabled, settings)
     return loaded
 
 

@@ -103,6 +103,30 @@ def looks_like_game_dir(path: str) -> bool:
     return False
 
 
+def version_isolation_enabled() -> bool:
+    """读取当前的版本隔离开关。
+
+    延迟导入 settings，避免 settings 初始化时反向导入 paths。所有需要定位
+    实例运行文件的模块应使用下面两个函数，不能自行拼接 versions/<id>。
+    """
+    try:
+        from settings import load_settings
+        return bool(load_settings().get("version_isolation", True))
+    except Exception:
+        return True
+
+
+def instance_dir(instance_id: str, game_dir: str | None = None) -> str:
+    """返回实例实际运行目录，兼容开启/关闭版本隔离两种布局。"""
+    gd = game_dir or GAME_DIR
+    return os.path.join(gd, "versions", instance_id) if version_isolation_enabled() else gd
+
+
+def bridge_dir(instance_id: str, game_dir: str | None = None) -> str:
+    """返回 bridge-mod 与启动器共享的 .bridge 目录（不创建目录）。"""
+    return os.path.join(instance_dir(instance_id, game_dir), ".bridge")
+
+
 # ================= 统一路径访问层(收口散落在各模块的 AMCL 子路径) =================
 # 之前各模块各自 os.path.join(CONFIG_DIR, "cache", "xxx"),分散难维护。
 # 这里提供稳定的 getter,集中管理 + 自动建目录;不改动任何现有目录结构(仍便携式)。
@@ -151,4 +175,3 @@ def runtime_llama_dir() -> str:
 
 # 兼容旧引用:image_cache 用 CACHE_ROOT;mc_names 等用 cache/xxx
 CACHE_ROOT = cache_dir()
-

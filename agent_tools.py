@@ -41,7 +41,7 @@ def list_instances(game_dir: str | None = None) -> str:
 
 
 def list_mods(instance: str, game_dir: str | None = None) -> str:
-    mods_dir = os.path.join(_gd(game_dir), "versions", instance, "mods")
+    mods_dir = os.path.join(paths.instance_dir(instance, _gd(game_dir)), "mods")
     if not os.path.isdir(mods_dir):
         return f"({instance} 没有 mods 目录)"
     files = sorted(f for f in os.listdir(mods_dir) if f.endswith(".jar"))
@@ -442,17 +442,23 @@ def launch_game(instance: str, game_dir: str | None = None) -> str:
             f"注意:这样启动的进程启动器不跟踪日志,关闭游戏窗口即退出。")
 
 
-def send_game_command(instance: str, command: str, game_dir: str | None = None) -> str:
+def send_game_command(instance: str, command: str, game_dir: str | None = None,
+                      as_player: str = "") -> str:
     """向运行中的游戏发送指令(如 /summon zombie)。
 
     优先走 bridge-mod 本地指令口(正式方案,100% 精确反馈);
-    实例 .bridge/token.txt 存在时用 bridge,否则回退 RCON 通道。"""
+    实例 .bridge/token.txt 存在时用 bridge,否则回退 RCON 通道。
+    游戏内 /ai 传入 as_player 时只能走 bridge，以确保命令永远按发起玩家
+    身份执行，不能退化为 RCON 控制台身份。"""
     import os as _os
     from game_command import send_bridge_command, send_game_command as _rcon_impl
     gd = _gd(game_dir)
-    token_path = _os.path.join(gd, "versions", instance, ".bridge", "token.txt")
+    token_path = _os.path.join(paths.bridge_dir(instance, gd), "token.txt")
     if _os.path.isfile(token_path):
-        return send_bridge_command(instance, command, gd)
+        return send_bridge_command(instance, command, gd, as_player=as_player)
+    if as_player:
+        return ("游戏内指令需要新版 bridge-mod 正在运行，无法安全降级为控制台执行。\n"
+                "请进世界后重试；若已进世界，请在「我的版本 → 一键配置」更新 bridge-mod。")
     return _rcon_impl(instance, command, gd)
 
 

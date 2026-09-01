@@ -1,13 +1,14 @@
 # AgentMC Bridge — 发布说明(RELEASE)
 
-## 当前支持矩阵(2026-08)
+## 当前支持矩阵(2026-09 目标；未构建不等于已发布)
 
 | 平台 | MC 版本 | 状态 |
 |---|---|---|
 | Fabric | 1.21.1 | ✅ 已编译(产物 `dist/agentmc-bridge-fabric-1.21.1-0.1.0.jar`) |
-| NeoForge | 1.21.1 | ⏳ 待适配(Gradle 插件版本) |
-| Forge | 1.21.1 | ⏳ 待适配 |
-| 老版本(1.7.10 等) | — | 不计划(见 README"老版本兼容策略") |
+| NeoForge | 1.21.1 | ⏳ 待重新核验/发布 |
+| Forge | 1.20.1 | ✅ 已构建验证（`forge/build/libs/agentmc-bridge-forge-1.20.1-0.2.0.jar`） |
+| Forge（优先）/ Fabric | 1.19.2、1.18.2 | ⏳ 目标版本，按 Forge → Fabric 顺序构建 |
+| Forge | 1.16.5、1.12.2、1.7.10 | ⏳ 目标版本，独立 JDK 8 旧版兼容实现 |
 
 > 版本稳定前只在 GitHub 发布源码与编译产物,**暂不**上传 Modrinth、暂不打进启动器 exe。
 

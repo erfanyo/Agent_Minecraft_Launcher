@@ -20,10 +20,7 @@ import paths
 
 def _bridge_dir(instance_id: str, game_dir: str = None) -> str:
     """实例的 .bridge 目录(隔离开时在 versions/<id>/.bridge)。"""
-    gd = game_dir or paths.GAME_DIR
-    if (__import__("settings").load_settings().get("version_isolation")):
-        return os.path.join(gd, "versions", instance_id, ".bridge")
-    return os.path.join(gd, ".bridge")
+    return paths.bridge_dir(instance_id, game_dir)
 
 
 def _read_json(path: str) -> dict | None:
@@ -104,12 +101,17 @@ class InGameAI:
                     try:
                         # 把上下文(player/is_op/exec_mode/pos/dim/held)传给 answer_fn,
                         # 供注入 prompt 与权限判定;旧 answer_fn(text, instance) 兼容
+                        # 旧 bridge-mod 缺字段时必须保留为 None/空，不能伪造成“非 OP”。
+                        raw_is_op = req.get("is_op")
                         ctx = {
                             "instance": self.instance_id,
                             "player": player,
-                            "is_op": bool(req.get("is_op", False)),
+                            "is_op": raw_is_op if isinstance(raw_is_op, bool) else None,
+                            "permission_level": req.get("permission_level"),
                             "exec_mode": req.get("exec_mode", "player"),
                             "server_type": req.get("server_type", ""),
+                            "is_integrated_owner": req.get("is_integrated_owner"),
+                            "protocol_version": req.get("protocol_version", 0),
                             "pos": req.get("pos", ""),
                             "dim": req.get("dim", ""),
                             "held": req.get("held", ""),
@@ -175,21 +177,18 @@ def _make_cloud_executor(instance: str, base_exec, exec_mode: str = "player",
 
 def _can_exec(ctx: dict) -> bool:
     """统一判定:游戏内 AI 能否执行改动指令(供 _in_game_ctx 与 make_answerer 共用,避免两边矛盾)。
-    - 单机房主 / 局域网房主(server_type=singleplayer/lan)= 本机用户 → 允许(能否成功由世界"允许作弊"兜底);
-    - 连的专用服务器(dedicated)→ 仅 OP / --console 才允许,防替非 OP 玩家越权;
-    - 未知(旧 jar 不报 server_type/player):没报玩家 → 无法判定 → 放行(交给 MC 自行判);
-      报了玩家且知其非 OP → 仅 OP/console。"""
+    - 集成服房主 → 允许，实际是否开作弊仍由 MC 以玩家身份裁决；
+    - LAN 客人/专用服务器 → 仅 OP / --console；不能把 "LAN 已开放" 误作房主；
+    - 旧协议缺少身份字段 → 不执行写指令，提示更新 bridge-mod，避免退化成控制台身份。"""
     server_type = str(ctx.get("server_type") or "").lower()
-    if server_type in ("singleplayer", "lan"):
-        return True
-    is_op = bool(ctx.get("is_op", False))
+    is_owner = ctx.get("is_integrated_owner") is True
+    is_op = ctx.get("is_op") is True
     is_console = ctx.get("exec_mode") == "console"
-    if server_type == "dedicated":
-        return is_op or is_console
-    # 未知(旧协议):没报玩家就放行;报了玩家按 OP/console 收紧
-    if not ctx.get("player"):
+    if server_type in ("singleplayer", "lan") and is_owner:
         return True
-    return is_op or is_console
+    if server_type in ("singleplayer", "lan", "dedicated"):
+        return is_op or is_console
+    return False
 
 
 def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) -> str:
@@ -220,8 +219,7 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
         ctxt_line.append(f"手持:{ctx['held']}")
     if ctxt_line:
         parts.append("玩家上下文(回答尽量结合):" + "; ".join(ctxt_line))
-    # 是否允许执行指令:单机房主/局域网房主 = 本机用户(允许,能否成功由世界"允许作弊"决定);
-    # 连的专用服务器(或未知且报了非 OP 玩家)才按 OP/console 收紧,避免替非 OP 玩家越权。
+    # 只由 bridge-mod 上报的环境、房主身份与权限共同决定；不能仅凭 LAN 状态放行。
     can_exec = _can_exec(ctx)
     tool_note = (
         "你正在【游戏内】响应玩家,当前运行实例:「%s」。"
@@ -232,9 +230,9 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
     if not can_exec:
         tool_note = (
             "你正在【游戏内】响应玩家,当前运行实例:「%s」。"
-            "该玩家【不是 OP】:你只能用【只读】工具(查配方/get_command_guide/查按键/比物品),"
+            "当前身份无法安全执行改动指令:你只能用【只读】工具(查配方/get_command_guide/查按键/比物品),"
             "【不能】执行任何改动的游戏指令(send_game_command 不可用)。"
-            "玩家想改天气/给物品/召唤等,请明确告诉他需要 OP 权限或去跟服主要。" % instance)
+            "若这是旧版 bridge-mod，请先在启动器里更新它；否则需要 OP 权限或请服主操作。" % instance)
     parts.append(tool_note)
     return "\n\n".join(parts)
 
@@ -259,12 +257,18 @@ def make_answerer(win=None, settings: dict | None = None):
                 return "游戏内 AI 未开启(设置→AI 助手→开启游戏内 AI)。"
             ctx = ctx or {}
             instance = ctx.get("instance", "")
-            # 权限统一判(与 _in_game_ctx 一致):单机房主/LAN 放行;专用服务器/已知非 OP 收紧
+            # 权限统一判(与 _in_game_ctx 一致)。执行时强制携带发起玩家，
+            # 由 Minecraft 本身做最后的权限裁决，绝不退化为控制台身份。
             allow_exec = _can_exec(ctx)
             force_tools = _FULL_TOOLS if allow_exec else _READONLY_TOOLS
             from assistant import route_answer
             system = _in_game_ctx(win, instance, cfg, ctx)
-            return route_answer(text, cfg, context=system, force_tools=force_tools)
+            from assistant import build_executor
+            executor = _make_cloud_executor(
+                instance, build_executor(cfg),
+                str(ctx.get("exec_mode") or "player"), str(ctx.get("player") or ""))
+            return route_answer(text, cfg, context=system, force_tools=force_tools,
+                                executor=executor)
         except Exception as e:
             return f"(游戏内 AI 错误:{type(e).__name__})"
     return answer

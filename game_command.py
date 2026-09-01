@@ -19,6 +19,8 @@ import time
 
 import ctypes  # Windows 专属模拟按键用;wintypes 在用到时延迟导入(非 Windows 无此子模块)
 
+import paths
+
 
 def _is_windows() -> bool:
     import sys
@@ -347,8 +349,8 @@ def send_bridge_command(instance: str, command: str, game_dir: str,
     如传玩家名或 UUID;留空 = 服务端控制台身份(默认,能用高级指令)。"""
     import json
     import socket
-    inst_dir = os.path.join(game_dir, "versions", instance)
-    token_path = os.path.join(inst_dir, ".bridge", "token.txt")
+    inst_dir = paths.instance_dir(instance, game_dir)
+    token_path = os.path.join(paths.bridge_dir(instance, game_dir), "token.txt")
     if not os.path.isfile(token_path):
         return ("bridge-mod 未运行或未装:进世界后它会在实例 .bridge/ 生成 token.txt。\n"
                 "安装:启动器「我的版本 → 一键配置 ▾ → 一键配置 bridge-mod」")
@@ -392,7 +394,7 @@ def send_bridge_command(instance: str, command: str, game_dir: str,
 def send_game_command(instance: str, command: str, game_dir: str) -> str:
     """给指定实例发命令(RCON),没配置时尝试自动配置(Lan Server Properties),
     并用日志增量补充反馈。"""
-    inst_dir = os.path.join(game_dir, "versions", instance)
+    inst_dir = paths.instance_dir(instance, game_dir)
     rc = read_rcon_config(inst_dir)
     if rc is None:
         note = ensure_rcon_config(inst_dir)

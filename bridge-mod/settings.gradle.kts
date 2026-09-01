@@ -22,7 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "agentmc-bridge"
 
-// fabric 平台(已验证)+ neoforge 平台(适配中):
+// 当前优先构建:Fabric + Forge 1.20.1。NeoForge 留作独立现代适配工程，避免旧版 Forge
+// 构建时被不相关的插件配置中断。
 // common 源码直接并入各平台编译单元(见各自 build.gradle.kts 的 sourceSets)。
-// forge(1.19 及以前)晚点再做。
-include("fabric", "neoforge")
+include("fabric", "forge")
