@@ -15,6 +15,7 @@ DEFAULTS = {
     "username": "Steve",        # 离线模式游戏名
     "memory_gb": 4,              # 给游戏分配的内存(默认 4G,整合包/Mod 多才够;设置里可改)
     "version_isolation": True,   # 版本隔离:每版本独立游戏目录
+    "last_played_instance": "", # 最近一次成功启动的实例;首页启动时优先选中
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
     "language": "auto",          # 界面语言:auto(跟随系统)/ zh / en / 语言包id(如玩梗版;见 i18n.py)

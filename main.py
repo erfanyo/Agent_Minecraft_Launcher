@@ -1390,6 +1390,14 @@ class MainWindow(QMainWindow):
             self.launch_btn.setEnabled(True)
             return
 
+        # 只在进程确实已拉起后记录，下载/Java/命令拼装失败不会污染下次默认选择。
+        if self.settings.get("last_played_instance") != v["id"]:
+            self.settings["last_played_instance"] = v["id"]
+            try:
+                save_settings(self.settings)
+            except Exception:
+                pass
+
         # 运行实例指示:登记并刷新底部标签
         self._running_instances.add(d["id"])
         self._update_running_label()
@@ -1647,6 +1655,9 @@ class MainWindow(QMainWindow):
         # 重建列表、按 id 复原选中,最后统一同步一次 UI(恢复选中 / 实例真的没了→None)。
         _cur_item = self.instance_list.currentItem()
         _cur_id = (_cur_item.data(Qt.ItemDataRole.UserRole) or {}).get("id") if _cur_item else None
+        # 首次打开首页没有当前选中项时，优先恢复上次成功启动的实例；刷新中
+        # 用户刚手动选过的项优先级更高，避免列表自动刷新抢走选择。
+        _preferred_id = _cur_id or str(self.settings.get("last_played_instance") or "")
         self.instance_list.blockSignals(True)
         try:
             self.instance_list.clear()
@@ -1658,10 +1669,10 @@ class MainWindow(QMainWindow):
                     item.setIcon(icon)
                 self.instance_list.addItem(item)
             _restore = None
-            if _cur_id:
+            if _preferred_id:
                 for _i in range(self.instance_list.count()):
                     _d = self.instance_list.item(_i).data(Qt.ItemDataRole.UserRole)
-                    if _d and _d.get("id") == _cur_id:
+                    if _d and _d.get("id") == _preferred_id:
                         _restore = self.instance_list.item(_i)
                         break
             if _restore is not None:
