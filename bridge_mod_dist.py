@@ -202,12 +202,16 @@ def _installed_bridge_jar(inst_dir: str) -> str | None:
 def check_bridge_mod(inst_dir: str, loader: str, mc_version: str) -> str:
     """检查 bridge-mod 安装状态:
     - not_installed: 没装
+    - incompatible: 装了另一个 MC/加载器的 bridge-mod
     - outdated: 已装但版本旧(sha1 与表不符,或名字不是最新)
     - up_to_date: 已装且是最新
     自动发现拿不到期望值时,已装的算 up_to_date(无从比较)。"""
     jar = _installed_bridge_jar(inst_dir)
     if jar is None:
         return "not_installed"
+    parsed = _parse_jar_name(os.path.basename(jar))
+    if parsed and (parsed["loader"] != loader or parsed["mc"] != mc_version):
+        return "incompatible"
     info = bridge_mod_info(loader, mc_version)
     if info is None:
         return "up_to_date"
@@ -290,6 +294,31 @@ def _remove_replaced_bridge_jars(mods_dir: str, keep_name: str,
                     pass
     except OSError:
         pass
+
+
+def remove_incompatible_bridge_jars(inst_dir: str, loader: str,
+                                    mc_version: str) -> list[str]:
+    """移除共享 mods 目录中不属于当前实例的 bridge-mod。
+
+    关闭版本隔离时，所有实例共用 ``.minecraft/mods``。普通 Mod 由玩家自行
+    管理，但 bridge-mod 是启动器按版本自动配发的，装错一个就会让 Forge 在
+    加载阶段直接拒绝启动，因此切换实例前必须清理不匹配的 bridge 包。
+    """
+    mods_dir = os.path.join(inst_dir, "mods")
+    removed = []
+    try:
+        for name in os.listdir(mods_dir):
+            parsed = _parse_jar_name(name)
+            if not parsed or (parsed["loader"] == loader and parsed["mc"] == mc_version):
+                continue
+            try:
+                os.remove(os.path.join(mods_dir, name))
+                removed.append(name)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return removed
 
 
 def verify_sha1(path: str, expected: str) -> bool:

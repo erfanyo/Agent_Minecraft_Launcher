@@ -1275,6 +1275,21 @@ class MainWindow(QMainWindow):
             #    整合包 json 可能从加载器版本复制而来,id 若没改对,游戏会被启动到
             #    加载器的空白目录里(mod 全不加载)—— 游戏目录必须是所选实例自己的目录。
             game_dir = self.game_dir_for(v["id"])
+            # 未开启版本隔离时，各版本共用 .minecraft/mods。bridge-mod 是严格
+            # 绑定 MC/加载器版本的自动管理组件，留下另一版本的包会让 Forge 在
+            # 游戏真正启动前就拒绝加载；只清理可识别的 bridge 包，不动普通 Mod。
+            current_loader = v.get("loader") or ""
+            current_base = v.get("base") or ""
+            if current_loader in ("fabric", "forge", "neoforge") and current_base:
+                try:
+                    import bridge_mod_dist
+                    removed_bridge = bridge_mod_dist.remove_incompatible_bridge_jars(
+                        game_dir, current_loader, current_base)
+                    if removed_bridge:
+                        self.statusBar().showMessage(
+                            "已移除不兼容的 bridge-mod: " + ", ".join(removed_bridge))
+                except Exception:
+                    pass
             # 游戏语言默认跟随启动器：language=auto 时 i18n 已解析为系统语言。
             # 关闭设置后不改 options.txt，玩家可在游戏里为该实例单独选择语言。
             if self.settings.get("sync_minecraft_language", True):
@@ -2008,6 +2023,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, f"一键配置 · {inst['id']}",
                                     "✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n"
                                     "(无需'对局域网开放',指令结果可精确回传)。")
+            return
+        if status == "incompatible":
+            ret = QMessageBox.question(
+                self, f"一键配置 · {inst['id']}",
+                "检测到当前 mods 目录中有其他 MC 版本或加载器的 bridge-mod。\n\n"
+                f"将替换为适用于 {inst['base']}+{loader} 的版本吗？")
+            if ret == QMessageBox.StandardButton.Yes:
+                self._install_bridge_mod(inst)
             return
         if status == "outdated":
             ret = QMessageBox.question(
