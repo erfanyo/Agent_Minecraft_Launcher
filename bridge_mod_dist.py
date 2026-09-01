@@ -279,11 +279,11 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
 
 def _remove_replaced_bridge_jars(mods_dir: str, keep_name: str,
                                  loader: str, mc_version: str) -> None:
-    """移除同一 loader + MC 版本的旧 bridge-mod，避免 Forge 同时加载两个副本。"""
-    prefix, match = _jar_urls_by_pattern(loader, mc_version)
+    """只保留当前 bridge-mod，避免共享 mods 目录加载到另一 MC 版本的 jar。"""
     try:
         for name in os.listdir(mods_dir):
-            if name != keep_name and match(name):
+            parsed = _parse_jar_name(name)
+            if name != keep_name and parsed:
                 try:
                     os.remove(os.path.join(mods_dir, name))
                 except OSError:
