@@ -8,6 +8,8 @@
 
 遇到下载/启动失败时，先把这个文件最后一段发到 GitHub Issue；游戏本身的日志在同目录的 `latest.log` 与 `debug.log`。不要上传账号令牌或整个 `.minecraft`。
 
+云端 AI 的工具调用记录在：`<启动器配置目录>/ai_training/cloud_tool_calls.jsonl`。默认配置目录通常是启动器旁的 `AMCL` 文件夹，即 `AMCL/ai_training/cloud_tool_calls.jsonl`。它适合挑选案例用于 Issue；提交前同样请删除 token、API Key、服务器地址、局域网 IP 和本地绝对路径。
+
 ## 这次做了什么
 
 - 下载带 Forge/Fabric 等加载器的版本时，基础原版不再作为一个额外实例显示；它会存入内部版本仓库。
