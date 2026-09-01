@@ -1,0 +1,24 @@
+modLoader="javafml"
+loaderVersion="[43,44)"
+license="MIT"
+
+[[mods]]
+modId="agentmc_bridge"
+version="${file.jarVersion}"
+displayName="AgentMC Bridge"
+description="启动器桥接：本地指令口、配方与物品数据导出、游戏内 AI 入口"
+authors="AgentMinecraftLauncher"
+
+[[dependencies.agentmc_bridge]]
+modId="forge"
+mandatory=true
+versionRange="[43.2.0,44)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.agentmc_bridge]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.19.2,1.20)"
+ordering="NONE"
+side="BOTH"

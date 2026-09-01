@@ -22,7 +22,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "agentmc-bridge"
 
-// 当前优先构建:Fabric + Forge 1.20.1。NeoForge 留作独立现代适配工程，避免旧版 Forge
-// 构建时被不相关的插件配置中断。
+// 当前优先构建:Fabric + Forge 1.20.1。NeoForge 与 Forge 1.19.2 以下版本各自使用独立根工程，
+// 避免现代 Fabric Loom(Gradle 8)和旧 ForgeGradle(Gradle 7/更早)在同一个配置阶段互相中断。
 // common 源码直接并入各平台编译单元(见各自 build.gradle.kts 的 sourceSets)。
 include("fabric", "forge")

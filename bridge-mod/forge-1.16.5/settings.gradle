@@ -1,0 +1,8 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url = 'https://maven.minecraftforge.net' }
+        mavenCentral()
+    }
+}
+rootProject.name = 'agentmc-bridge-forge-1.16.5'

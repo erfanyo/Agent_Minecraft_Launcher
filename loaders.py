@@ -314,6 +314,7 @@ def install_loader(loader: str, mc: str, game_dir: str,
 
     forge_installer = None
     forge_tmp = None
+    processor_base_staging = None
     try:
         if loader == "fabric":
             loader_ver = loader_version or _latest_fabric_loader(mc)
@@ -377,6 +378,17 @@ def install_loader(loader: str, mc: str, game_dir: str,
 
         # 3) (forge/neoforge) 跑补丁步骤,生成 loader 的 client jar
         if loader in ("forge", "neoforge"):
+            # Forge 1.18+ 的部分 processors 会硬编码读取
+            # ``versions/<mc>/<mc>.jar``。基础原版平时存放在 _versions
+            # 仓库时，补丁期间临时还原这一标准路径，完成后再清理；不能让
+            # 用户为了安装加载器长期保留一个重复、可见的原版实例。
+            processor_base_dir = os.path.join(game_dir, "versions", parent_id)
+            processor_base_jar = os.path.join(processor_base_dir, parent_id + ".jar")
+            if not os.path.exists(processor_base_jar):
+                os.makedirs(processor_base_dir, exist_ok=True)
+                shutil.copyfile(base_path, os.path.join(processor_base_dir, parent_id + ".json"))
+                shutil.copyfile(base_jar, processor_base_jar)
+                processor_base_staging = processor_base_dir
             java_exe = os.environ.get("FORGE_PROCESSOR_JAVA")
             if not java_exe:
                 from java_manager import ensure_java
@@ -411,3 +423,7 @@ def install_loader(loader: str, mc: str, game_dir: str,
         # 清理 Forge 临时目录(installer jar、补丁文件)
         if forge_tmp and os.path.isdir(forge_tmp):
             shutil.rmtree(forge_tmp, ignore_errors=True)
+        # 仅清理本次为 Forge processor 创建的标准路径副本；用户原先已有的
+        # 原版版本目录不会进入 processor_base_staging，绝不会被这里删除。
+        if processor_base_staging and os.path.isdir(processor_base_staging):
+            shutil.rmtree(processor_base_staging, ignore_errors=True)

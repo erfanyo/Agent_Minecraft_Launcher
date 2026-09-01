@@ -1140,8 +1140,13 @@ class MainWindow(QMainWindow):
         if self._install_detail(d):
             self.statusBar().showMessage(f"安装完成:{d['id']} 所有文件已就绪 ✅")
 
-    def install_version(self, version_id: str, status_cb=None, progress_cb=None) -> bool:
-        """按版本号完整安装一个原版版本(jar + 依赖库 + 资源)。成功返回 True。"""
+    def install_version(self, version_id: str, status_cb=None, progress_cb=None,
+                        repository_only: bool = False) -> bool:
+        """安装原版文件。
+
+        ``repository_only=True`` 用于加载器的继承根：文件直接进入
+        ``versions/_versions/<mc>/``，不会被当成一个可见的原版实例。
+        """
         if status_cb is None:
             status_cb = self.statusBar().showMessage
         if progress_cb is None:
@@ -1159,10 +1164,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             status_cb(f"获取版本信息失败: {e}")
             return False
-        return self._install_detail(d, status_cb=status_cb, progress_cb=progress_cb)
+        return self._install_detail(d, status_cb=status_cb, progress_cb=progress_cb,
+                                    repository_only=repository_only)
 
-    def _install_detail(self, d: dict, status_cb=None, progress_cb=None) -> bool:
-        """安装一个已取到详细数据的原版版本:保存 JSON + 客户端 jar + 依赖库/资源"""
+    def _install_detail(self, d: dict, status_cb=None, progress_cb=None,
+                        repository_only: bool = False) -> bool:
+        """安装已取到的原版数据；加载器继承根可直接写入版本仓库。"""
         if status_cb is None:
             status_cb = self.statusBar().showMessage
         if progress_cb is None:
@@ -1173,15 +1180,19 @@ class MainWindow(QMainWindow):
             status_cb(f"{d['id']} 没有客户端 jar(该版本不可直接启动)")
             return False
 
-        # 保存版本 JSON 到实例目录(PCL2 风格:实例自包含,也是加载器继承链的根)
-        inst_dir = os.path.join(paths.GAME_DIR, "versions", d["id"])
+        # 加载器需要原版作为继承根，但它不是用户请求的原版实例。
+        # 旧流程先放 versions/<id> 再异步搬运，会短暂/永久留下一个重复实例；
+        # 现在从一开始就写入隐藏的版本仓库。
+        version_root = (os.path.join(paths.GAME_DIR, "versions", "_versions")
+                        if repository_only else os.path.join(paths.GAME_DIR, "versions"))
+        inst_dir = os.path.join(version_root, d["id"])
         os.makedirs(inst_dir, exist_ok=True)
         with open(os.path.join(inst_dir, d["id"] + ".json"), "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
 
         try:
             # 1) 客户端 jar
-            dest = os.path.join(paths.GAME_DIR, "versions", d["id"], f"{d['id']}.jar")
+            dest = os.path.join(inst_dir, f"{d['id']}.jar")
             status_cb(f"下载客户端 {d['id']} ...")
             download_with_mirror(client["url"], dest, version_id=d["id"],
                                  sha1=client.get("sha1"), progress_callback=progress_cb)
@@ -1520,10 +1531,12 @@ class MainWindow(QMainWindow):
 
         status_cb(f"开始下载实例 {version} ...")
 
-        # 1) 原版本体(加载器版本必须依赖它,先提示避免"怎么多下个原版"的困惑)
+        # 1) 原版本体。带加载器时直接进入隐藏版本仓库，避免产生重复原版实例；
+        #    原版仍会下载，因为加载器继承它的 JSON/client jar。
         if loader_key:
-            status_cb(f"准备基础原版 {version}({loader_key} 加载器依赖它,必须一并下载)...")
-        if not self.install_version(version, status_cb=status_cb, progress_cb=progress_cb):
+            status_cb(f"准备基础原版 {version}({loader_key} 加载器依赖，存入版本仓库)...")
+        if not self.install_version(version, status_cb=status_cb, progress_cb=progress_cb,
+                                    repository_only=bool(loader_key)):
             return
 
         # 2) 加载器
@@ -1781,9 +1794,13 @@ class MainWindow(QMainWindow):
         self._run_download(worker)
 
     def _tidy_base_versions(self):
-        """把"被加载器继承、且没有自己存档"的纯基础原版,收进 versions/_versions/ 版本仓库。
-        versions 目录只留真实例(用户主动装的版本/加载器实例);基础原版只是地基,
-        收进仓库后 UI 和磁盘目录都干净(有自己存档的算真实例,不动)。"""
+        """收纳加载器自动带出的、尚未启动过的基础原版到 versions/_versions/。
+
+        不能用存档目录判断：关闭版本隔离时所有版本共用同一个 gameDir，
+        会误把别的实例的存档当作基础原版自己的存档。改为检查版本安装目录
+        是否仍是下载后的最小形态（仅 ``<id>.json`` 与 ``<id>.jar``）：一旦
+        启动过，启动器会生成 natives 或其他文件，此时保留原目录不动。
+        """
         try:
             instances = scan_instances(paths.GAME_DIR)
         except Exception:
@@ -1793,9 +1810,16 @@ class MainWindow(QMainWindow):
         for inst in instances:
             if inst["loader"] is not None or inst["id"] not in bases_in_use:
                 continue   # 不是"被继承的纯原版"
-            inst_dir = self.game_dir_for(inst["id"])
-            if os.path.isdir(os.path.join(inst_dir, "saves")):
-                continue   # 有自己的存档 → 真实例,不动
+            # 版本安装文件始终位于 versions/<id>；gameDir 在关闭隔离时是共用的，
+            # 不能用 game_dir_for() 来判断该版本是否启动过。
+            inst_dir = os.path.join(paths.GAME_DIR, "versions", inst["id"])
+            expected = {inst["id"] + ".json", inst["id"] + ".jar"}
+            try:
+                contents = set(os.listdir(inst_dir))
+            except OSError:
+                continue
+            if contents != expected:
+                continue   # 已启动/用户放入过文件/安装不完整 → 按真实原版保留
             dest = os.path.join(repo, inst["id"])
             try:
                 if not os.path.isdir(dest) and os.path.isdir(inst_dir):
@@ -2226,12 +2250,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"已备份到:{out}")
 
     def _delete_instance(self, inst):
-        """删除一个实例(只删它自己,共用文件保留)"""
+        """删除一个实例的安装文件(只删 versions/<id>，共用 gameDir 保留)。"""
         if QMessageBox.question(
                 self, "确认删除",
                 f"确定删除实例 {inst['id']} 吗?\n(只删该实例,共用文件保留)") != QMessageBox.StandardButton.Yes:
             return
-        shutil.rmtree(self.game_dir_for(inst["id"]), ignore_errors=True)
+        # ``game_dir_for`` 在关闭版本隔离时会返回整个 .minecraft；它只适合
+        # 运行参数、存档和配置，绝不能作为删除目标。实例安装文件始终固定在
+        # versions/<id>，从而保证删一个实例不会影响其他实例或共用游戏目录。
+        instance_dir = os.path.join(paths.GAME_DIR, "versions", inst["id"])
+        if os.path.isdir(instance_dir):
+            shutil.rmtree(instance_dir, ignore_errors=True)
         self.statusBar().showMessage(f"实例已删除:{inst['id']}")
         self.refresh_instances()
 

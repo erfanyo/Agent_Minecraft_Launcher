@@ -1,0 +1,23 @@
+modLoader="javafml"
+loaderVersion="[36,37)"
+license="MIT"
+
+[[mods]]
+modId="agentmc_bridge"
+version="${file.jarVersion}"
+displayName="AgentMC Bridge"
+description="AgentMC launcher bridge: local commands, AI file exchange and data export."
+
+[[dependencies.agentmc_bridge]]
+modId="forge"
+mandatory=true
+versionRange="[36.2.0,37)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.agentmc_bridge]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.16.5,1.17)"
+ordering="NONE"
+side="BOTH"
