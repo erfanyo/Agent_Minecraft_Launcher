@@ -279,24 +279,38 @@ def download_many(jobs: list, workers: int = PARALLEL_WORKERS,
 
     jobs: [(名字, 大小, 任务函数)] — 任务函数签名 fn(progress_callback),
           成功正常返回,失败抛异常。
-    进度:total = 已知大小之和(全未知时按任务数),回调 (已完成总字节, total),
-    单调递增(每个任务完成时把其大小累加进已完成)。
+    进度:total = 已知大小之和(全未知时按任务数),回调 (已完成总字节, total)。
+    每个并行文件都单独记录其实时字节数，最终向外报告所有文件之和；因此进度
+    是一次下载任务的单调整体进度，不能因另一文件开始而回到 0。
     返回 (成功数, 失败列表[(名字, 原因)])。"""
     total = sum(int(s) for _n, s, _f in jobs) or len(jobs)
-    completed = [0.0]
+    completed = [0]
+    current = [0] * len(jobs)
+    last_reported = [0]
     lock = threading.Lock()
 
-    def report(done, size):
+    def report(index, done, size):
         with lock:
-            now = completed[0] + done
+            # 对未知大小任务，下载中无法可靠地换算字节进度，留到完成时计 1。
+            # 已知大小则限制在该文件声明的大小内，避免镜像响应头异常造成超量。
+            current[index] = min(max(int(done or 0), 0), int(size)) if size else 0
+            now = completed[0] + sum(current)
+            # 网络线程的回调先后不可预测；视觉进度只允许前进。
+            last_reported[0] = max(last_reported[0], now)
+            now = last_reported[0]
         if progress_callback:
             progress_callback(now, total)
 
-    def run(name, size, fn):
+    def run(index, name, size, fn):
         try:
-            fn(lambda d, _t: report(d, size))
+            fn(lambda d, _t: report(index, d, size))
             with lock:
-                completed[0] += size
+                completed[0] += int(size) if size else 1
+                current[index] = 0
+                last_reported[0] = max(last_reported[0], completed[0] + sum(current))
+                now = last_reported[0]
+            if progress_callback:
+                progress_callback(now, total)
             return True, None
         except Exception as e:
             return False, (str(e) or type(e).__name__)[:120]
@@ -304,14 +318,15 @@ def download_many(jobs: list, workers: int = PARALLEL_WORKERS,
     ok = 0
     failures = []
     if len(jobs) <= 1 or workers <= 1:
-        for name, size, fn in jobs:
-            good, err = run(name, size, fn)
+        for index, (name, size, fn) in enumerate(jobs):
+            good, err = run(index, name, size, fn)
             ok += good
             if err:
                 failures.append((name, err))
         return ok, failures
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(run, n, s, f): n for n, s, f in jobs}
+        futs = {ex.submit(run, i, n, s, f): n
+                for i, (n, s, f) in enumerate(jobs)}
         for fut in futs:
             try:
                 good, err = fut.result()
