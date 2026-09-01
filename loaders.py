@@ -291,6 +291,19 @@ def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
 
 def _download_maven_path(path: str, dest: str, progress_callback=None) -> None:
     """下载一个只有 Maven 路径的库(轮流试几个仓库)"""
+    # Forge 1.16.x 的安装器已经在本地生成了 universal jar，但其版本 JSON
+    # 仍会列出无 classifier 的 forge-<mc>-<version>.jar。有些镜像没有这个
+    # 过渡坐标，不能因此把本来已完成的安装判失败；把 universal 作为该类路径
+    # 的本地兼容副本，供启动参数构建器正常解析。
+    if (not os.path.exists(dest)
+            and os.path.basename(dest).startswith("forge-")
+            and os.path.basename(dest).endswith(".jar")):
+        universal = dest[:-4] + "-universal.jar"
+        if os.path.isfile(universal):
+            import shutil
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(universal, dest)
+            return
     from downloader import download_maven
     download_maven(path, dest, progress_callback=progress_callback)
 
