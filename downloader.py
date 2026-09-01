@@ -263,14 +263,23 @@ def download_maven(path: str, dest: str, sha1: str | None = None,
         if mirror_repo:
             repos = repos + [mirror_repo]
     last_err = None
+    errors = []
     for template in repos:
+        url = template.format(path=path)
         try:
-            download_file(template.format(path=path), dest, sha1=sha1,
-                          progress_callback=progress_callback)
+            download_file(url, dest, sha1=sha1, progress_callback=progress_callback)
             return
         except Exception as e:
             last_err = e
-    raise last_err
+            # 不能只抛出最后一个镜像错误：那会掩盖官方仓库究竟是不存在、
+            # 超时还是被网络拦截，用户也无法据此判断是否该换源。
+            detail = str(e).replace("\n", " ").strip()
+            errors.append(f"{url}（{type(e).__name__}: {detail}）")
+    if not errors:
+        raise RuntimeError("没有可用的 Maven 下载源，请检查下载源设置")
+    raise RuntimeError(
+        "Maven 依赖下载失败；已依次尝试：\n- " + "\n- ".join(errors)
+    ) from last_err
 
 
 def download_many(jobs: list, workers: int = PARALLEL_WORKERS,
