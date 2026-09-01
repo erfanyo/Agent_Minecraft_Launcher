@@ -147,6 +147,25 @@ def _installer_download(installer_url: str, ver: str, game_dir: str,
         if binpatch:
             with z.open(binpatch.lstrip("/")) as src, open(os.path.join(tmp, "client.lzma"), "wb") as dst:
                 shutil.copyfileobj(src, dst)
+        # 老 Forge（包括 1.16.5）会把一部分运行库直接封进 installer 的
+        # maven/ 目录。version.json 虽把它们列为普通 Maven artifact，但
+        # 官方/镜像 Maven 已不再提供其中的无 classifier jar（HTTP 404）。
+        # 官方安装器会使用这份内置副本；启动器也必须先解出它们，不能再把
+        # 已随 installer 收到的文件当作网络下载任务。
+        lib_root = os.path.join(game_dir, "libraries")
+        for member in z.infolist():
+            name = member.filename.replace("\\", "/")
+            if member.is_dir() or not name.startswith("maven/"):
+                continue
+            relative = os.path.normpath(name[len("maven/"):])
+            if relative.startswith("..") or os.path.isabs(relative):
+                continue
+            dest = os.path.join(lib_root, relative)
+            if os.path.exists(dest):
+                continue
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with z.open(member) as src, open(dest, "wb") as dst:
+                shutil.copyfileobj(src, dst)
     return version_profile, installer_profile, jar_path, tmp
 
 
