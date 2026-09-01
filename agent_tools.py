@@ -451,13 +451,54 @@ def send_game_command(instance: str, command: str, game_dir: str | None = None,
     游戏内 /ai 传入 as_player 时只能走 bridge，以确保命令永远按发起玩家
     身份执行，不能退化为 RCON 控制台身份。"""
     import os as _os
+    import json as _json
+    import time as _time
     from game_command import send_bridge_command, send_game_command as _rcon_impl
     gd = _gd(game_dir)
     token_path = _os.path.join(paths.bridge_dir(instance, gd), "token.txt")
     if _os.path.isfile(token_path):
         return send_bridge_command(instance, command, gd, as_player=as_player)
     if as_player:
-        return ("游戏内指令需要新版 bridge-mod 正在运行，无法安全降级为控制台执行。\n"
+        # Forge 1.16.5 bridge 使用文件交换而非 TCP token。请求来自游戏内 AI
+        # 时必须保持玩家身份；只有存在这个协议文件才尝试，绝不降级为 RCON 控制台。
+        bridge_dir = paths.bridge_dir(instance, gd)
+        req_path = _os.path.join(bridge_dir, "command_request.json")
+        reply_path = _os.path.join(bridge_dir, "command_reply.json")
+        if _os.path.isdir(bridge_dir):
+            seq = _time.time_ns()
+            cmd = command.strip()
+            if not cmd.startswith("/"):
+                cmd = "/" + cmd
+            req = {"seq": seq, "command": cmd, "as_player": as_player}
+            tmp_path = req_path + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    _json.dump(req, f, ensure_ascii=False)
+                _os.replace(tmp_path, req_path)
+                deadline = _time.monotonic() + 8.0
+                while _time.monotonic() < deadline:
+                    try:
+                        with open(reply_path, encoding="utf-8") as f:
+                            reply = _json.load(f)
+                        if int(reply.get("seq", -1)) == seq:
+                            try:
+                                _os.remove(reply_path)
+                            except OSError:
+                                pass
+                            result = str(reply.get("result") or "")
+                            return ("✅ 已执行: " if reply.get("success") else "⚠️ 命令未执行: ") + result
+                    except (OSError, ValueError, TypeError):
+                        pass
+                    _time.sleep(0.15)
+                return "游戏内 bridge 指令通道超时：请确认已进入世界后重试。"
+            except OSError as e:
+                try:
+                    if _os.path.exists(tmp_path):
+                        _os.remove(tmp_path)
+                except OSError:
+                    pass
+                return f"写入游戏内指令请求失败: {e}"
+        return ("游戏内指令需要 bridge-mod 正在运行，无法安全降级为控制台执行。\n"
                 "请进世界后重试；若已进世界，请在「我的版本 → 一键配置」更新 bridge-mod。")
     return _rcon_impl(instance, command, gd)
 
