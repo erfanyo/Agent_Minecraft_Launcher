@@ -18,21 +18,7 @@ minecraft {
     mappings channel: 'official', version: '1.16.5'
 }
 
-def legacySources = file("$buildDir/generated/legacy-sources")
-sourceSets.main.java.srcDirs = ['src/main/java', legacySources]
-
-task prepareLegacySources(type: Copy) {
-    from '../forge-1.18.2/src/main/java'
-    into legacySources
-    filter { line ->
-        line.replace('source.getEntity() instanceof ServerPlayer p ? p : null',
-                     'source.getEntity() instanceof ServerPlayer ? (ServerPlayer) source.getEntity() : null')
-            .replace('try (client;', 'try (Socket ignoredClient = client;')
-            .replace('.isBlank()', '.trim().isEmpty()')
-            .replace('Files.readString(reply)', 'new String(Files.readAllBytes(reply), StandardCharsets.UTF_8)')
-    }
-}
-compileJava.dependsOn prepareLegacySources
+sourceSets.main.java.srcDirs = ['src/main/java']
 sourceCompatibility = targetCompatibility = compileJava.sourceCompatibility = compileJava.targetCompatibility = '1.8'
 
 compileJava.options.encoding = 'UTF-8'
