@@ -20,7 +20,7 @@ RELEASES_API = f"https://api.github.com/repos/{REPO}/releases"
 LAUNCHER_ASSET = "AgentMinecraftLauncher.exe"
 
 # 当前启动器版本(发版时改这里 + 打同版本 tag)
-VERSION = "0.5.1"
+VERSION = "0.6.1"
 
 _HEADERS = {"User-Agent": "AgentMinecraftLauncher-Updater/{}".format(VERSION)}
 

@@ -11,6 +11,28 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
+## [v0.6.1] - 2026-09-03 (测试版,待正式发布)
+
+> 🐛 修复版:0.6.0 问题修复 + 游戏内 AI 权限误判 + 老版 Forge 1.16.5 兼容。
+> 用户说明见 `RELEASE_NOTES_0.6.1.md`。
+
+### 🐛 修复
+- **游戏内 AI 权限判定自相矛盾**(`in_game_ai.py`):`_in_game_ctx` 用 `(exec_mode!="player")`
+  判,`answer` 用 `not player` 判,旧 bridge-mod 协议(ai_request.json 只有 seq/text/ts、
+  不上报 player/is_op/exec_mode)下两者打架 → 工具已挂但仍提示"该玩家不是 OP、不能执行"。
+  统一为 `_can_exec(ctx)`:单机房主/lan(server_type=singleplayer/lan)=本机用户放行(由世界
+  "允许作弊"兜底);dedicated 仅 OP/--console;未知(旧 jar 无 player)放行交给 MC 自行判,
+  仅"已知非 OP 的服务器玩家"收紧。
+- **bridge-mod 上报游戏类型**(`AiChat.java`):`/ai` 上报 `server_type`(dedicated/lan/singleplayer),
+  供按游戏类型判权限;bridge-mod 版本 0.1.0→0.2.0。
+- **老版 Forge 1.16.5 兼容**:启动器管理 Java 8、修正 Forge 1.16 universal 运行库与 Maven
+  下载源、修复安装器产物缺失、1.16.5 bridge-mod 版本/AI 指令通道、旧 Forge 启动类路径。
+- **实例/下载**:默认选中并启动上次游玩实例、防止共享 mods 目录误加载 bridge-mod、并行下载
+  圆环进度反复回转、Forge 最新版本排序/下载错误提示、Maven 下载失败诊断更清楚。
+
+### 📄 其它
+- 0.6.0 存在若干问题,已标记不可用;本版为测试版,确认后正式发布。
+
 ## [Unreleased]
 
 ## [v0.6.0] - 2026-09-01
