@@ -11,6 +11,32 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
+## [v0.7.0] - 2026-09-04 (测试版,待正式发布)
+
+> ✨ 功能版:启动器底子重构(后台任务/启动服务/目录服务)+ 实例重命名 + AI 上下文置顶 +
+> 已安装资源卡片 + CurseForge + 崩溃诊断/日志脱敏 + bridge-mod Forge 1.12.2。
+> 用户向说明见 `RELEASE_NOTES_0.7.0.md`。
+
+### 🗂 架构/任务管理重构
+- **后台任务统一生命周期**(`background_tasks.py` + `task_context.py`):耗时操作(下载/安装/启动)
+  走 Python 线程,状态/进度/结果经 Qt 信号回主线程;取消为协作式(`cancel_event/checkpoint/TaskCancelled`)。
+- **启动/进程服务**(`game_launch_service.py`):整合启动命令构建、进程拉起、日志流、退出回调。
+- **实例目录/安装服务**(`instance_catalog_service.py` + `instance_install_service.py` + `instance_metadata.py`):
+  实例扫描、分类、元数据落盘与安装流程统一。
+- `main.py` 大幅拆解,`crash_diagnostics.py` 崩溃诊断、`log_privacy.py` 日志脱敏、`download_feedback.py` 下载反馈。
+
+### ✨ 新增功能
+- **实例重命名**:同步 id / 安装目录 / 继承引用,运行或安装中禁止改名。
+- **AI 上下文置顶**(`ai_context_pins.py`):显式 opt-in 的 UI 上下文捕获;仅注入上下文、不授予操作权限。
+- **已安装资源卡片**(`installed_resource_cards.py`):本地元数据渲染已装 Mod/资源卡片,无网络请求。
+- **CurseForge 支持**(`curseforge.py`):Mod 搜索/下载新增 CurseForge 来源。
+- **bridge-mod Forge 1.12.2**(`bridge-mod/forge-1.12.2/`):新独立平台入口 + AiChatCommand/FileCommandBridge/BridgeForge1122。
+
+### 🐛 修复 / 完善
+- 实例管理、运行配置、下载圆环(`download_indicator.py`)、依赖导入、Mod 依赖网络、
+  启动命令(`launcher.py`/`game_files.py`/`loaders.py`)等多项修正。
+- 日志隐私:AI 操作记录、云端工具调用日志统一脱敏;旧值不写撤销记录。
+
 ## [v0.6.1] - 2026-09-03 (测试版,待正式发布)
 
 > 🐛 修复版:0.6.0 问题修复 + 游戏内 AI 权限误判 + 老版 Forge 1.16.5 兼容。
