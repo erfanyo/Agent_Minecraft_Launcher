@@ -20,7 +20,7 @@
   - 查合成配方(套娃展开)、查按键绑定、生成符合版本语法的游戏指令
 - **权限控制**:只读(默认)/ **工作区可写**(可改启动器目录内文件);AI 装 Mod、发游戏指令等写操作需切到工作区可写(切前有确认)。
 - **游戏内 AI**:进游戏敲 `/ai` 也能让 AI 问答、发指令(按**游戏类型**判权限:单机/局域网房主允许,连的专用服务器只看 OP)。
-- **AI 上下文置顶**:可把关心的上下文钉住,AI 回答更贴合当前场景。
+- **📌 AI 上下文置顶(本期亮点)**:把关心的上下文"钉住",AI 回答更贴合当前场景(仅注入上下文,**不**额外授予操作权限)。
 - **技能系统**:崩溃看门狗(自动诊断)、自动重启、备份提醒、指令指南(版本感知)
 
 ### 📦 实例管理(PCL2 风格)
@@ -68,8 +68,12 @@
 - 整合包的文件路径会检查目录跳转、Windows 盘符、特殊文件名及链接越界；检测到不安全路径会停止导入。
 
 ### 方式一:直接运行 exe(给朋友/普通用户)
-- 从 [GitHub Releases](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases) 下载
-  **AgentMinecraftLauncher.exe**(Windows,无需安装 Python),双击即用
+**下载渠道(任选其一)**
+- [GitHub Releases](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases)(更新最快,海外/开发)
+- **夸克网盘**:https://pan.quark.cn/s/ca03e5694367?pwd=MaXY (提取码 `MaXY`,需夸克 App/扫码)
+- **123云盘**:https://1848479766.share.123pan.cn/123pan/bvdAvd-i73Yh (**可直接网页下载**,免装客户端,国内推荐)
+
+解压后双击 **`AgentMinecraftLauncher.exe`**(Windows,无需安装 Python)即用。
 - 或开发机自己打包:
 ```bash
 # 开发机打包(一次性)
