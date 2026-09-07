@@ -82,6 +82,8 @@ class ContentOverlay(QWidget):
             self.setGeometry(p.rect())
         self.show()
         self.raise_()
+        from ui_anim import reveal
+        reveal(self._content_host)
 
     def hide_overlay(self) -> None:
         self.hide()

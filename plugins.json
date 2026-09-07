@@ -3,8 +3,8 @@
     {
       "name": "hello",
       "title": "示例",
-      "version": "0.1.0",
-      "description": "演示注册一个 AI 工具 + 一个设置项 + 一个页面 + 一个技能(完整的插件示例)。",
+      "version": "0.2.0",
+      "description": "插件 API v1 的完整示例：AI 工具、设置项、页面和技能。默认关闭，供学习与测试使用。",
       "author": "erfanyo",
       "repo": "erfanyo/Agent_Minecraft_Launcher",
       "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/hello.py"
@@ -12,8 +12,8 @@
     {
       "name": "lan_bridge",
       "title": "联机 CLI 桥接",
-      "version": "0.1.0",
-      "description": "检测/启动 EasyTier 等命令行联机工具,一键组网分享(虚拟局域网主推,ZeroTier 账号组网);不内置二进制。",
+      "version": "0.2.0",
+      "description": "检测并受控启动本机 EasyTier，创建虚拟局域网房间；不内置或下载第三方二进制。默认关闭。",
       "author": "erfanyo",
       "repo": "erfanyo/Agent_Minecraft_Launcher",
       "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/lan_bridge.py"
@@ -21,7 +21,7 @@
     {
       "name": "mcp_server",
       "title": "MCP Server",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等),让外部 AI 能调用启动器能力。默认关闭,按需拉起到本地端口。",
       "author": "erfanyo",
       "repo": "erfanyo/Agent_Minecraft_Launcher",

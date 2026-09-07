@@ -11,6 +11,12 @@ import os
 from datetime import datetime
 
 from paths import data_dir
+from log_privacy import redact, sensitive_key
+
+
+def recent_text(limit=30):
+    from ai_actions import recent_text as read_recent
+    return read_recent(limit)
 
 
 def preview(name: str, args: dict) -> str:
@@ -72,12 +78,17 @@ def record(name: str, args: dict, result: str, approved: bool = True, undo: dict
         "undo": dict(undo or {}),
     }
     rows.append(item)
+    from settings import load_settings
+    rows = redact(rows, load_settings())
+    for row in rows:
+        if sensitive_key((row.get("undo") or {}).get("key", "")):
+            row["undo"] = {}
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(rows[-200:], f, ensure_ascii=False, indent=2)
     except Exception:
         pass
-    return item
+    return rows[-1]
 
 
 def undo_last_setting() -> str:
@@ -93,7 +104,7 @@ def undo_last_setting() -> str:
         if undo.get("kind") != "setting":
             continue
         key = undo.get("key")
-        if not key:
+        if not key or sensitive_key(key):
             continue
         from settings import load_settings, save_settings
         import paths

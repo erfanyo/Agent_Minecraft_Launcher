@@ -1,0 +1,31 @@
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net/' }
+        mavenCentral()
+    }
+    dependencies { classpath 'net.minecraftforge.gradle:ForgeGradle:2.3-SNAPSHOT' }
+}
+
+apply plugin: 'net.minecraftforge.gradle.forge'
+
+version = '0.2.0'
+group = 'com.agentmc'
+archivesBaseName = 'agentmc-bridge-forge-1.12.2'
+sourceCompatibility = targetCompatibility = '1.8'
+
+minecraft {
+    // ForgeGradle 2 只能使用仍发布 userdev 的 1.12.2 构建；运行时仍兼容
+    // 14.23.5 系列的玩家端 Forge。
+    version = '1.12.2-14.23.5.2847'
+    runDir = 'run'
+    mappings = 'stable_39'
+}
+
+processResources {
+    inputs.property 'version', project.version
+    from(sourceSets.main.resources.srcDirs) {
+        include 'mcmod.info'
+        expand 'version': project.version
+    }
+    from(sourceSets.main.resources.srcDirs) { exclude 'mcmod.info' }
+}

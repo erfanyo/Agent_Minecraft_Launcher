@@ -13,7 +13,9 @@ Minecraft 的启动原理:游戏本体是个 jar,"启动"就是用 Java 运行�
 import json
 import os
 import re
+import sys
 import uuid
+import zipfile
 
 from downloader import download_with_mirror
 from game_files import DEFAULT_FEATURES, library_entries, rules_allow
@@ -61,16 +63,65 @@ def _lib_key(lib: dict) -> str:
 
 
 def _merge_libraries(parent_libs: list, child_libs: list) -> list:
-    """合并依赖库:子版本的同名库覆盖父版本(标准继承规则),去掉重复。
-    NeoForge 的 UnionFileSystem 对 classpath 里的重复 jar 会直接崩,必须去重。"""
+    """合并依赖库，按当前系统保留真正可用的同名条目。
+
+    通常子 profile 的同名库应覆盖父版本（例如 Forge 更新 log4j），但旧版
+    Forge 也会塞入只适用于另一系统的同名 LWJGL 条目。若仍让它覆盖 Windows
+    父版本，规则过滤后两个条目都会消失，游戏会在启动期找不到 OpenGLException。
+    NeoForge 仍不能保留重复 classpath 条目，因此这里只改变覆盖条件。"""
     merged = {}
     for lib in list(parent_libs) + list(child_libs):
         key = _lib_key(lib)
         if key:
-            merged[key] = lib          # 后出现的(子版本)覆盖先出现的(父版本)
+            previous = merged.get(key)
+            # 后出现的子版本通常覆盖；但当前系统不允许它而已存在可用父版本时，
+            # 必须保留父版本。这是 1.12.2 Forge 的旧 LWJGL 兼容关键。
+            if previous is None or rules_allow(lib.get("rules")) or not rules_allow(previous.get("rules")):
+                merged[key] = lib
         else:
             merged[f"__{id(lib)}"] = lib  # 没有名字的库按对象去重
     return list(merged.values())
+
+
+def _extract_natives(d: dict, install_dir: str, natives_dir: str) -> None:
+    """将当前系统需要的原生库 jar 解压到 ``java.library.path``。
+
+    版本 JSON 中的 natives 只是下载清单；Java 不会自动从 jar 内加载 DLL。
+    旧版（尤其 1.12.2 的 LWJGL 2）若漏掉此步会报 ``no lwjgl64``。
+    """
+    for lib in d.get("libraries", []):
+        if not rules_allow(lib.get("rules")):
+            continue
+        downloads = lib.get("downloads") or {}
+        classifiers = downloads.get("classifiers") or {}
+        native_key = (lib.get("natives") or {}).get(
+            "windows" if os.name == "nt" else "osx" if sys.platform == "darwin" else "linux"
+        )
+        if not native_key:
+            native_key = "natives-windows" if os.name == "nt" else (
+                "natives-osx" if sys.platform == "darwin" else "natives-linux")
+        native = classifiers.get(native_key)
+        native_path = native.get("path") if native else None
+        if not native_path:
+            continue
+        jar_path = os.path.join(install_dir, "libraries", native_path)
+        if not os.path.isfile(jar_path):
+            continue  # 安装阶段会报告缺失文件；启动阶段不伪造下载。
+        try:
+            with zipfile.ZipFile(jar_path) as archive:
+                for member in archive.infolist():
+                    name = member.filename.replace("\\", "/")
+                    if member.is_dir() or name.startswith("META-INF/"):
+                        continue
+                    relative = os.path.normpath(name)
+                    if relative.startswith("..") or os.path.isabs(relative):
+                        continue
+                    target = os.path.join(natives_dir, relative)
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    with archive.open(member) as source, open(target, "wb") as dest:
+                        dest.write(source.read())
+        except (OSError, zipfile.BadZipFile):
+            continue
 
 
 def merge_version_json(parent: dict, child: dict) -> dict:
@@ -92,13 +143,17 @@ def merge_version_json(parent: dict, child: dict) -> dict:
     return merged
 
 
-def resolve_inherited_json(version_id: str, game_dir: str) -> dict:
+def resolve_inherited_json(version_id: str, game_dir: str, _seen=None) -> dict:
     """递归解析继承链:Fabric/Forge 版本 JSON 里有 inheritsFrom 指向原版,
     一直合并到根(原版 JSON 必须已存在磁盘上)。"""
+    seen = set(_seen or ())
+    if version_id in seen:
+        raise ValueError("实例版本存在循环继承，请检查版本文件")
+    seen.add(version_id)
     data = load_version_json(version_id, game_dir)
     parent_id = data.get("inheritsFrom")
     if parent_id:
-        parent = resolve_inherited_json(parent_id, game_dir)
+        parent = resolve_inherited_json(parent_id, game_dir, seen)
         return merge_version_json(parent, data)
     return data
 
@@ -173,6 +228,7 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
     # 2) natives 目录(现代版本原生库在 classpath 上,此目录供 java.library.path 用)
     natives_dir = os.path.join(install_dir, "versions", version_id, "natives")
     os.makedirs(natives_dir, exist_ok=True)
+    _extract_natives(d, install_dir, natives_dir)
 
     # 3) 占位符的真实值
     if assets_dir is None:
@@ -184,7 +240,8 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
         auth_uuid = auth["uuid"]
         auth_access = auth["access_token"]
         user_type = auth.get("token_type", "msa")
-        auth_session = auth.get("refresh_token", "") or auth_access
+        # Legacy session arguments must never expose a Microsoft refresh token.
+        auth_session = "token:" + auth_access + ":" + auth_uuid
     else:
         auth_uuid = offline_uuid(username)
         auth_access = "0"

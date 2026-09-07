@@ -190,8 +190,9 @@ def connect_mcp_clients(clients: list) -> tuple:
                     "description": t.get("description", f"MCP 工具 {name}::{t['name']}"),
                     "parameters": t.get("inputSchema", {"type": "object",
                                                         "properties": {}, "required": []}),
+                    "annotations": t.get("annotations", {}),
                 })
-                caller_map[full] = (client, t["name"])
+                caller_map[full] = (client, t["name"], t.get("annotations", {}))
         except Exception:
             continue
     return mcp_schemas, caller_map
@@ -200,7 +201,7 @@ def connect_mcp_clients(clients: list) -> tuple:
 def mcp_tool_call(caller_map: dict, full_name: str, args: dict) -> str:
     """按 mcp__ 全名调用对应 MCP 服务器工具。"""
     client = caller_map[full_name]
-    client, real_name = client
+    client, real_name, *_metadata = client
     try:
         return client.call(real_name, args)
     except Exception as e:

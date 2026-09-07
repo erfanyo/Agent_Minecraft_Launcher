@@ -129,6 +129,11 @@ def _flat_single_prefix(names: list) -> str | None:
     return None
 
 
+from safe_paths import safe_child, safe_component
+from task_context import checkpoint, submit
+from instance_metadata import atomic_json
+
+
 def _extract_zip_to(path: str, inst_dir: str, prefix: str,
                     status_callback=None, progress_callback=None):
     """把 zip 内容解压进实例目录(去掉 prefix);跳过目录项与路径穿越。
@@ -138,17 +143,24 @@ def _extract_zip_to(path: str, inst_dir: str, prefix: str,
         members = [m for m in z.namelist() if m and not m.endswith("/")
                    and (not prefix or m.startswith(prefix))]
         total = len(members)
+        import stat
+        for member in members:
+            relative = member[len(prefix):] if prefix else member
+            safe_child(inst_dir, relative)
+            if stat.S_ISLNK(z.getinfo(member).external_attr >> 16):
+                raise ValueError("整合包包含符号链接，已停止导入")
         for i, member in enumerate(members, 1):
+            checkpoint()
             if prefix:
                 rel = member[len(prefix):]
             else:
                 rel = member
-            if not rel or rel.startswith(("../", "/")) or ".." in rel.split("/"):
-                continue
-            dest = os.path.join(inst_dir, rel.replace("/", os.sep))
+            dest = safe_child(inst_dir, rel)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with z.open(member) as src, open(dest, "wb") as dst:
-                shutil.copyfileobj(src, dst)
+                while chunk := src.read(256 * 1024):
+                    checkpoint()
+                    dst.write(chunk)
             if progress_callback:
                 progress_callback(i, total)
 
@@ -323,12 +335,15 @@ def _download_mods_parallel(files: list, inst_dir: str,
     jobs = []
     for f in files:
         rel = f.get("path", "")
-        if not rel or rel.startswith("../"):
-            continue
-        dest = os.path.join(inst_dir, rel.replace("/", os.sep))
+        dest = safe_child(inst_dir, rel)
         downloads = f.get("downloads") or []
-        if not downloads or os.path.exists(dest):
+        if not downloads:
             continue
+        if os.path.isfile(dest):
+            expected = (f.get('hashes') or {}).get('sha1')
+            from downloader import sha1_of_file
+            if expected and sha1_of_file(dest) == expected:
+                continue
         jobs.append((f, rel, downloads[0], dest, (f.get("hashes") or {}).get("sha1")))
     if not jobs:
         return
@@ -337,21 +352,27 @@ def _download_mods_parallel(files: list, inst_dir: str,
     def one(job):
         _f, _rel, url, dest, sha1 = job
         try:
+            dest = safe_child(inst_dir, _rel)
             download_with_mirror(url, dest, sha1=sha1)
             return True, os.path.basename(_rel)
         except Exception as e:
             return False, f"{os.path.basename(_rel)} {e}"
 
     done = 0
+    failures = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=_MOD_DL_WORKERS) as ex:
-        futs = {ex.submit(one, j): j for j in jobs}
+        futs = {submit(ex, one, j): j for j in jobs}
         for fut in concurrent.futures.as_completed(futs):
             ok, msg = fut.result()
+            if not ok:
+                failures.append(msg)
             done += 1
             if status_callback:
                 status_callback(("✅ " if ok else "⚠️ ") + f"整合包文件 {done}/{total}:{msg}")
             if progress_callback:
                 progress_callback(done, total)
+    if failures:
+        raise RuntimeError(f"{len(failures)} 个整合包文件下载失败：" + "；".join(failures[:3]))
 
 
 def _download_ftb_mods(manifest: dict, inst_dir: str,
@@ -400,7 +421,7 @@ def import_modpack(path: str, game_dir: str,
     - 扁平 .zip(实例文件夹):需 mc_version(否则报错);可选 loader/loader_version;
       直接把 zip 内容解压成新实例。
     - instance_id:指定实例 ID(默认按包名生成);已存在且未指定 → 抛错,让调用方改用自定义名。
-    - 若包声明了加载器(CurseForge/Modrinth/用户指定)但安装失败 → 抛错回滚,不静默生成"原版半成品"。
+    - 安装失败或取消时保留未完成标记与文件；同一压缩包可重试，半成品不显示在可启动列表。
     """
     if not os.path.isfile(path):
         raise ValueError("文件不存在")
@@ -462,11 +483,27 @@ def import_modpack(path: str, game_dir: str,
     if not mc:
         raise ValueError("整合包缺少 minecraft 版本")
     instance_id = instance_id or _safe_name(name)
-    inst_dir = os.path.join(game_dir, "versions", instance_id)
-    if os.path.exists(inst_dir):
+    safe_component(instance_id)
+    safe_component(mc)
+    if loader_version:
+        safe_component(loader_version)
+    for dep_version in deps.values():
+        safe_component(dep_version)
+    inst_dir = safe_child(os.path.join(game_dir, "versions"), instance_id)
+    from downloader import sha1_of_file
+    signature = sha1_of_file(path)
+    state_path = safe_child(os.path.join(game_dir, 'versions', '_imports'), instance_id + '.json')
+    previous = None
+    try:
+        with open(state_path, encoding='utf-8') as file:
+            previous = json.load(file)
+    except (OSError, ValueError):
+        pass
+    if os.path.exists(inst_dir) and previous != {'archive': signature}:
         raise ValueError(f"已存在同名实例:{instance_id}(可在导入时自定义实例名)")
     # 一开始就创建实例目录:让用户立刻看到(下载/解压都在里面进行;导入失败会回滚删除,不留半成品)
     os.makedirs(inst_dir, exist_ok=True)
+    atomic_json(state_path, {'archive': signature})
     if status_callback:
         status_callback(f"开始导入整合包:{name}(mc {mc})...")
 
@@ -535,6 +572,8 @@ def import_modpack(path: str, game_dir: str,
 
         if cf:
             listed = len((manifest.get("files") or []))
+            if listed:
+                raise RuntimeError(f"这个 CurseForge 整合包还有 {listed} 个 Mod 没装上；当前导入器尚未接通 CF 清单下载，不能当作安装成功。")
             if status_callback:
                 if listed:
                     status_callback(f"CurseForge 清单里还有 {listed} 个文件需 CurseForge API,已跳过;"
@@ -552,11 +591,9 @@ def import_modpack(path: str, game_dir: str,
         if base_instance and base_instance != mc:
             _tuck_framework_version(base_instance, game_dir)
 
+        atomic_json(safe_child(inst_dir, 'amcl_instance.json'), {'minecraft_version': mc})
+        os.unlink(state_path)
         return instance_id
-    except Exception as e:
-        # 导入失败:回滚删掉本次新建的实例目录(不留原版半成品)
-        try:
-            shutil.rmtree(inst_dir, ignore_errors=True)
-        except Exception:
-            pass
+    except Exception:
+        # 保留未完成目录与校验过的文件，同一压缩包重试时继续补齐。
         raise

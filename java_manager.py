@@ -101,34 +101,33 @@ def find_java(runtime_dir: str, min_major: int,
     ``min_major`` 不能单独代表兼容性：Forge 1.16.x 需要 Java 8，不能因为
     Java 17/21“更高”就被选中。``max_major`` 用于这类有明确上限的旧版本。
     """
-    candidates = []
+    candidates = _java_candidates(runtime_dir)
 
-    # 1) 启动器自带的运行时(我们下载解压的)
+    if managed_only:
+        managed_root = os.path.normcase(os.path.abspath(runtime_dir))
+        candidates = [path for path in candidates
+                      if os.path.normcase(os.path.abspath(path)).startswith(managed_root + os.sep)]
+
+    return _pick_compatible_java(candidates, min_major, max_major)
+
+
+def _java_candidates(runtime_dir: str, extra_paths=None) -> list[str]:
+    candidates = [str(path) for path in (extra_paths or []) if path]
     if os.path.isdir(runtime_dir):
         for root, _dirs, files in os.walk(runtime_dir):
             if "java.exe" in files:
                 candidates.append(os.path.join(root, "java.exe"))
-
-    if managed_only:
-        return _pick_compatible_java(candidates, min_major, max_major)
-
-    # 2) JAVA_HOME 环境变量
-    jh = os.environ.get("JAVA_HOME")
-    if jh:
-        candidates.append(os.path.join(jh, "bin", "java.exe"))
-
-    # 3) PATH 里的 java
-    for p in os.environ.get("PATH", "").split(os.pathsep):
-        exe = os.path.join(p, "java.exe")
-        if os.path.isfile(exe):
-            candidates.append(exe)
-
-    # 4) Windows 常见安装位置。许多 Temurin 安装不会把 java 加入 PATH，
-    #    只靠 JAVA_HOME/PATH 会漏掉用户已经安装好的 Java 8。
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        candidates.append(os.path.join(java_home, "bin", "java.exe"))
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        executable = os.path.join(directory, "java.exe")
+        if os.path.isfile(executable):
+            candidates.append(executable)
     program_files = [os.environ.get("ProgramFiles", ""),
                      os.environ.get("ProgramW6432", ""),
                      os.environ.get("ProgramFiles(x86)", "")]
-    for root in dict.fromkeys(p for p in program_files if p):
+    for root in dict.fromkeys(path for path in program_files if path):
         for vendor in ("Eclipse Adoptium", "Java", "Microsoft"):
             base = os.path.join(root, vendor)
             try:
@@ -136,8 +135,30 @@ def find_java(runtime_dir: str, min_major: int,
                     candidates.append(os.path.join(base, name, "bin", "java.exe"))
             except OSError:
                 pass
+    return list(dict.fromkeys(os.path.abspath(path) for path in candidates if path))
 
-    return _pick_compatible_java(candidates, min_major, max_major)
+
+def list_java_installations(runtime_dir: str, extra_paths=None) -> list[dict]:
+    """列出可用 Java，供设置页管理；耗时检测应放在后台线程。"""
+    managed_root = os.path.normcase(os.path.abspath(runtime_dir))
+    extras = {os.path.normcase(os.path.abspath(path)) for path in (extra_paths or []) if path}
+    result = []
+    for executable in _java_candidates(runtime_dir, extra_paths):
+        if not os.path.isfile(executable):
+            continue
+        major = java_major(executable)
+        if major <= 0:
+            continue
+        normalized = os.path.normcase(os.path.abspath(executable))
+        if normalized.startswith(managed_root + os.sep):
+            source = "启动器管理"
+        elif normalized in extras:
+            source = "自定义"
+        else:
+            source = "系统"
+        result.append({"major": major, "path": executable, "source": source})
+    result.sort(key=lambda item: (item["major"], item["source"], item["path"]))
+    return result
 
 
 def _pick_compatible_java(candidates: list[str], min_major: int,

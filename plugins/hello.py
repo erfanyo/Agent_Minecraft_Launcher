@@ -9,20 +9,19 @@
 PLUGIN_ID = "hello"
 PLUGIN_NAME = "示例"
 PLUGIN_DESCRIPTION = "演示注册一个 AI 工具 + 一个设置项 + 一个页面 + 一个技能(完整的插件示例)。"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
+PLUGIN_API_VERSION = 1
+PLUGIN_DEFAULT_ENABLED = False
 
 from ui_style import muted_color
-
-
-# --- 全局:记录自定义设置值(插件内维护) ---
-_HELLO_TAG = "hello"
 
 
 def register(api):
     # 1) AI 工具
     def hello_action(args: dict):
         name = (args or {}).get("name", "玩家")
-        return f"你好,{name}!这是「{api.plugin_id}」插件提供的 AI 工具。"
+        greeting = str(api.get_config("greeting", "你好") or "你好").strip()
+        return f"{greeting},{name}!这是「{api.plugin_id}」插件提供的 AI 工具。"
 
     api.register_tool(
         name="hello",
@@ -33,17 +32,7 @@ def register(api):
         handler=hello_action,
     )
 
-    # 2) GUI 页面(章节)——挂到主 tab 里,这里演示为「示例页面」
-    def build_page():
-        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.addWidget(QLabel("示例页面:插件注册的一个 GUI 页面。"))
-        return w
-
-    api.register_gui_page(label="示例页面", build_fn=build_page)
-
-    # 2b) 主标签页:与 下载新资源/联机/设置 平级(演示插件能注册全新的主 tab)
+    # 2) 主标签页:与 下载新资源/联机/设置 平级(演示插件能注册全新的主 tab)
     def build_main_tab():
         from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
         w = QWidget()
@@ -53,10 +42,11 @@ def register(api):
 
     api.register_main_tab(label="示例标签", build_fn=build_main_tab)
 
-    # 2b) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
+    # 3) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
     #     插件相关说明(能注册什么/能放什么)放这里讲,页面本身保持干净。
     def build_settings_page():
-        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                                       QVBoxLayout, QWidget)
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addWidget(QLabel("示例插件设置"))
@@ -69,15 +59,32 @@ def register(api):
         desc.setWordWrap(True)
         desc.setStyleSheet(f"color: {muted_color()}; font-size:11px;")
         lay.addWidget(desc)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("打招呼文案:"))
+        greeting = QLineEdit(str(api.get_config("greeting", "你好") or "你好"))
+        save = QPushButton("保存")
+        row.addWidget(greeting, 1)
+        row.addWidget(save)
+        lay.addLayout(row)
+        hint = QLabel("")
+        hint.setStyleSheet(f"color: {muted_color()}; font-size:11px;")
+        lay.addWidget(hint)
+
+        def save_greeting():
+            value = greeting.text().strip() or "你好"
+            api.set_config("greeting", value)
+            greeting.setText(value)
+            hint.setText("已保存；下次 AI 调用“hello”会使用这句文案。")
+
+        save.clicked.connect(save_greeting)
+        lay.addStretch()
         return w
 
     api.register_settings_page(build_settings_page)
 
-    # 3) 设置项(占位登记)
-    api.register_setting(
-        key="greeting", description="打招呼文案", default="你好")
+    # 4) 设置值通过 api.get_config / api.set_config 保存，不依赖核心内部设置结构。
 
-    # 4) 技能(Skill 子类,与内置技能同款接口:构造接收 manager,可挂生命周期钩子 + ai_hint)
+    # 5) 技能(Skill 子类,与内置技能同款接口:构造接收 manager,可挂生命周期钩子 + ai_hint)
     from skill_manager import Skill
 
     class HelloSkill(Skill):

@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse
 
 import requests
+from task_context import checkpoint, submit, TaskCancelled
 
 CHUNK_SIZE = 1024 * 256  # 每次读写 256KB
 PARALLEL_WORKERS = 4     # 并行下载线程数(网络下载瓶颈在延迟,4 个足够且不触发限流)
@@ -28,7 +29,7 @@ def sha1_of_file(path: str) -> str:
 
 
 def download_file(url: str, dest: str, sha1: str | None = None,
-                  progress_callback=None, timeout=30) -> None:
+                  progress_callback=None, timeout=30, headers: dict | None = None) -> None:
     """把 url 下载到 dest。
 
     参数:
@@ -39,18 +40,22 @@ def download_file(url: str, dest: str, sha1: str | None = None,
       timeout —— 超时(秒);可传 (连接超时, 读超时) 元组,用于"官方源缓慢就换源"
     """
     os.makedirs(os.path.dirname(dest), exist_ok=True)
+    checkpoint()
+    if sha1 and os.path.isfile(dest) and sha1_of_file(dest) == sha1:
+        return
     try:
-        resp = requests.get(url, stream=True, timeout=timeout)
+        resp = requests.get(url, stream=True, timeout=timeout, headers=headers)
         resp.raise_for_status()
         total = int(resp.headers.get("content-length", 0))
         done = 0
         with open(dest, "wb") as f:
             for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                checkpoint()
                 f.write(chunk)
                 done += len(chunk)
                 if progress_callback:
                     progress_callback(done, total)
-    except Exception:
+    except (Exception, TaskCancelled):
         # 下载中断/失败:删掉半截文件,避免下次被"文件已存在"骗过
         if os.path.exists(dest):
             try:
@@ -58,6 +63,9 @@ def download_file(url: str, dest: str, sha1: str | None = None,
             except OSError:
                 pass
         raise
+    finally:
+        if 'resp' in locals():
+            resp.close()
 
     if sha1 and sha1_of_file(dest) != sha1:
         os.remove(dest)
@@ -355,7 +363,7 @@ def download_many(jobs: list, workers: int = PARALLEL_WORKERS,
                 failures.append((name, err))
         return ok, failures
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(run, i, n, s, f): n
+        futs = {submit(ex, run, i, n, s, f): n
                 for i, (n, s, f) in enumerate(jobs)}
         for fut in futs:
             try:

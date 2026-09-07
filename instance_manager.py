@@ -105,6 +105,11 @@ class InstanceManagerDialog(QWidget):
 
     def set_instance(self, instance: dict, game_dir: str):
         """(重新)填充某实例的详情:清掉旧 shell,重建左菜单 + 右面板。"""
+        # 从实例详情里的菜单打开某个功能时，主窗口也会再次把同一实例传进来。
+        # 不要因此销毁 CenterShell，否则它会按默认值回到「概览」。
+        if (self.shell is not None and self.inst_id == instance.get("id")
+                and self.game_dir == game_dir):
+            return
         # 清旧内容
         if self.shell is not None:
             self._layout.removeWidget(self.shell)
@@ -183,8 +188,8 @@ class InstanceManagerDialog(QWidget):
 
     def _save_launch_options(self, opts: dict):
         try:
-            with open(self._launch_options_path(), "w", encoding="utf-8") as f:
-                json.dump(opts, f, ensure_ascii=False, indent=2)
+            from instance_metadata import atomic_json
+            atomic_json(self._launch_options_path(), opts)
         except Exception as e:
             self.status_msg(f"保存启动选项失败:{e}")
 
@@ -201,6 +206,28 @@ class InstanceManagerDialog(QWidget):
 
         self.inst_java_path = QLineEdit(str(opts.get("java_path") or ""))
         self.inst_java_path.setPlaceholderText("留空 = 自动下载/使用启动器管理的兼容 JRE")
+        self.inst_java_choice = QComboBox()
+        self.inst_java_choice.addItem("自动选择兼容 Java（推荐）", "")
+        configured_paths = {}
+        try:
+            from settings import load_settings
+            configured_paths = dict(load_settings().get("java_paths") or {})
+        except Exception:
+            pass
+        current_java = self.inst_java_path.text().strip()
+        selected_index = 0
+        for major, java_path in sorted(
+                configured_paths.items(), key=lambda pair: int(pair[0]) if str(pair[0]).isdigit() else 999):
+            if not java_path:
+                continue
+            self.inst_java_choice.addItem(f"Java {major}（设置中的首选）", java_path)
+            if java_path == current_java:
+                selected_index = self.inst_java_choice.count() - 1
+        if current_java and current_java not in configured_paths.values():
+            self.inst_java_choice.addItem("当前自定义路径", current_java)
+            selected_index = self.inst_java_choice.count() - 1
+        self.inst_java_choice.setCurrentIndex(selected_index)
+        self.inst_java_choice.currentIndexChanged.connect(self._on_instance_java_choice)
         browse_java = QPushButton("选择…")
         browse_java.clicked.connect(self._choose_instance_java)
         java_row = QHBoxLayout()
@@ -215,6 +242,9 @@ class InstanceManagerDialog(QWidget):
         save_btn = QPushButton("保存启动选项")
         save_btn.clicked.connect(self._save_instance_settings)
         set_style(save_btn, card_btn_style); save_btn.setMinimumHeight(32)
+        manage_java_btn = QPushButton("打开全局 Java 管理…")
+        manage_java_btn.clicked.connect(self._open_global_java_settings)
+        set_style(manage_java_btn, card_btn_style); manage_java_btn.setMinimumHeight(32)
         tip = QLabel("这是【单个实例】的启动选项。Java 留空时由启动器自动准备兼容 JRE；"
                      "指定路径仅在你确认该实例需要特殊 Java 时使用。")
         tip.setWordWrap(True); tip.setStyleSheet(hint_style())
@@ -222,11 +252,13 @@ class InstanceManagerDialog(QWidget):
         form = QFormLayout()
         form.addRow("本实例内存(GB):", self.inst_memory_spin)
         form.addRow("", mem_hint)
+        form.addRow("Java 方案:", self.inst_java_choice)
         form.addRow("本实例 Java:", java_row)
         form.addRow("", self.inst_java_hint)
         layout = QVBoxLayout(tab)
         layout.addLayout(form)
-        layout.addWidget(save_btn)
+        actions = QHBoxLayout(); actions.addWidget(save_btn); actions.addWidget(manage_java_btn); actions.addStretch()
+        layout.addLayout(actions)
         layout.addWidget(tip)
         layout.addStretch()
         return tab
@@ -258,6 +290,26 @@ class InstanceManagerDialog(QWidget):
                                                "Java (java.exe javaw.exe);;所有文件 (*)")
         if path:
             self.inst_java_path.setText(path)
+            index = self.inst_java_choice.findData(path)
+            if index < 0:
+                self.inst_java_choice.addItem("当前自定义路径", path)
+                index = self.inst_java_choice.count() - 1
+            self.inst_java_choice.setCurrentIndex(index)
+
+    def _on_instance_java_choice(self, _index: int):
+        self.inst_java_path.setText(str(self.inst_java_choice.currentData() or ""))
+
+    def _open_global_java_settings(self):
+        root = self.window()
+        settings_center = getattr(root, "settings_center", None)
+        main_tabs = getattr(root, "main_tabs", None)
+        if settings_center is None or main_tabs is None:
+            self.status_msg("请到主窗口「设置 → Java」管理运行时")
+            return
+        index = main_tabs.indexOf(settings_center)
+        if index >= 0:
+            main_tabs.setCurrentIndex(index)
+        settings_center.shell.switch_by_label("Java")
 
     def _update_instance_java_hint(self):
         path = self.inst_java_path.text().strip()
@@ -495,7 +547,18 @@ class InstanceManagerDialog(QWidget):
                                         "或元数据不完整)。可点节点看每个 mod 信息。")
                 return
             from mod_graph import ModDependencyGraphDialog
-            ModDependencyGraphDialog(self.inst_id, graph, self).exec()
+            # 图网络是大型整合包的独立分析工作台，不阻塞实例详情；保留引用防止
+            # 非模态窗口被 Python 回收，重复打开则让已有窗口置顶。
+            old = getattr(self, "_dep_graph_dialog", None)
+            if old is not None and old.isVisible():
+                old.raise_()
+                old.activateWindow()
+                return
+            graph_window = ModDependencyGraphDialog(self.inst_id, graph, self.window())
+            graph_window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            graph_window.destroyed.connect(lambda: setattr(self, "_dep_graph_dialog", None))
+            self._dep_graph_dialog = graph_window
+            graph_window.show()
 
         def on_err(msg):
             dlg.close()

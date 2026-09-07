@@ -10,6 +10,7 @@ from paths import BASE_DIR as WORKSPACE
 from paths import CONFIG_DIR as AMCL_DIR
 from paths import GAME_DIR as GAME_DIR_ACTIVE
 from paths import data_dir
+from log_privacy import redact, sensitive_key
 
 PERMISSIONS = [
     ("只读（不能修改任何文件）", "readonly"),
@@ -41,12 +42,13 @@ def permission_instructions(settings: dict) -> str:
 
 
 def _writable_roots(include_workspace: bool = False) -> list[str]:
-    roots = (WORKSPACE, AMCL_DIR, GAME_DIR_ACTIVE) if include_workspace else (AMCL_DIR, GAME_DIR_ACTIVE)
-    return [os.path.abspath(root) for root in roots if root]
+    import paths
+    roots = (WORKSPACE, AMCL_DIR, paths.GAME_DIR) if include_workspace else (AMCL_DIR, paths.GAME_DIR)
+    return [os.path.normcase(os.path.realpath(root)) for root in roots if root]
 
 
 def is_within_workspace(path: str, include_workspace: bool = False) -> bool:
-    abs_path = os.path.abspath(path)
+    abs_path = os.path.normcase(os.path.realpath(path))
     return any(abs_path == root or abs_path.startswith(root + os.sep)
                for root in _writable_roots(include_workspace))
 
@@ -113,22 +115,29 @@ def record(name: str, args: dict, result: str, approved: bool = True, undo: dict
             "args": dict(args or {}), "result": str(result or ""), "approved": bool(approved),
             "undo": dict(undo or {})}
     rows.append(item)
+    from settings import load_settings
+    rows = redact(rows, load_settings())
+    for row in rows:
+        if sensitive_key((row.get("undo") or {}).get("key", "")):
+            row["undo"] = {}
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(rows[-200:], f, ensure_ascii=False, indent=2)
     except Exception:
         pass
-    return item
+    return rows[-1]
 
 
 def recent_text(limit: int = 30) -> str:
     rows = _load_rows(os.path.join(data_dir(), "ai_actions.json"))[-limit:]
+    from settings import load_settings
+    rows = redact(rows, load_settings())
     if not rows:
         return "还没有 AI 操作记录。"
     return "\n\n".join(
         f"{r.get('time', '')}\n{r.get('action', '')} · {'已确认' if r.get('approved') else '已取消'}\n"
         f"参数：{json.dumps(r.get('args', {}), ensure_ascii=False)}\n结果：{r.get('result', '')}\n"
-        f"回退：{r.get('undo') or '不可自动回退'}" for r in reversed(rows))
+        f"回退：{r.get('undo') or '不可自动回退'}" for r in reversed(redact(rows)))
 
 
 def undo_last_setting() -> str:
@@ -136,7 +145,7 @@ def undo_last_setting() -> str:
     rows = _load_rows(path)
     for row in reversed(rows):
         undo = row.get("undo") or {}
-        if undo.get("kind") != "setting" or not undo.get("key"):
+        if undo.get("kind") != "setting" or not undo.get("key") or sensitive_key(undo.get("key")):
             continue
         from settings import load_settings, save_settings
         import paths

@@ -9,8 +9,9 @@
 | Forge | 1.20.1 | ✅ 已构建验证（`forge/build/libs/agentmc-bridge-forge-1.20.1-0.2.0.jar`） |
 | Forge | 1.19.2 | ✅ 已构建验证（`forge-1.19.2/build/libs/agentmc-bridge-forge-1.19.2-0.2.2.jar`） |
 | Forge | 1.18.2 | ✅ 已构建验证（`forge-1.18.2/build/libs/agentmc-bridge-forge-1.18.2-0.2.0.jar`） |
-| Forge | 1.16.5 | 🚧 JDK 8 / ForgeGradle 4 工具链已就绪，旧 API 适配中 |
-| Forge | 1.12.2、1.7.10 | ⏳ 目标版本，独立 JDK 8 旧版兼容实现 |
+| Forge | 1.16.5 | ✅ 已实机验证核心 AI 与按玩家身份的指令通道（0.2.3） |
+| Forge | 1.12.2 | ✅ 已编译核心兼容实现（0.2.0），待实机联调 |
+| Forge | 1.7.10 | ⏳ 目标版本，独立 JDK 8 旧版兼容实现 |
 
 > 版本稳定前只在 GitHub 发布源码与编译产物,**暂不**上传 Modrinth、暂不打进启动器 exe。
 

@@ -12,6 +12,8 @@ from ui_style import muted_color
 PLUGIN_ID = "mcp_server"
 PLUGIN_NAME = "MCP Server"
 PLUGIN_DESCRIPTION = "把启动器工具暴露给 MCP 客户端(Claude Desktop/VS Code 等),让外部 AI 能调用启动器能力。默认关闭,按需拉起到本地端口。"
+PLUGIN_VERSION = "0.2.0"
+PLUGIN_API_VERSION = 1
 PLUGIN_DEFAULT_ENABLED = False   # 默认关闭:启动器 AI 用不到它,按需开
 
 # 全局:插件内维护的服务实例(附到插件模块,避免多实例)
@@ -35,7 +37,8 @@ def _get_server(port: int):
 def status(port: int = 8766) -> dict:
     with _srv_lock:
         running = (_srv is not None and _srv.is_running())
-    return {"running": running, "url": f"http://127.0.0.1:{port}/mcp"}
+        actual_port = _srv.port if _srv is not None else port
+    return {"running": running, "url": f"http://127.0.0.1:{actual_port}/mcp"}
 
 
 def start_server(port: int = 8766) -> bool:
@@ -82,7 +85,8 @@ def register(api):
         # 端口
         prow = QHBoxLayout()
         prow.addWidget(QLabel("端口:"))
-        port_spin = QSpinBox(); port_spin.setRange(1024, 65535); port_spin.setValue(8766)
+        port_spin = QSpinBox(); port_spin.setRange(1024, 65535)
+        port_spin.setValue(int(api.get_config("port", 8766) or 8766))
         prow.addWidget(port_spin)
         lay.addLayout(prow)
 
@@ -112,19 +116,22 @@ def register(api):
 
         def do_start():
             port = port_spin.value()
+            api.set_config("port", port)
             if start_server(port):
                 refresh()
                 status_lbl.setText("✅ 运行中: " + f"http://127.0.0.1:{port}/mcp")
             else:
                 status_lbl.setText("❌ 启动失败(端口被占?)")
-            url_edit.setText(f"http://127.0.0.1:{port}/mcp" if start_server(port) else "")
 
         def do_stop():
             stop_server(); refresh()
 
         start_btn.clicked.connect(do_start)
         stop_btn.clicked.connect(do_stop)
-        port_spin.valueChanged.connect(lambda _v: refresh())
+        def port_changed(_value):
+            api.set_config("port", port_spin.value())
+            refresh()
+        port_spin.valueChanged.connect(port_changed)
 
         # ---- MCP 客户端(启动器 AI 去调用的外部 MCP 服务器)----
         c_title = QLabel("🔌 MCP 客户端(启动器 AI 去调用的外部服务器):")

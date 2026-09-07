@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+from task_context import run_process
 import zipfile
 
 import requests
@@ -308,7 +309,7 @@ def _forge_run_processors(profile: dict, installer_jar: str, game_dir: str,
         # errors="replace":Java 处理器在中文 Windows 下输出 GBK,UTF-8 严格解码会崩
         # CREATE_NO_WINDOW:补丁步骤跑 java 时不弹控制台黑框
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        result = subprocess.run(cmd, cwd=game_dir, capture_output=True, text=True,
+        result = run_process(cmd, cwd=game_dir, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=900,
                                 creationflags=creationflags)
         if result.returncode != 0:

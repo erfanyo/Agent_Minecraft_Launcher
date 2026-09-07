@@ -3,23 +3,26 @@
 设置中心(顶部标签卡版):左菜单(游戏/界面/系统/AI助手/镜像源)+ 右侧面板,复用 CenterShell,
 和「下载新资源」同一套布局/操作逻辑。解决原「设置弹窗(模态)」挡住引导遮罩的问题。
 
-保存:底部「保存设置」按钮 → 收集各面板 → save_settings → 发射 applied。
+保存:颜色/壁纸/动画与 Java 管理自动保存；其余设置由底部按钮统一应用。
 """
 import threading
 import uuid
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
+    QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
     QToolButton, QVBoxLayout, QWidget,
 )
 
 from assistant import AISettingsForm
+from background_tasks import BackgroundTask
 from center_shell import CenterShell
 from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
 from i18n import t
+import paths
 from paths import DEFAULT_GAME_DIR
+from os_platform.openpath import open_path
 from settings import save_settings
 from ui_style import (card_btn_style, muted_color, set_style,
                       COLOR_BLIND_PRESETS, check_readability, panel_style, text_color,
@@ -107,6 +110,8 @@ class ToggleSwitch(QWidget):
 
 class SettingsCenter(QWidget):
     applied = Signal()   # 保存后发出,主窗口据此刷新(set_ui_mode / ai_dock 等)
+    visual_changed = Signal()  # 轻量外观设置已自动保存，只刷新外观，不重扫实例
+    runtime_changed = Signal()  # Java 等运行时设置已保存，只同步内存配置
     _dl_progress = Signal(int, int)
     _dl_finished = Signal(bool, str)
 
@@ -115,11 +120,17 @@ class SettingsCenter(QWidget):
         self.settings = dict(settings)
         self._custom_mirrors = [dict(c) for c in self.settings.get("custom_mirrors", []) or []]
         self._model_downloading = False
+        self._java_task = None
+        self._visual_save_timer = QTimer(self)
+        self._visual_save_timer.setSingleShot(True)
+        self._visual_save_timer.setInterval(220)
+        self._visual_save_timer.timeout.connect(self._save_visual_settings)
         self._dl_progress.connect(self._on_model_dl_progress)
         self._dl_finished.connect(self._on_model_dl_finished)
 
         self.shell = CenterShell(self, menu_width=150)
         self.shell.add_section(t("GAME"), self._build_game)
+        self.shell.add_section("Java", self._build_java)
         self.shell.add_section(t("UI"), self._build_ui)
         self.shell.add_section(t("SYSTEM"), self._build_system)
         self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
@@ -150,7 +161,8 @@ class SettingsCenter(QWidget):
         if initial_tab:
             self.shell.switch_by_label(initial_tab)
 
-        save_btn = QPushButton(t("SAVE_SETTINGS"))
+        save_btn = QPushButton("保存并应用其他设置")
+        save_btn.setToolTip("应用游戏目录、内存、语言、AI、镜像源和插件等设置")
         set_style(save_btn, card_btn_style)
         save_btn.setMinimumHeight(38)
         save_btn.clicked.connect(self.apply)
@@ -160,7 +172,13 @@ class SettingsCenter(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
         lay.addWidget(self.shell, 1)
-        lay.addWidget(save_btn)
+        bottom = QHBoxLayout()
+        self._autosave_hint = QLabel("颜色、壁纸和动画会自动保存")
+        self._autosave_hint.setStyleSheet(f"color:{muted_color()};")
+        bottom.addWidget(self._autosave_hint)
+        bottom.addStretch()
+        bottom.addWidget(save_btn)
+        lay.addLayout(bottom)
 
     # ================= 游戏 =================
     def _build_game(self) -> QWidget:
@@ -309,7 +327,8 @@ class SettingsCenter(QWidget):
         self.wallpaper_source_combo.setCurrentIndex(
             max(0, self.wallpaper_source_combo.findData(
                 self.settings.get("ui_wallpaper_source", "none"))))
-        self.wallpaper_source_combo.currentIndexChanged.connect(self._on_wallpaper_source_changed)
+        self.wallpaper_source_combo.currentIndexChanged.connect(
+            lambda *_: self._on_wallpaper_source_changed(True))
         src_row = QHBoxLayout(); src_row.addWidget(QLabel("壁纸:"))
         src_row.addWidget(self.wallpaper_source_combo, 1)
         l.addLayout(src_row)
@@ -321,6 +340,7 @@ class SettingsCenter(QWidget):
         self.wallpaper_preset_combo.setCurrentIndex(
             max(0, self.wallpaper_preset_combo.findData(
                 self.settings.get("ui_wallpaper_preset", "teal"))))
+        self.wallpaper_preset_combo.currentIndexChanged.connect(self._queue_visual_autosave)
         preset_row = QHBoxLayout(); preset_row.addWidget(QLabel("预设:"))
         preset_row.addWidget(self.wallpaper_preset_combo, 1)
         l.addLayout(preset_row)
@@ -345,8 +365,7 @@ class SettingsCenter(QWidget):
             _mask = 60
         self.wallpaper_mask_slider.setValue(_mask)
         self.wallpaper_mask_label = QLabel(f"遮罩强度: {self.wallpaper_mask_slider.value()}%")
-        self.wallpaper_mask_slider.valueChanged.connect(
-            lambda v: self.wallpaper_mask_label.setText(f"遮罩强度: {v}%"))
+        self.wallpaper_mask_slider.valueChanged.connect(self._on_wallpaper_mask_changed)
         mask_row = QHBoxLayout(); mask_row.addWidget(QLabel("遮罩:"))
         mask_row.addWidget(self.wallpaper_mask_slider, 1)
         mask_row.addWidget(self.wallpaper_mask_label)
@@ -354,7 +373,8 @@ class SettingsCenter(QWidget):
         bg_hint = QLabel("壁纸垫在内容区背景,遮罩保证文字清晰;官方壁纸首次用到时后台下载(离线自动回退预设)。")
         bg_hint.setWordWrap(True); bg_hint.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(bg_hint)
-        self._on_wallpaper_source_changed()
+        self.animations_check.toggled.connect(self._queue_visual_autosave)
+        self._on_wallpaper_source_changed(False)
         l.addStretch()
         return self._wrap_scroll(w)
 
@@ -378,11 +398,40 @@ class SettingsCenter(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "清除缓存", f"清除失败:{type(e).__name__}: {e}")
 
-    def _on_wallpaper_source_changed(self, *_):
+    def _on_wallpaper_source_changed(self, save: bool = True):
         """切换壁纸源 → 只启用对应控件。"""
         src = self.wallpaper_source_combo.currentData()
         self.wallpaper_preset_combo.setEnabled(src == "preset")
         self.wallpaper_user_btn.setEnabled(src == "user")
+        if save:
+            self._queue_visual_autosave()
+
+    def _on_wallpaper_mask_changed(self, value: int):
+        self.wallpaper_mask_label.setText(f"遮罩强度: {value}%")
+        self._queue_visual_autosave()
+
+    def _queue_visual_autosave(self, *_):
+        self._visual_save_timer.start()
+
+    def _save_visual_settings(self):
+        """只保存可即时回退的外观项，不触发实例重扫或 AI 重载。"""
+        self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
+        self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
+        self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
+        self.settings["ui_wallpaper_user_path"] = getattr(self, "_wallpaper_user_path", "")
+        self.settings["ui_animations_enabled"] = self.animations_check.isChecked()
+        save_settings(self.settings)
+        try:
+            from ui_anim import set_animations_enabled
+            set_animations_enabled(self.settings["ui_animations_enabled"])
+        except Exception:
+            pass
+        self._notify_visual_saved()
+
+    def _notify_visual_saved(self):
+        if hasattr(self, "_autosave_hint"):
+            self._autosave_hint.setText("外观已自动保存 ✓")
+        self.visual_changed.emit()
 
     def _pick_wallpaper_image(self):
         """选本地图片 → 复制进 AMCL/cache/wallpapers/(遵循文件放置约定),记录相对路径。"""
@@ -402,6 +451,10 @@ class SettingsCenter(QWidget):
             shutil.copy2(path, os.path.join(wall_dir, name))
             self._wallpaper_user_path = os.path.join("wallpapers", name)
             self.wallpaper_user_label.setText(os.path.basename(path))
+            index = self.wallpaper_source_combo.findData("user")
+            if index >= 0:
+                self.wallpaper_source_combo.setCurrentIndex(index)
+            self._queue_visual_autosave()
         except Exception as e:
             QMessageBox.warning(self, "选择壁纸", f"复制图片失败:{type(e).__name__}: {e}")
 
@@ -469,6 +522,7 @@ class SettingsCenter(QWidget):
         set_custom_colors(cols)
         self.settings["ui_custom_colors"] = cols
         save_settings(self.settings)
+        self._notify_visual_saved()
         self._refresh_color_btn_text()
         self._retheme()
         self._update_readability()
@@ -486,6 +540,7 @@ class SettingsCenter(QWidget):
         set_custom_colors(cols)
         self.settings["ui_custom_colors"] = cols
         save_settings(self.settings)
+        self._notify_visual_saved()
         self._refresh_color_btn_text()
         self._retheme()
         self._update_readability()
@@ -495,6 +550,7 @@ class SettingsCenter(QWidget):
         clear_custom_colors()
         self.settings["ui_custom_colors"] = {}
         save_settings(self.settings)
+        self._notify_visual_saved()
         self._refresh_color_btn_text()
         self._retheme()
         self._update_readability()
@@ -555,8 +611,183 @@ class SettingsCenter(QWidget):
         clear_icon_btn.clicked.connect(lambda: self._clear_cache("icons"))
         clear_desc_btn.clicked.connect(lambda: self._clear_cache("desc"))
         cache_row = QHBoxLayout(); cache_row.addWidget(clear_icon_btn); cache_row.addWidget(clear_desc_btn); cache_row.addStretch()
-        l.addWidget(cache_title); l.addWidget(cache_hint); l.addLayout(cache_row); l.addStretch()
+        l.addWidget(cache_title); l.addWidget(cache_hint); l.addLayout(cache_row)
+
+        cf_title = QLabel("CurseForge 资源（开发者预览）")
+        cf_title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
+        cf_hint = QLabel("仅接受经 CurseForge 批准的 <b>Third-Party API Key</b>，用于开发者自行测试；"
+                         "普通玩家不需要、也不应填写 Key。当前不作为正式功能承诺，"
+                         "待启动器有足够用户基数后再申请面向终端用户的书面授权。"
+                         "密钥只保存在本机，不会用于 AI 或上传到日志。"
+                         " <a href=\"https://support.curseforge.com/support/solutions/articles/9000208346-about-the-curseforge-api-and-how-to-apply-for-a-key\">第三方 Key 申请说明</a>")
+        cf_hint.setOpenExternalLinks(True); cf_hint.setWordWrap(True)
+        cf_hint.setStyleSheet(f"color:{muted_color()};")
+        self.curseforge_key_edit = QLineEdit(self.settings.get("curseforge_api_key", ""))
+        self.curseforge_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.curseforge_key_edit.setPlaceholderText("仅限获批的 Third-Party API Key；不要把密钥发到聊天或提交到 Git")
+        l.addWidget(cf_title); l.addWidget(cf_hint); l.addWidget(self.curseforge_key_edit); l.addStretch()
         return self._wrap_scroll(w)
+
+    def _build_java(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
+        self._add_java_manager(layout)
+        layout.addStretch()
+        return self._wrap_scroll(page)
+
+    def _add_java_manager(self, layout: QVBoxLayout):
+        title = QLabel("Java 运行时")
+        title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
+        hint = QLabel(
+            "启动器会按 Minecraft 版本自动选择 Java。这里可以准备 Java 8/17/21，"
+            "或登记整合包要求的特殊 Java；单个实例仍可在「实例详情 → 启动设置」中覆盖。")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color:{muted_color()};")
+        self.java_list = QListWidget()
+        self.java_list.setMinimumHeight(130)
+        self.java_status = QLabel("尚未扫描")
+        self.java_status.setWordWrap(True); self.java_status.setStyleSheet(f"color:{muted_color()};")
+
+        refresh_btn = QPushButton("重新扫描")
+        add_btn = QPushButton("添加已有 Java…")
+        prefer_btn = QPushButton("设为该大版本首选")
+        forget_btn = QPushButton("取消首选")
+        open_btn = QPushButton("打开运行时目录")
+        install_buttons = []
+        for major in (8, 17, 21):
+            button = QPushButton(f"准备 Java {major}")
+            button.clicked.connect(lambda _checked=False, m=major: self._install_java(m))
+            install_buttons.append(button)
+        self._java_buttons = [refresh_btn, add_btn, prefer_btn, forget_btn, open_btn, *install_buttons]
+        for button in self._java_buttons:
+            button.setMinimumHeight(32); set_style(button, card_btn_style)
+        refresh_btn.clicked.connect(self._refresh_java_list)
+        add_btn.clicked.connect(self._add_existing_java)
+        prefer_btn.clicked.connect(self._prefer_selected_java)
+        forget_btn.clicked.connect(self._forget_selected_java)
+        open_btn.clicked.connect(self._open_java_runtime_dir)
+
+        row = QHBoxLayout()
+        for button in install_buttons:
+            row.addWidget(button)
+        row.addWidget(add_btn); row.addWidget(refresh_btn); row.addStretch()
+        row2 = QHBoxLayout(); row2.addWidget(prefer_btn); row2.addWidget(forget_btn)
+        row2.addWidget(open_btn); row2.addStretch()
+        layout.addWidget(title); layout.addWidget(hint); layout.addWidget(self.java_list)
+        layout.addLayout(row); layout.addLayout(row2); layout.addWidget(self.java_status)
+        self._refresh_java_list()
+
+    def _set_java_busy(self, busy: bool):
+        for button in getattr(self, "_java_buttons", []):
+            button.setEnabled(not busy)
+
+    def _run_java_task(self, work, on_success, initial_status: str):
+        if self._java_task is not None and self._java_task.is_running:
+            self.java_status.setText("已有 Java 任务正在进行…")
+            return
+        self.java_status.setText(initial_status)
+        self._set_java_busy(True)
+        task = BackgroundTask(work, self)
+        self._java_task = task
+        task.status.connect(self.java_status.setText)
+        task.progress.connect(
+            lambda done, total: self.java_status.setText(
+                f"处理中… {int(done * 100 / total) if total else 0}%"))
+        task.succeeded.connect(on_success)
+        task.failed.connect(lambda error: self.java_status.setText(f"Java 操作失败：{error}"))
+        task.finished.connect(lambda: self._set_java_busy(False))
+        task.start()
+
+    def _refresh_java_list(self):
+        preferred = dict(self.settings.get("java_paths") or {})
+        self._run_java_task(
+            lambda _task: __import__("java_manager").list_java_installations(
+                paths.RUNTIME_DIR, preferred.values()),
+            self._show_java_installations,
+            "正在后台扫描 Java，不会阻塞设置页…",
+        )
+
+    def _show_java_installations(self, installations):
+        self.java_list.clear()
+        preferred = dict(self.settings.get("java_paths") or {})
+        for info in installations or []:
+            path = info["path"]
+            selected = preferred.get(str(info["major"])) == path
+            item = QListWidgetItem(
+                f"{'★ ' if selected else ''}Java {info['major']} · {info['source']}\n{path}")
+            item.setData(Qt.ItemDataRole.UserRole, info)
+            self.java_list.addItem(item)
+        self.java_status.setText(
+            f"找到 {self.java_list.count()} 个 Java；★ 表示该大版本的全局首选。"
+            if self.java_list.count() else "没有找到 Java；可让启动器准备 Java 8/17/21。")
+
+    def _add_existing_java(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "添加已有 Java", "", "Java (java.exe javaw.exe);;所有文件 (*)")
+        if not path:
+            return
+        self._run_java_task(
+            lambda _task: (path, __import__("java_manager").java_major(path)),
+            lambda result: self._remember_java(*result),
+            "正在识别 Java 版本…",
+        )
+
+    def _install_java(self, major: int):
+        def work(task):
+            from java_manager import ensure_java
+            return ensure_java(
+                paths.RUNTIME_DIR, major, max_major=major, prefer_managed=True,
+                status_callback=task.report_status,
+                progress_callback=task.report_progress,
+            )
+        self._run_java_task(
+            work,
+            lambda path, m=major: self._remember_java(path, m),
+            f"正在准备 Java {major}…",
+        )
+
+    def _remember_java(self, path: str, major: int):
+        if not path or int(major or 0) <= 0:
+            self.java_status.setText("无法读取这个 Java 的版本，请确认选择的是 java.exe。")
+            return
+        preferred = dict(self.settings.get("java_paths") or {})
+        preferred[str(int(major))] = path
+        self.settings["java_paths"] = preferred
+        save_settings(self.settings)
+        self.runtime_changed.emit()
+        self.java_status.setText(f"已把 Java {major} 设为该大版本首选。")
+        QTimer.singleShot(0, self._refresh_java_list)
+
+    def _selected_java(self):
+        item = self.java_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+
+    def _prefer_selected_java(self):
+        info = self._selected_java()
+        if not info:
+            self.java_status.setText("请先选中一个 Java。")
+            return
+        self._remember_java(info["path"], info["major"])
+
+    def _forget_selected_java(self):
+        info = self._selected_java()
+        if not info:
+            self.java_status.setText("请先选中一个 Java。")
+            return
+        preferred = dict(self.settings.get("java_paths") or {})
+        if preferred.get(str(info["major"])) == info["path"]:
+            preferred.pop(str(info["major"]), None)
+            self.settings["java_paths"] = preferred
+            save_settings(self.settings)
+            self.runtime_changed.emit()
+        self._refresh_java_list()
+
+    def _open_java_runtime_dir(self):
+        import os
+        os.makedirs(paths.RUNTIME_DIR, exist_ok=True)
+        open_path(paths.RUNTIME_DIR)
 
     def _reopen_tutorial(self):
         p = self.window()
@@ -942,6 +1173,7 @@ class SettingsCenter(QWidget):
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors
+        self.settings["curseforge_api_key"] = self.curseforge_key_edit.text().strip()
         # 自定义背景(阶段 2)
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
@@ -965,4 +1197,10 @@ class SettingsCenter(QWidget):
         if mcp_edit is not None:
             self.settings["mcp_clients"] = _parse_mcp_entries(mcp_edit.text())
         save_settings(self.settings)
+        paths.set_game_dir(self.settings["game_dir"])
+        try:
+            import i18n
+            i18n.set_language(self.settings["language"])
+        except Exception:
+            pass
         self.applied.emit()

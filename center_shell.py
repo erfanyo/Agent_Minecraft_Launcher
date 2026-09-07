@@ -17,6 +17,7 @@ class CenterShell(QWidget):
         self.menu = LeftMenu(width=menu_width)
         self.menu.itemClicked.connect(self._on_item_clicked)
         self.stack = QStackedWidget()
+        self._lazy_builders = {}
 
         body = QHBoxLayout(self)
         body.setContentsMargins(0, 0, 0, 0)
@@ -26,10 +27,18 @@ class CenterShell(QWidget):
         # 左菜单与右面板间留一点空隙,视觉更透气
         body.setContentsMargins(8, 0, 8, 0)
 
-    def add_section(self, label: str, build_fn) -> int:
-        """加一个章节:左菜单项 + 右侧面板。build_fn() 返回该面板的 QWidget。"""
+    def add_section(self, label: str, build_fn, *, lazy: bool = False) -> int:
+        """加一个章节。
+
+        ``lazy=True`` 时只在用户第一次打开该章节时构建内容，适合教程、
+        方案列表等不参与统一保存的重页面。
+        """
         idx = self.menu.add_item(label)
-        self.stack.addWidget(build_fn())
+        if lazy:
+            self._lazy_builders[idx] = build_fn
+            self.stack.addWidget(QWidget())
+        else:
+            self.stack.addWidget(build_fn())
         return idx
 
     def switch_to(self, idx: int):
@@ -44,7 +53,22 @@ class CenterShell(QWidget):
         return False
 
     def _on_item_clicked(self, row: int):
+        previous = self.stack.currentIndex()
+        self._ensure_built(row)
         self.stack.setCurrentIndex(row)
+        if previous != row:
+            from ui_anim import reveal
+            reveal(self.stack.currentWidget())
+
+    def _ensure_built(self, row: int):
+        build_fn = self._lazy_builders.pop(row, None)
+        if build_fn is None:
+            return
+        placeholder = self.stack.widget(row)
+        panel = build_fn()
+        self.stack.removeWidget(placeholder)
+        placeholder.deleteLater()
+        self.stack.insertWidget(row, panel)
 
     def current_index(self) -> int:
         return self.menu.current()

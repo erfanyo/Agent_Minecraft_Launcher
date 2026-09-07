@@ -31,6 +31,8 @@ from paths import model_dir  # 统一路径访问层
 MODELS_DIR = model_dir()
 MANIFEST_PATH = os.path.join(MODELS_DIR, "manifest.json")
 CHUNK_SIZE = 1024 * 256
+_VERIFY_CACHE = {}
+_VERIFY_LOCK = threading.Lock()
 
 # 官方源 = huggingface.co,国内镜像 = hf-mirror.com(国内快)。
 # 下载顺序跟随启动器"设置 → 镜像源"的下载策略(见 downloader.MIRROR_STRATEGIES):
@@ -146,7 +148,20 @@ def is_downloaded(resource_id: str) -> bool:
     if not os.path.exists(path):
         return False
     try:
-        return sha256_of_file(path) == RESOURCES[resource_id]["sha256"]
+        stat = os.stat(path)
+        expected = RESOURCES[resource_id]["sha256"]
+        cache_key = (os.path.abspath(path), stat.st_size, stat.st_mtime_ns, expected)
+        with _VERIFY_LOCK:
+            cached = _VERIFY_CACHE.get(cache_key)
+            if cached is not None:
+                return cached
+            valid = sha256_of_file(path) == expected
+            # 文件发生变化时旧键不会再命中；每个资源只保留当前文件状态。
+            stale = [key for key in _VERIFY_CACHE if key[0] == cache_key[0]]
+            for key in stale:
+                _VERIFY_CACHE.pop(key, None)
+            _VERIFY_CACHE[cache_key] = valid
+            return valid
     except Exception:
         return False
 

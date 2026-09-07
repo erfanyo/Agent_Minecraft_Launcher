@@ -15,14 +15,12 @@
 - 「游戏版本 / 加载器 / 版本」三个组合框由项目数据填充,版本真正驱动下载。
 """
 import os
-import queue
-import threading
 import time
 import urllib.parse
 import collections
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QColor, QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
@@ -37,16 +35,42 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplitter,
     QStackedWidget,
+    QStyledItemDelegate,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from i18n import t
+from background_tasks import BackgroundTask
 from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
                       muted_color, panel_style, text_color, set_style,
                       accent_color, warning_color, current_color)
 from version_tree import GameVersionTree
+
+
+class _ResourceSourceDelegate(QStyledItemDelegate):
+    """在资源列表右下角绘制低强调度的平台标识。"""
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        hit = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(hit, dict):
+            return
+        source = hit.get("source", "modrinth")
+        label = "CurseForge" if source == "curseforge" else "Modrinth"
+        # 颜色每次绘制时从主题槽读取：跟随系统深浅色和用户自定义主题。
+        color = QColor(warning_color() if source == "curseforge" else accent_color())
+        color.setAlpha(135)
+        painter.save()
+        font = painter.font()
+        font.setPointSizeF(max(8.0, font.pointSizeF() - 1.5))
+        painter.setFont(font)
+        painter.setPen(color)
+        metrics = painter.fontMetrics()
+        width = metrics.horizontalAdvance(label)
+        rect = option.rect
+        painter.drawText(rect.right() - width - 8, rect.bottom() - 6, label)
+        painter.restore()
 
 # 资源分类(左侧菜单 + Modrinth project_type + 安装目录子文件夹)
 RESOURCE_CATEGORIES = [
@@ -236,12 +260,10 @@ class ResourceBrowser(QWidget):
         self._target_getter = lambda: (None, None)
         self._target_setter = lambda inst, dir_: None
 
-        # 异步队列(网络请求不卡 UI),带缓存
-        self._async_q = queue.Queue()
+        # 后台任务(网络请求不卡 UI)，带缓存与同请求合并
         self._async_cache = {}
-        self._async_timer = QTimer(self)
-        self._async_timer.timeout.connect(self._drain_async)
-        self._async_timer.start(60)
+        self._async_tasks = set()
+        self._async_inflight = {}  # cache_key -> 等待同一结果的回调，避免连续点击重复请求
 
         # 是否已加载过「默认浏览」(打开页即显示列表);已加载则不重复拉取
         self._auto_loaded = False
@@ -250,6 +272,9 @@ class ResourceBrowser(QWidget):
         self._no_more = False       # 是否已没有更多
         self._more_loading = False  # 是否正在加载更多(防重入)
         self._search_params = None  # 当前搜索参数 (query, gv, loader, order, tags)
+        self._search_generation = 0 # 丢弃更早搜索晚到的结果
+        self._selection_generation = 0  # 丢弃更早资源详情/版本晚到的结果
+        self._version_generation = 0    # 同一资源切换筛选时也只接受最后一次版本请求
         # 懒加载图标:只为"当前可见"的行拉图,按顺序串行,用户没看到的先不拉不存。
         self._icon_loaded = {}          # id(row) -> slug(已请求过图标的行,避免重复拉)
         self._icon_queue = collections.deque()   # 待拉图标的 (list_item, slug, url)
@@ -326,6 +351,15 @@ class ResourceBrowser(QWidget):
                          ("按最近更新", "updated")]:
             self.sort_combo.addItem(t(lbl, lbl), val)
 
+        # CurseForge 的官方 API 需要用户自己配置 Key。当前只开放 Mod，
+        # 避免把 CurseForge 整合包 zip 当成可完整安装的 Modrinth .mrpack。
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("Modrinth", "modrinth")
+        if self.project_type == "mod":
+            self.source_combo.addItem("CurseForge", "curseforge")
+        self.source_combo.setToolTip("资源来源；CurseForge 为开发者预览，需获批的 Third-Party API Key")
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+
         # 标签(分类)多级菜单:替代以前"手输标签"。点开是一棵分组菜单,可多选。
         self.tag_btn = QToolButton()
         self.tag_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -376,6 +410,7 @@ class ResourceBrowser(QWidget):
         self.result_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.result_list.setHorizontalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         set_style(self.result_list, list_style)
+        self.result_list.setItemDelegate(_ResourceSourceDelegate(self.result_list))
         self.result_list.currentItemChanged.connect(self._on_selected)
         # 懒加载图标:滚动/改变大小时,只为当前可见的行拉图(并按顺序慢慢存)
         self.result_list.verticalScrollBar().valueChanged.connect(self._on_icon_visibility)
@@ -499,9 +534,10 @@ class ResourceBrowser(QWidget):
             self.modpack_hint.setWordWrap(True)
             layout.addWidget(self.modpack_hint)
             # 目标实例卡放到底部;整合包不需要,进 _build_bottom_bar 里隐藏
-        # 顶部统一操作行:搜索(占1) + 排序 + 标签
+        # 顶部统一操作行:搜索(占1) + 来源 + 排序 + 标签
         top_row = QHBoxLayout()
         top_row.addWidget(self.search_edit, 1)
+        top_row.addWidget(self.source_combo)
         top_row.addWidget(self.sort_combo)
         top_row.addWidget(self.tag_btn)
         layout.addLayout(top_row)
@@ -850,29 +886,31 @@ class ResourceBrowser(QWidget):
         if cache and cache_key in self._async_cache:
             on_done(self._async_cache[cache_key])
             return
+        if cache and cache_key in self._async_inflight:
+            self._async_inflight[cache_key].append(on_done)
+            return
+        if cache:
+            self._async_inflight[cache_key] = [on_done]
 
-        def worker():
-            try:
-                result = fetch()
-            except Exception:
-                result = None
-            self._async_q.put((cache_key, result, on_done, cache))
+        task = BackgroundTask(lambda _task: fetch(), self)
+        self._async_tasks.add(task)
 
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _drain_async(self):
-        """主线程:把后台结果搬回 UI。"""
-        while True:
-            try:
-                cache_key, result, on_done, cache = self._async_q.get_nowait()
-            except queue.Empty:
-                return
+        def apply_result(result):
             if cache:
                 self._async_cache[cache_key] = result
-            try:
-                on_done(result)
-            except Exception:
-                pass
+                callbacks = self._async_inflight.pop(cache_key, [])
+            else:
+                callbacks = [on_done]
+            for callback in callbacks:
+                try:
+                    callback(result)
+                except Exception:
+                    pass
+
+        task.succeeded.connect(apply_result)
+        task.failed.connect(lambda _error: apply_result(None))
+        task.finished.connect(lambda: self._async_tasks.discard(task))
+        task.start()
 
     # ---- 搜索 ----
     def _current_gv(self):
@@ -882,7 +920,27 @@ class ResourceBrowser(QWidget):
             return None
         return v
 
+    def _source(self):
+        return self.source_combo.currentData() or "modrinth"
+
+    def _on_source_changed(self):
+        # 分类标签是 Modrinth 专有字段，切换来源时不要留下看似仍有效的标签筛选。
+        if self._source() == "curseforge":
+            self._selected_tags.clear()
+            self.tag_btn.setEnabled(False)
+            self.tag_btn.setText("CurseForge 无标签筛选")
+            self.loader_combo.setEnabled(False)
+            self.loader_combo.setToolTip("CurseForge 当前按游戏版本筛选；加载器信息以文件说明为准")
+        else:
+            self._build_tag_menu()
+            self.loader_combo.setEnabled(True)
+            self.loader_combo.setToolTip("")
+        if self.search_edit.text().strip() or self._auto_loaded:
+            self.do_search()
+
     def do_search(self):
+        self._search_generation += 1
+        generation = self._search_generation
         query = self.search_edit.text().strip()
         # 允许空关键词:打开资源页即「默认浏览」(空 query → 按 sort_combo 排序,默认 downloads)。
         # 全局版本/加载器筛选(底部 gv_combo/loader_combo)会被尊重(为空则全量)。
@@ -893,18 +951,51 @@ class ResourceBrowser(QWidget):
         self._last_query = query
         self._offset = 0
         self._no_more = False
-        self._search_params = (query, gv, loader, order, tags)
+        source = self._source()
+        self._search_params = (source, query, gv, loader, order, tags)
         self.result_list.clear()
+        if source == "curseforge":
+            try:
+                import curseforge
+                enabled = curseforge.configured()
+            except Exception:
+                enabled = False
+            if not enabled:
+                QListWidgetItem("CurseForge 目前为开发者预览，需要获批的 Third-Party API Key。\n"
+                                "普通玩家请使用 Modrinth；正式接入将在获得书面授权后再开放。", self.result_list)
+                self._no_more = True
+                return
         QListWidgetItem(t("SEARCHING"), self.result_list)
 
         def fetch():
-            import modrinth
-            return modrinth.search_mods_cn(
-                query, gv, loader, limit=30, project_type=self.project_type,
-                order_by=order, tags=tags, offset=0)
+            try:
+                if source == "curseforge":
+                    import curseforge
+                    return curseforge.search_mods(query, gv, order, offset=0, limit=30)
+                import modrinth
+                return modrinth.search_mods_cn(
+                    query, gv, loader, limit=30, project_type=self.project_type,
+                    order_by=order, tags=tags, offset=0)
+            except Exception as e:
+                # _async 的通用保护会把异常归为 None；搜索页保留一份安全的
+                # 错误文本，便于区分网络、Key 权限和平台 API 参数问题。
+                return {"__search_error__": f"{type(e).__name__}: {e}"}
 
-        self._async(("search", query, gv, loader, self.project_type, order, tags),
-                    fetch, self._fill_results, cache=False)
+        def done(result):
+            if generation != self._search_generation:
+                return
+            if isinstance(result, dict) and result.get("__search_error__"):
+                self.result_list.clear()
+                self._auto_loaded = False
+                QListWidgetItem(f"{source.title()} 请求失败：\n{result['__search_error__']}",
+                                self.result_list)
+                self._no_more = True
+                self._more_loading = False
+                return
+            self._fill_results(result)
+
+        self._async(("search", source, query, gv, loader, self.project_type, order, tags),
+                    fetch, done, cache=False)
 
     def maybe_auto_load(self):
         """打开/切到本资源页时,若搜索框为空,自动触发一次「默认浏览」。
@@ -977,19 +1068,26 @@ class ResourceBrowser(QWidget):
     def _load_more(self):
         """加载下一页结果并追加到列表。"""
         self._more_loading = True
-        query, gv, loader, order, tags = self._search_params
+        source, query, gv, loader, order, tags = self._search_params
+        generation = self._search_generation
+        expected_params = self._search_params
         offset = self._offset
 
         def fetch():
+            if source == "curseforge":
+                import curseforge
+                return curseforge.search_mods(query, gv, order, offset=offset, limit=30)
             import modrinth
             return modrinth.search_mods_cn(
                 query, gv, loader, limit=30, project_type=self.project_type,
                 order_by=order, tags=tags, offset=offset)
 
         def on_done(hits):
+            if generation != self._search_generation or self._search_params != expected_params:
+                return
             self._fill_results(hits, append=True)
 
-        self._async(("more", query, gv, loader, self.project_type, order, tags, offset),
+        self._async(("more", source, query, gv, loader, self.project_type, order, tags, offset),
                     fetch, on_done, cache=False)
 
     # ---- 详情面板 ----
@@ -1003,6 +1101,8 @@ class ResourceBrowser(QWidget):
         QDesktopServices.openUrl(QUrl(url))
 
     def _on_selected(self, current, _prev):
+        self._selection_generation += 1
+        generation = self._selection_generation
         if current is None:
             self.mcmod_link.setVisible(False)
             return
@@ -1018,6 +1118,8 @@ class ResourceBrowser(QWidget):
                   self.desc_label, self.gv_combo, self.loader_combo,
                   self.ver_combo, self.dl_btn, self.fav_btn):
             w.setVisible(True)
+        # CurseForge 条款禁止保存 API 数据，因此不把其项目元数据写入收藏文件。
+        self.fav_btn.setVisible(h.get("source") != "curseforge")
         self.empty_label.setVisible(False)
         self.title_label.setText(h["title"])
         # 「在 MC百科查看」链接:用显示名(优先已替换的中文名)按名搜索,中文最准;
@@ -1040,6 +1142,7 @@ class ResourceBrowser(QWidget):
             meta.append(f"作者:{h['author']}")
         if h.get("downloads"):
             meta.append(f"⬇{h['downloads']:,}")
+        meta.append("来源: CurseForge" if h.get("source") == "curseforge" else "来源: Modrinth")
         if h.get("categories"):
             meta.append("·".join(h["categories"][:6]))
         self.meta_label.setText("  ".join(meta))
@@ -1050,7 +1153,7 @@ class ResourceBrowser(QWidget):
         # 异步加载项目详情,刷新【mod 可用版本】下拉(方案一:gv/loader 是全局筛选不清,
         # 只清并重填 ver_combo —— 它才是逐 Mod 的)
         self.ver_combo.clear()
-        self._load_project(h)
+        self._load_project(h, generation)
         # 后台线程翻译 Mod 描述(不卡 UI);若关闭开关则保持原文
         self._start_desc_translation(h)
 
@@ -1121,6 +1224,11 @@ class ResourceBrowser(QWidget):
         desc = (h.get("description") or "").strip()
         requested_slug = h.get("slug", "")
         if not desc:
+            self.desc_note_label.setVisible(False)
+            return
+        if h.get("source") == "curseforge":
+            # CurseForge 条款禁止缓存 API 数据；描述送去翻译会形成外部处理与
+            # 本地翻译缓存，因此该来源只展示 API 返回的原文摘要。
             self.desc_note_label.setVisible(False)
             return
         try:
@@ -1267,36 +1375,38 @@ class ResourceBrowser(QWidget):
 
     def _pump_icon_queue(self):
         """串行消费图标队列:一次只拉一张,拉完再拉下一张(避免并发burst)。
-        结果经由 _async_q 排回主线程(与网络请求同一条可靠通道),避免跨线程 QTimer 丢失。"""
+        网络在线程中执行，图片对象只在 GUI 线程创建。"""
         if self._icon_loading:
             return
         if not self._icon_queue:
             return
         item, slug, url = self._icon_queue.popleft()
+        h = item.data(Qt.ItemDataRole.UserRole) or {}
         self._icon_loading = True
 
         def worker():
-            try:
-                import image_cache
-                from PySide6.QtGui import QPixmap, QIcon
-                data = image_cache.load_icon(slug, url, size=48)
-                icon = None
-                if data:
-                    pix = QPixmap()
-                    if pix.loadFromData(data):
-                        icon = QIcon(pix.scaled(
-                            48, 48, Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation))
-                # 排回主线程(_async_timer._drain_async 会调 self._end_icon)
-                self._async_q.put(("__icon__", (item, icon), self._end_icon, False))
-            except Exception:
-                self._async_q.put(("__icon__", (item, None), self._end_icon, False))
+            if h.get("source") == "curseforge":
+                # 仅为当前可见卡片临时加载，不写入任何图标缓存。
+                import requests
+                response = requests.get(url, timeout=12) if url else None
+                return response.content if response is not None and response.status_code == 200 else None
+            import image_cache
+            return image_cache.load_icon(slug, url, size=48)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._async(("__icon__", id(item), slug), worker,
+                    lambda data: self._end_icon((item, data)), cache=False)
 
     def _end_icon(self, payload):
         """主线程:给条目设图标(成功才设),然后继续拉下一张。"""
-        item, icon = payload if isinstance(payload, tuple) else (None, None)
+        item, data = payload if isinstance(payload, tuple) else (None, None)
+        icon = None
+        if data:
+            from PySide6.QtGui import QIcon, QPixmap
+            pix = QPixmap()
+            if pix.loadFromData(data):
+                icon = QIcon(pix.scaled(
+                    48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation))
         if icon is not None and item is not None:
             try:
                 if item.listWidget() is not None:   # 条目可能已被清空/重建
@@ -1306,12 +1416,23 @@ class ResourceBrowser(QWidget):
         self._icon_loading = False
         self._pump_icon_queue()
 
-    def _load_project(self, h):
+    def _load_project(self, h, generation: int):
         """异步拉项目详情,填充 游戏版本/加载器 两个下拉。"""
+        requested_slug = h.get("slug", "")
         def fetch():
+            if h.get("source") == "curseforge":
+                import curseforge
+                return curseforge.get_mod(h["curseforge_id"])
             import modrinth
             return modrinth.get_project(h["slug"])
-        self._async(("proj", h["slug"]), fetch, self._populate_project)
+        def done(proj):
+            current = getattr(self, "_current", None) or {}
+            if generation != self._selection_generation or current.get("slug") != requested_slug:
+                return
+            self._populate_project(proj)
+
+        self._async(("proj", h.get("source", "modrinth"), h["slug"]), fetch, done,
+                    cache=h.get("source") != "curseforge")
 
     def _populate_project(self, proj):
         if not proj:
@@ -1323,7 +1444,11 @@ class ResourceBrowser(QWidget):
     def _refresh_versions(self):
         if not getattr(self, "_current", None):
             return
-        slug = self._current["slug"]
+        self._version_generation += 1
+        version_generation = self._version_generation
+        current = dict(self._current)
+        slug = current["slug"]
+        generation = self._selection_generation
         # 方案一:gv 是全局筛选(可为"无(全部版本)"→ None);loader 类似。
         # gv/loader 为空 → 该 Mod 的"可用版本"就全列(不按版本过滤)。
         gv = self._current_gv()                     # 「无(全部版本)」→ None
@@ -1333,10 +1458,23 @@ class ResourceBrowser(QWidget):
         self.ver_combo.setEnabled(False)
 
         def fetch():
+            if current.get("source") == "curseforge":
+                import curseforge
+                return curseforge.list_mod_files(current["curseforge_id"], gv or None)
             import modrinth
             # gv 为空 → 不按版本过滤,列该 mod 全部可用版本
             return modrinth.list_mod_versions(slug, gv or None, loader)
-        self._async(("ver", slug, gv, loader), fetch, self._fill_versions)
+
+        def done(versions):
+            selected = getattr(self, "_current", None) or {}
+            if (generation != self._selection_generation
+                    or version_generation != self._version_generation
+                    or selected.get("slug") != slug):
+                return
+            self._fill_versions(versions)
+
+        self._async(("ver", current.get("source", "modrinth"), slug, gv, loader), fetch,
+                    done, cache=current.get("source") != "curseforge")
 
     def _fill_versions(self, versions):
         self.ver_combo.clear()
@@ -1345,7 +1483,10 @@ class ResourceBrowser(QWidget):
             self.ver_combo.setEnabled(False)
             return
         for v in versions:
-            self.ver_combo.addItem(v, v)
+            if isinstance(v, dict):
+                self.ver_combo.addItem(v.get("label") or v.get("filename") or "?", v)
+            else:
+                self.ver_combo.addItem(v, v)
         self.ver_combo.setEnabled(True)
         self.ver_combo.setCurrentIndex(0)
         self._refresh_compatibility_report()
@@ -1359,6 +1500,13 @@ class ResourceBrowser(QWidget):
         """异步生成详情卡上的 Mod 兼容报告，不阻塞浏览或下载。"""
         if self.project_type != "mod" or not getattr(self, "_current", None):
             self.compat_box.setVisible(False)
+            return
+        if self._current.get("source") == "curseforge":
+            self.compat_box.setVisible(True)
+            self.compat_toggle.setVisible(False)
+            self.compat_detail.setVisible(False)
+            self.compat_summary.setText("CurseForge 文件会按所选 Minecraft 版本筛选。"
+                                        "加载器与依赖信息以文件页为准；该来源暂不提供依赖图和自动前置下载。")
             return
         version = self.ver_combo.currentData()
         inst = self.selected_inst
@@ -1560,7 +1708,7 @@ class _FavGroupCard(QWidget):
 class ResourceCenter(QWidget):
     """下载新资源:左侧可折叠菜单 + 右侧分类面板(首页/实例/Mod/光影/数据包/资源包)。"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, auto_load_versions: bool = True):
         super().__init__(parent)
         self._instance_dir = lambda iid: iid
         self._on_download_cb = None
@@ -1594,7 +1742,7 @@ class ResourceCenter(QWidget):
 
         # 实例面板:下载新实例向导(复用 DownloadTab)
         from download_tab import DownloadTab
-        self.download_tab = DownloadTab()
+        self.download_tab = DownloadTab(auto_load_versions=auto_load_versions)
         self.download_tab.bind_start(self._on_start_instance)
         self.stack.addWidget(self.download_tab)             # 1 实例
 

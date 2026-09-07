@@ -14,6 +14,7 @@ import json
 import os
 
 import paths
+from instance_metadata import read_metadata
 
 
 def _detect_loader(name: str, data: dict) -> str | None:
@@ -57,6 +58,8 @@ def scan_instances(game_dir: str = None) -> list:
     for name in sorted(os.listdir(versions_dir)):
         if name.startswith("_"):
             continue   # 版本仓库(_versions/ 等),不是实例
+        if os.path.isfile(os.path.join(versions_dir, '_imports', name + '.json')):
+            continue  # 尚未完成的导入不能作为可启动实例。
         vjson = os.path.join(versions_dir, name, name + ".json")
         if not os.path.exists(vjson):
             continue
@@ -65,8 +68,9 @@ def scan_instances(game_dir: str = None) -> list:
                 data = json.load(f)
         except Exception:
             continue
-        base = data.get("inheritsFrom")
-        has_base = bool(base)
+        metadata = read_metadata(os.path.join(versions_dir, name))
+        base = metadata.get('minecraft_version') or data.get("inheritsFrom") or data.get('clientVersion')
+        has_base = bool(data.get('inheritsFrom'))
         loader = _detect_loader(name, data)
         if not base:
             base = name
@@ -83,6 +87,7 @@ def scan_instances(game_dir: str = None) -> list:
                             loader = "modded"
                     except OSError:
                         pass
-        label = f"{name}  ({loader or '原版'} ← {base})"
-        instances.append({"id": name, "base": base, "loader": loader, "label": label})
+        display = str(metadata.get('display_name') or name)
+        label = f"{display}  ({loader or '原版'} ← {base})"
+        instances.append({"id": name, "name": display, "base": base, "loader": loader, "label": label})
     return instances

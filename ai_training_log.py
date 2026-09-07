@@ -7,20 +7,10 @@ import os
 from datetime import datetime
 
 from paths import data_dir
-
-_SENSITIVE = ("api_key", "apikey", "token", "password", "secret", "authorization")
-
+from log_privacy import redact
 
 def _redact(value, key: str = ""):
-    if any(part in key.lower() for part in _SENSITIVE):
-        return "[REDACTED]"
-    if isinstance(value, dict):
-        return {str(k): _redact(v, str(k)) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact(v) for v in value]
-    if isinstance(value, str):
-        return value[:12000]
-    return value
+    return redact(value, key=key)
 
 
 def _user_text(messages: list) -> str:
@@ -49,10 +39,11 @@ def append(settings: dict, messages: list, tool_calls: list[dict], reply: str) -
         "time": datetime.now().astimezone().isoformat(timespec="seconds"),
         "provider": provider,
         "model": settings.get("ai_model", ""),
-        "user": _user_text(messages)[:12000],
-        "tool_calls": _redact(tool_calls),
-        "reply": str(reply or "")[:12000],
+        "user": _user_text(messages),
+        "tool_calls": tool_calls,
+        "reply": str(reply or ""),
     }
+    row = redact(row, settings)
     path = os.path.join(data_dir("ai_training"), "cloud_tool_calls.jsonl")
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)

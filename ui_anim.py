@@ -11,6 +11,13 @@ from PySide6.QtCore import QEasingCurve, QPropertyAnimation
 from PySide6.QtWidgets import QGraphicsOpacityEffect
 
 from ui_tokens import DURATION, EASING
+import weakref
+
+_ACTIVE = weakref.WeakSet()
+
+
+def track_animation(animation):
+    _ACTIVE.add(animation)
 
 _ANIMATIONS_ENABLED = True
 
@@ -26,6 +33,12 @@ def set_animations_enabled(enabled: bool) -> None:
     """全局动画开关(设置 ui_animations_enabled;关闭后动画立即跳到终态)。"""
     global _ANIMATIONS_ENABLED
     _ANIMATIONS_ENABLED = bool(enabled)
+    if not enabled:
+        for animation in list(_ACTIVE):
+            try:
+                animation.setCurrentTime(animation.duration())
+            except RuntimeError:
+                pass
 
 
 def is_animations_enabled() -> bool:
@@ -38,6 +51,14 @@ def _easing():
 
 def _animate_opacity(widget, start: float, end: float, duration_ms: int, on_done=None):
     """对 widget 做透明度动画(start→end)。动画关闭时直接跳到终态。"""
+    old = getattr(widget, '_ui_anim', None)
+    if old is not None:
+        try:
+            old.stop()
+            old.deleteLater()
+        except RuntimeError:
+            pass
+        widget._ui_anim = None
     if not _ANIMATIONS_ENABLED:
         try:
             widget.setGraphicsEffect(None)
@@ -68,6 +89,7 @@ def _animate_opacity(widget, start: float, end: float, duration_ms: int, on_done
 
         anim.finished.connect(_finish)
         widget._ui_anim = anim   # 存引用防 GC
+        track_animation(anim)
         anim.start()
     except Exception:
         try:
@@ -90,3 +112,9 @@ def fade_out(widget, duration_ms: int | None = None, on_done=None) -> None:
     _animate_opacity(widget, 1.0, 0.0,
                      duration_ms if duration_ms is not None else DURATION.get("fade", 200),
                      on_done)
+
+
+def reveal(widget):
+    """轻微显现：保留文字可读性，不移动布局，不延迟用户输入。"""
+    if widget is not None and widget.isVisible():
+        _animate_opacity(widget, 0.88, 1.0, 140)

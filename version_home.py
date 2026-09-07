@@ -487,7 +487,7 @@ class InstanceSettingsCard(QWidget):
         if inst is None:
             self.inst_label.setText(t("VERSION_HOME_NO_INSTANCE_SELECTED"))
         else:
-            self.inst_label.setText(inst.get("id", "?"))
+            self.inst_label.setText(inst.get("name") or inst.get("id", "?"))
 
 
 class VersionHome(QWidget):
@@ -836,7 +836,7 @@ class VersionHome(QWidget):
         inst = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
         self.inst_card.set_instance(inst)
         self.launch_btn.setToolTip(
-            inst.get("id", "") if inst is not None else t("VERSION_HOME_SELECT_INSTANCE_FIRST"))
+            (inst.get("name") or inst.get("id", "")) if inst is not None else t("VERSION_HOME_SELECT_INSTANCE_FIRST"))
         self.instance_selected.emit(inst)
 
     def _launch_current_via_key(self, item):

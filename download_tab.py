@@ -11,10 +11,7 @@
 
 所有选择通过 state() 汇总,由主窗口拿去下载。
 """
-import queue
-import threading
-
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -32,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from fetch_versions import fetch_version_manifest
+from background_tasks import BackgroundTask
 from instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from i18n import t
 from loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions
@@ -43,8 +41,9 @@ from version_tree import fill_version_tree
 class DownloadTab(QWidget):
     """下载新实例选项卡:左侧菜单 + 右侧分类面板"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, auto_load_versions: bool = True):
         super().__init__(parent)
+        self._auto_load_versions = auto_load_versions
         self.mc = ""           # 选中的游戏版本
         self.loader_key = None
         self.modrinth_loader = None
@@ -56,11 +55,9 @@ class DownloadTab(QWidget):
         self.opt_combos = {}        # mod slug -> QComboBox
 
         # 异步加载:版本/Mod 列表来自网络,全部放后台线程,UI 不卡
-        self._async_q = queue.Queue()
         self._async_cache = {}      # cache_key -> 已加载的版本列表
-        self._async_timer = QTimer(self)
-        self._async_timer.timeout.connect(self._drain_async)
-        self._async_timer.start(60)
+        self._async_tasks = set()   # 保持任务对象存活，并便于窗口关闭时统一释放
+        self._async_inflight = {}   # 同一版本查询的等待回调，防止快速切换造成重复请求
 
         # ---- 左侧:同级别菜单 ----
         self.menu = QListWidget()
@@ -129,7 +126,8 @@ class DownloadTab(QWidget):
         self.version_tree.setObjectName("version_tree")
         self.version_tree.setHeaderLabel("版本")
         self.version_tree.currentItemChanged.connect(self._on_version_selected)
-        self._load_tree()
+        if self._auto_load_versions:
+            self._load_tree()
         layout = QVBoxLayout(panel)
         # 面板整体往右移一点,避免和左侧菜单/"下载新实例"区贴太近
         layout.setContentsMargins(16, 0, 0, 0)
@@ -319,28 +317,27 @@ class DownloadTab(QWidget):
         if cache_key in self._async_cache:
             on_done(self._async_cache[cache_key])
             return
+        if cache_key in self._async_inflight:
+            self._async_inflight[cache_key].append(on_done)
+            return
+        self._async_inflight[cache_key] = [on_done]
 
-        def worker():
-            try:
-                result = fetch()
-            except Exception:
-                result = []
-            self._async_q.put((cache_key, result, on_done))
+        task = BackgroundTask(lambda _task: fetch(), self)
+        self._async_tasks.add(task)
 
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _drain_async(self):
-        """主线程:把后台结果搬回 UI"""
-        while True:
-            try:
-                cache_key, result, on_done = self._async_q.get_nowait()
-            except queue.Empty:
-                return
+        def apply_result(result):
             self._async_cache[cache_key] = result
-            try:
-                on_done(result)
-            except Exception:
-                pass
+            callbacks = self._async_inflight.pop(cache_key, [])
+            for callback in callbacks:
+                try:
+                    callback(result)
+                except Exception:
+                    pass
+
+        task.succeeded.connect(apply_result)
+        task.failed.connect(lambda _error: apply_result([]))
+        task.finished.connect(lambda: self._async_tasks.discard(task))
+        task.start()
 
     def _fill_combo(self, combo: QComboBox, versions: list):
         """填充下拉:清空 → 逐项加入 → 默认选最新的"""

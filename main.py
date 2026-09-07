@@ -10,18 +10,18 @@ Agent Minecraft Launcher — 阶段 1 · 启动核心
 import base64
 import json
 import os
-import queue
 import shutil
-import subprocess
 import sys
-import threading
+import tempfile
 import time
 from datetime import datetime
 
 import requests
+from log_privacy import redact_text
+from download_feedback import failure_advice
 
 from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QMenu,
     QScrollArea,
+    QSplashScreen,
     QSplitter,
     QTabWidget,
     QToolButton,
@@ -49,24 +50,23 @@ from PySide6.QtWidgets import (
     QDockWidget,
 )
 
-from downloader import download_with_mirror  # 下载工具:镜像 + 进度 + sha1 校验
 import updater  # 自动更新(检查 GitHub 新版本 / 下载 / 替换)
 from bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
+from task_controllers import DownloadTaskController, VersionManifestController
+from background_tasks import BackgroundTask
 from assistant import AIChatDock, permission_instructions  # AI 助手(右侧停靠对话栏)
 from download_indicator import DownloadDetailWidget, DownloadIndicator  # 左下角下载指示器
 from updater_dialog import UpdateDialog  # 检查更新对话框(独立模块)
 from download_tab import DownloadTab  # 下载新实例选项卡(左侧菜单 + 分类面板)
 from fetch_versions import fetch_version_detail, fetch_version_manifest  # 网络模块
-from game_files import install_version_files  # 按清单安装依赖库和资源文件
 import i18n  # 界面语言(跟随系统,可设置覆盖)
 from i18n import t
-from instance_wizard import OPTIMIZE_MODS, SHADER_MODS  # 可选 Mod 清单
-from instances import scan_instances  # 实例扫描(与 CLI/AI 共用)
-from java_manager import ensure_java  # Java 检测与自动安装
-from launcher import build_launch_command, resolve_inherited_json  # 版本 JSON → 启动命令
-from loaders import install_loader  # Fabric / Forge 加载器安装
+from instance_install_service import InstanceInstallService
+from game_launch_service import GameLaunchService, LoginRequiredError
+from game_process_controller import GameProcessController
+from crash_diagnostics import collect_crash_report, detect_crash
+from instance_catalog_service import InstanceCatalogService
 from modpack import import_modpack as import_modpack_file  # 整合包导入
-from modpack import heal_instance_json  # 旧版导入的整合包 json id 修正(自愈)
 from modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
 import paths  # 游戏目录(可配置,设置/引导里可改)
 from paths import GAME_DIR, RUNTIME_DIR  # 兼容旧引用(测试用);内部统一用 paths.GAME_DIR
@@ -82,6 +82,34 @@ def application_icon() -> QIcon:
     return QIcon(os.path.join(root, "icons", "grass_block.png"))
 
 
+def startup_splash() -> QSplashScreen:
+    """轻量启动屏：主窗口构建期间给出确定的视觉反馈，不引入额外 UI 框架。"""
+    pixmap = QPixmap(540, 300)
+    pixmap.fill(QColor("#151b24"))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor("#26384a"))
+    painter.drawRoundedRect(18, 18, 504, 264, 18, 18)
+    icon = application_icon().pixmap(QSize(58, 58))
+    painter.drawPixmap(44, 58, icon)
+    painter.setPen(QColor("#f2f6fb"))
+    title_font = QFont()
+    title_font.setPointSize(20)
+    title_font.setBold(True)
+    painter.setFont(title_font)
+    painter.drawText(122, 88, "Agent Minecraft Launcher")
+    painter.setPen(QColor("#aebdca"))
+    sub_font = QFont()
+    sub_font.setPointSize(10)
+    painter.setFont(sub_font)
+    painter.drawText(122, 116, "正在准备你的游戏与工具…")
+    painter.end()
+    splash = QSplashScreen(pixmap)
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    return splash
+
+
 
 
 
@@ -92,6 +120,21 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(700, 560)
         self.selected_version = None  # 记住当前选中的版本,供"下载"按钮使用
         self.settings = load_settings()  # 启动器配置(用户名/内存/版本隔离)
+        self.instance_installer = InstanceInstallService(
+            lambda: paths.GAME_DIR,
+            lambda: bool(self.settings.get("version_isolation")),
+        )
+        self.game_launcher = GameLaunchService(
+            lambda: paths.GAME_DIR,
+            lambda: paths.RUNTIME_DIR,
+            lambda: self.settings,
+            save_settings,
+            self.instance_installer.game_dir_for,
+        )
+        self.instance_catalog = InstanceCatalogService(
+            lambda: paths.GAME_DIR,
+            self.instance_installer.game_dir_for,
+        )
         # 预留:自定义配色主题(以后 UI 可能出自定义配色方案)。从设置读 ui_custom_colors 应用。
         from ui_style import load_theme_from_settings
         load_theme_from_settings(self.settings)
@@ -165,7 +208,8 @@ class MainWindow(QMainWindow):
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
         from resource_center import ResourceCenter
-        self.resource_center = ResourceCenter()
+        # 版本清单由 MainWindow.load_versions 统一加载，避免下载页构造时重复请求。
+        self.resource_center = ResourceCenter(auto_load_versions=False)
         self.resource_center.set_ui_mode(self.settings.get("ui_mode", "beginner"))
         # 兼容旧引用:download_tab 是资源中心内的实例向导
         self.download_tab = self.resource_center.download_tab
@@ -205,6 +249,8 @@ class MainWindow(QMainWindow):
         from settings_center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
         self.settings_center.applied.connect(self._on_settings_applied)
+        self.settings_center.visual_changed.connect(self._on_visual_settings_changed)
+        self.settings_center.runtime_changed.connect(self._on_runtime_settings_changed)
         self.main_tabs.addTab(self.settings_center, t("SETTINGS"))
 
         # ---- 插件注册的主标签页(与 下载新资源/联机/设置 平级)----
@@ -292,10 +338,19 @@ class MainWindow(QMainWindow):
 
         # 游戏进程相关的运行时状态
         self.game_process = None
-        self.log_queue = queue.Queue()
-        self.log_timer = None
-        self._dl_queue = queue.Queue()     # 下载任务的状态/进度队列(线程 → 定时器)
-        self._dl_timer = None
+        self._launch_task = None
+        self.game_processes = GameProcessController(self)
+        self.game_processes.line_received.connect(self._on_game_log_line)
+        self.game_processes.exited.connect(self._on_game_process_exited)
+        self.download_tasks = DownloadTaskController(self)
+        self.download_tasks.status.connect(self._on_download_status)
+        self.download_tasks.progress.connect(self._on_download_progress)
+        self.download_tasks.completed.connect(self._on_download_done)
+        self.download_tasks.cancelled.connect(self._on_download_cancelled)
+        self.version_manifest = VersionManifestController(fetch_version_manifest, self)
+        self.version_manifest.loaded.connect(self._apply_version_manifest)
+        self.version_manifest.failed.connect(
+            lambda error: self.statusBar().showMessage(f"获取失败: {error}"))
 
         # 应用视图模式(图标/列表,来自设置)
         self.set_view_mode(self.instance_list,
@@ -362,6 +417,18 @@ class MainWindow(QMainWindow):
         self._watch_versions_dir()   # 游戏目录若变更,把监听指向新的 versions/
         self.apply_background()   # 壁纸/遮罩变化 → 立即生效
         self.statusBar().showMessage("设置已保存")
+
+    def _on_visual_settings_changed(self):
+        """颜色/壁纸/动画自动保存后只刷新外观，避免重扫实例和重载 AI。"""
+        self.settings = self.settings_center.settings
+        from ui_anim import set_animations_enabled
+        set_animations_enabled(self.settings.get("ui_animations_enabled", True))
+        self.apply_background()
+        self.dl_indicator.update()
+
+    def _on_runtime_settings_changed(self):
+        """Java 首选等设置保存后立即供启动服务读取，不做昂贵的界面刷新。"""
+        self.settings = self.settings_center.settings
 
     def apply_background(self):
         """按设置应用背景壁纸 + 遮罩 + 面板/按钮/文本框透明化(阶段 2 · 决策 2)。"""
@@ -479,6 +546,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
+        self.download_tasks.cancel()
+        if self._launch_task is not None:
+            self._launch_task.cancel()
+        self.version_manifest.cancel()
+        self.game_processes.detach()
         if hasattr(self, "ai_dock"):
             try:
                 self.ai_dock.shutdown()
@@ -780,19 +852,18 @@ class MainWindow(QMainWindow):
             fabric_api_version=st.get("fabric_api_version"),
             status_cb=status, progress_cb=progress))
 
-    # ---- 后台下载:队列 + 定时器,把线程里的回调搬回主线程 ----
+    # ---- 后台下载:统一任务对象用 Qt 信号把进度搬回主线程 ----
     def _run_download(self, worker_fn):
-        """后台线程跑下载任务;状态/进度经队列回主线程,界面不卡。"""
+        """后台执行下载任务，并统一处理状态、进度、结果和异常。"""
+        if self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
+            self.statusBar().showMessage("已有下载任务正在进行，请等待它完成")
+            return
         self._busy_download(True)
-        self._dl_queue = queue.Queue()
-        if self._dl_timer is None:
-            self._dl_timer = QTimer(self)
-            self._dl_timer.timeout.connect(self._drain_download)
-            self._dl_timer.start(80)
         # 左下角指示器:显示 + 归零;下载 tab 进度条也归零
         self._dl_log = []
         self._dl_progress = (0, 1)
         self.dl_indicator.set_progress(0, 1)
+        self.dl_indicator.set_completed(False)
         self.dl_indicator.setToolTip("下载中,点击查看详情")
         self.dl_indicator.show()
         try:
@@ -800,50 +871,62 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        def status(msg):
-            self._dl_queue.put(("status", str(msg)))
+        if not self.download_tasks.start(worker_fn):
+            self._busy_download(False)
+            self.statusBar().showMessage("已有下载任务正在进行，请等待它完成")
 
-        def progress(done, total):
-            self._dl_queue.put(("progress", done, total))
+    def _on_download_status(self, message: str):
+        message = redact_text(message, self.settings)
+        self.download_tab.set_status(message)
+        self.statusBar().showMessage(message)
+        self._dl_log.append(message)
 
-        def worker():
-            try:
-                worker_fn(status, progress)
-                self._dl_queue.put(("done", None))
-            except Exception as e:
-                self._dl_queue.put(("error", str(e)))
+    def _on_download_progress(self, done: int, total: int):
+        self.download_tab.set_progress(done, total)
+        self.dl_indicator.set_progress(done, total)
+        self._dl_progress = (done, total)
 
-        threading.Thread(target=worker, daemon=True).start()
+    def _on_download_done(self, ok: bool, error: str):
+        error = redact_text(error, self.settings)
+        if ok:
+            self.statusBar().showMessage("下载任务完成")
+            self._dl_log.append("✅ 下载任务完成")
+            self.dl_indicator.setToolTip("下载完成,点击查看详情")
+            self.dl_indicator.set_completed(True)
+        else:
+            self.statusBar().showMessage(f"下载失败: {error}")
+            self._dl_log.append(f"❌ 下载失败: {error}")
+            self.dl_indicator.setToolTip("下载失败,点击查看详情")
+            self.dl_indicator.set_completed(False)
+        self.dl_indicator.set_progress(1, 1)
+        self.dl_indicator.set_completed(ok)
+        self.dl_indicator.set_failed(not ok)
+        if not ok:
+            advice = failure_advice(error)
+            self._dl_log.append(advice)
+            self.download_tab.set_status(f"下载失败：{error}\n{advice}")
+            self.dl_indicator.setToolTip(f"下载失败\n{advice}\n点击查看详情")
+        self._dl_finish(ok)
 
-    def _drain_download(self):
-        """主线程:把下载队列里的状态/进度搬到界面"""
-        while True:
-            try:
-                item = self._dl_queue.get_nowait()
-            except queue.Empty:
-                return
-            kind = item[0]
-            if kind == "status":
-                self.download_tab.set_status(item[1])
-                self.statusBar().showMessage(item[1])
-                self._dl_log.append(item[1])            # 记录进详情
-            elif kind == "progress":
-                self.download_tab.set_progress(item[1], item[2])
-                self.dl_indicator.set_progress(item[1], item[2])
-                self._dl_progress = (item[1], item[2])
-            elif kind == "done":
-                self.statusBar().showMessage("下载任务完成")
-                self._dl_log.append("✅ 下载任务完成")
-                self.dl_indicator.set_progress(1, 1)    # 满环
-                self.dl_indicator.setToolTip("下载完成,点击查看详情")
-                # 常驻:不自动收起(点击看详情/下次下载重置),避免'进度条出现晚'的感知
-                self._dl_finish(True)
-            elif kind == "error":
-                self.statusBar().showMessage(f"下载失败: {item[1]}")
-                self._dl_log.append(f"❌ 下载失败: {item[1]}")
-                self.dl_indicator.set_progress(1, 1)
-                self.dl_indicator.setToolTip("下载失败,点击查看详情")
-                self._dl_finish(False)
+    def _on_download_cancelled(self):
+        self._dl_log.append("已取消下载。已校验的文件会保留，重试时会尽量复用。")
+        self.dl_indicator.set_progress(0, 1)
+        self.dl_indicator.setToolTip("下载已取消，点击查看详情")
+        self._busy_download(False)
+
+    def _cancel_current_task(self):
+        if self._launch_task is not None and self._launch_task.is_running:
+            self._launch_task.cancel()
+        else:
+            self.download_tasks.cancel()
+        self.dl_indicator.setToolTip("正在收尾，稍等一下…")
+
+    def _retry_download(self):
+        if self.download_tasks.state not in {'failed', 'cancelled'}:
+            return
+        worker = self.download_tasks.last_worker
+        if worker is not None:
+            self._run_download(worker)
 
     def _ensure_dl_overlay(self):
         """惰性创建下载详情覆盖层(ContentOverlay + DownloadDetailWidget,复用不重复建)。"""
@@ -859,7 +942,10 @@ class MainWindow(QMainWindow):
         self._dl_overlay.backRequested.connect(self._on_dl_back)
         self._dl_overlay.set_content(
             DownloadDetailWidget(self._dl_log, self._dl_progress[0], self._dl_progress[1],
-                                 live=live))
+                                 live=live, cancel=self._cancel_current_task,
+                                 retry=self._retry_download,
+                                 running=lambda: self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running),
+                                 retryable=lambda: self.download_tasks.state in {'failed', 'cancelled'}))
 
     def _on_dl_back(self):
         """下载详情返回:收起覆盖层,恢复主内容。"""
@@ -895,7 +981,7 @@ class MainWindow(QMainWindow):
 
     def _log_feedback(self, text, tag="", force=False):
         """把一条反馈写进「启动器日志」(线程安全:经 QTimer 回主线程 append)+ 日志文件。"""
-        text = (text or "").strip()
+        text = redact_text(text, self.settings).strip()
         if not text:
             return
         line = f"[{time.strftime('%H:%M:%S')}]{(' ' + str(tag)) if tag else ''} {text}"
@@ -1026,11 +1112,11 @@ class MainWindow(QMainWindow):
         from ui_style import muted_color, success_color
         n = len(self._running_instances)
         if n:
-            self._running_label.setText(f"🟢 已有 {n} 个运行中的实例")
+            self._running_label.setText("🟢 正在运行：" + ", ".join(sorted(self._running_instances)))
             self._running_label.setToolTip("运行中的实例:\n" + "\n".join(sorted(self._running_instances)))
             self._running_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
         else:
-            self._running_label.setText("⚪ 已有 0 个运行中的实例")
+            self._running_label.setText("尚未启动游戏")
             self._running_label.setToolTip("启动实例后这里会显示运行中的游戏")
             self._running_label.setStyleSheet(f"color: {muted_color()};")
 
@@ -1041,16 +1127,21 @@ class MainWindow(QMainWindow):
     def _set_progress(self, done: int, total: int):
         """通用进度回调(实例下载 / Java 下载共用):显示在左下角圆环指示器上"""
         self.dl_indicator.set_progress(done, total)
+        if done < total:
+            self.dl_indicator.set_completed(False)
         self.dl_indicator.setToolTip("下载中,点击查看详情")
         self.dl_indicator.show()
 
     def report_download_progress(self, title: str, status: str, done: int, total: int):
         """通用下载进度入口(本地模型 / AI 发起的 Mod 下载共用):写进下载日志 + 更新左下角圆环指示器。
         title 用作圆环 tooltip/详情里的标识;status 为状态消息(可为空)。这样点圆环 → 下载详情也能看到。"""
+        status = redact_text(status, self.settings)
         if status:
-            self._dl_log.append(status)
+            self._dl_log.append(redact_text(status, self.settings))
         self._dl_progress = (done, total)
         self.dl_indicator.set_progress(done, total)
+        if done < total:
+            self.dl_indicator.set_completed(False)
         if status and "失败" in status:
             self.dl_indicator.setToolTip(f"{title}失败,点击查看详情")
         elif status and ("完成" in status or "已就绪" in status.lower()):
@@ -1061,11 +1152,18 @@ class MainWindow(QMainWindow):
 
     def report_download_done(self, title: str, ok: bool, msg: str):
         """通用下载结束入口:写日志 + 满环 + 收起(2s)。"""
+        msg = redact_text(msg, self.settings)
         self._dl_log.append(msg)
         self._dl_progress = (1, 1)
         self.dl_indicator.set_progress(1, 1)
+        self.dl_indicator.set_completed(ok)
         self.dl_indicator.setToolTip(f"{title}" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
-        QTimer.singleShot(2000, self.dl_indicator.hide)
+        self.dl_indicator.set_failed(not ok)
+        if not ok:
+            advice = failure_advice(msg)
+            self._dl_log.append(advice)
+            self.dl_indicator.setToolTip(f"{title}失败\n{advice}\n点击查看详情")
+        self.dl_indicator.show()
 
     def model_download_progress(self, status: str, done: int, total: int):
         """本地模型下载进度回调:写进下载日志 + 更新左下角圆环指示器,
@@ -1079,16 +1177,12 @@ class MainWindow(QMainWindow):
     def game_dir_for(self, version_id: str) -> str:
         """PCL2 风格:versions/<版本ID>/ 就是该版本的实例(游戏目录)。
         版本隔离关闭时所有版本共用一个目录。"""
-        if self.settings.get("version_isolation"):
-            return os.path.join(paths.GAME_DIR, "versions", version_id)
-        return paths.GAME_DIR
+        return self.instance_installer.game_dir_for(version_id)
 
     def load_version_data(self, v: dict) -> dict:
         """取版本的完整数据:本地的(Mod 版本)从磁盘读并解析继承链,
         原版从 Mojang 清单拉取。"""
-        if v.get("local"):
-            return resolve_inherited_json(v["id"], paths.GAME_DIR)
-        return fetch_version_detail(v["url"])
+        return self.game_launcher.load_version_data(v)
 
     # ---- 工具函数:把版本 v 作为叶子节点加进树,并藏好数据 ----
     def _add_version(self, parent, v):
@@ -1097,17 +1191,19 @@ class MainWindow(QMainWindow):
         parent.addChild(item)
 
     def load_versions(self):
-        """从网络拉取版本清单,更新顶部信息 + 刷新下载选项卡的版本树"""
+        """后台拉取版本清单，主窗口先显示并保持可操作。"""
         self.statusBar().showMessage("正在获取版本列表...")
-        try:
-            manifest = fetch_version_manifest()
-        except Exception as e:
-            self.statusBar().showMessage(f"获取失败: {e}")
+        self.version_manifest.refresh()
+
+    def _apply_version_manifest(self, manifest: dict):
+        """只在 GUI 线程更新版本相关控件。"""
+        if not isinstance(manifest, dict) or not manifest.get("latest"):
+            self.statusBar().showMessage("版本列表格式无效")
             return
 
         self.resource_center.set_latest_versions(manifest['latest']['release'],
                                                  manifest['latest']['snapshot'])
-        self.download_tab._load_tree()
+        self.download_tab._fill_tree(manifest)
 
         # 填充各资源浏览器的全局游戏版本树(按大版本分组)
         for br in self.resource_center.browsers.values():
@@ -1142,73 +1238,23 @@ class MainWindow(QMainWindow):
 
     def install_version(self, version_id: str, status_cb=None, progress_cb=None,
                         repository_only: bool = False) -> bool:
-        """安装原版文件。
-
-        ``repository_only=True`` 用于加载器的继承根：文件直接进入
-        ``versions/_versions/<mc>/``，不会被当成一个可见的原版实例。
-        """
-        if status_cb is None:
-            status_cb = self.statusBar().showMessage
-        if progress_cb is None:
-            progress_cb = self._set_progress
-        status_cb(f"正在获取 {version_id} 的安装信息...")
-        try:
-            manifest = fetch_version_manifest()
-            entry = next((v for v in manifest["versions"]
-                          if v["id"] == version_id
-                          and v["type"] in ("release", "snapshot")), None)
-            if entry is None:
-                status_cb(f"清单里找不到 {version_id}")
-                return False
-            d = fetch_version_detail(entry["url"])
-        except Exception as e:
-            status_cb(f"获取版本信息失败: {e}")
-            return False
-        return self._install_detail(d, status_cb=status_cb, progress_cb=progress_cb,
-                                    repository_only=repository_only)
+        """兼容旧调用；安装业务由 InstanceInstallService 处理。"""
+        return self.instance_installer.install_version(
+            version_id,
+            status_cb or self.statusBar().showMessage,
+            progress_cb or self._set_progress,
+            repository_only,
+        )
 
     def _install_detail(self, d: dict, status_cb=None, progress_cb=None,
                         repository_only: bool = False) -> bool:
-        """安装已取到的原版数据；加载器继承根可直接写入版本仓库。"""
-        if status_cb is None:
-            status_cb = self.statusBar().showMessage
-        if progress_cb is None:
-            progress_cb = self._set_progress
-
-        client = d.get("downloads", {}).get("client")
-        if client is None:
-            status_cb(f"{d['id']} 没有客户端 jar(该版本不可直接启动)")
-            return False
-
-        # 加载器需要原版作为继承根，但它不是用户请求的原版实例。
-        # 旧流程先放 versions/<id> 再异步搬运，会短暂/永久留下一个重复实例；
-        # 现在从一开始就写入隐藏的版本仓库。
-        version_root = (os.path.join(paths.GAME_DIR, "versions", "_versions")
-                        if repository_only else os.path.join(paths.GAME_DIR, "versions"))
-        inst_dir = os.path.join(version_root, d["id"])
-        os.makedirs(inst_dir, exist_ok=True)
-        with open(os.path.join(inst_dir, d["id"] + ".json"), "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
-
-        try:
-            # 1) 客户端 jar
-            dest = os.path.join(inst_dir, f"{d['id']}.jar")
-            status_cb(f"下载客户端 {d['id']} ...")
-            download_with_mirror(client["url"], dest, version_id=d["id"],
-                                 sha1=client.get("sha1"), progress_callback=progress_cb)
-
-            # 2) 依赖库 + 资源文件(自动跳过已存在的;单个失败不会中断)
-            _downloaded, failures = install_version_files(
-                d, paths.GAME_DIR, progress_callback=progress_cb, status_callback=status_cb)
-        except Exception as e:
-            status_cb(f"安装失败: {e}")
-            return False
-
-        if failures:
-            example = failures[0][0]
-            status_cb(f"安装完成但 {len(failures)} 个文件失败(如 {example})——请重试补齐")
-            return False
-        return True
+        """兼容旧调用；安装已获取的版本详情。"""
+        return self.instance_installer.install_detail(
+            d,
+            status_cb or self.statusBar().showMessage,
+            progress_cb or self._set_progress,
+            repository_only,
+        )
 
     def launch_selected(self):
         """启动当前选中版本:准备 Java → 拼命令 → 拉起进程 → 日志实时显示"""
@@ -1219,159 +1265,63 @@ class MainWindow(QMainWindow):
         if self.game_process and self.game_process.poll() is None:
             self.statusBar().showMessage("游戏正在运行中,请先退出再启动")
             return
+        if (self._launch_task is not None and self._launch_task.is_running) or self.download_tasks.is_running:
+            self.statusBar().showMessage("正在准备或安装，等这一小步完成再启动吧")
+            return
 
         self.statusBar().showMessage(f"正在获取 {v['id']} 的启动信息...")
-        # 旧版导入的整合包 json id 可能仍是加载器版本名(未改写成包名),
-        # 启动前先自愈:让 id 与实例目录名一致,启动才会落到本实例自己的游戏目录
-        if v.get("local"):
-            heal_instance_json(v["id"], paths.GAME_DIR)
-        try:
-            d = self.load_version_data(v)
-        except Exception as e:
-            self.statusBar().showMessage(f"获取版本信息失败: {e}")
-            return
-
-        required_java = (d.get("javaVersion") or {}).get("majorVersion", 8)
         self._running_instance_id = v["id"]   # 实例 id(= 游戏目录名),供退出后自动 debug 定位日志
 
-        def on_progress(done, total):
-            self.dl_indicator.set_progress(done, total)
-            self.dl_indicator.setToolTip("下载中,点击查看详情")
-            self.dl_indicator.show()
+        v = dict(v)
+        from copy import deepcopy
+        from settings import update_setting
+        launch_settings = deepcopy(self.settings)
+        game_root, runtime_root = paths.GAME_DIR, paths.RUNTIME_DIR
+        service = GameLaunchService(
+            lambda: game_root, lambda: runtime_root, lambda: launch_settings,
+            lambda changed: update_setting('ms_credentials', changed.get('ms_credentials', {})),
+            lambda identity: os.path.join(game_root, 'versions', identity)
+            if launch_settings.get('version_isolation') else game_root)
+        task = BackgroundTask(lambda current: service.prepare(
+            v, status_cb=current.report_status, progress_cb=current.report_progress), self)
+        self._launch_task = task
+        self.launch_btn.setEnabled(False)
+        self._dl_log = []
+        self._dl_progress = (0, 1)
+        self.dl_indicator.set_progress(0, 1)
+        self.dl_indicator.setToolTip("正在准备启动，点击查看详情")
+        self.dl_indicator.show()
+        task.status.connect(self._on_download_status)
+        task.progress.connect(self._on_download_progress)
+        task.failed.connect(self._on_launch_prepare_failed)
+        task.cancelled_signal.connect(self._on_download_cancelled)
+        task.succeeded.connect(lambda plan: self._start_prepared_game(plan, v)
+                               if paths.GAME_DIR == game_root else self._on_launch_prepare_failed("游戏目录已经变了，请重新点击启动"))
+        task.start()
 
-        try:
-            # 1) 保证有合适的 Java(没有就自动下载)
-            # 实例级启动选项：内存和 Java 都可覆盖全局自动策略。
-            # 旧 Forge 仍默认使用启动器管理的 Java 8，避免系统 Java 17/21 秒退。
-            launch_opts = {}
-            lop = os.path.join(paths.GAME_DIR, "versions", v["id"], "launch_options.json")
-            try:
-                if os.path.isfile(lop):
-                    with open(lop, encoding="utf-8") as f:
-                        launch_opts = json.load(f) or {}
-            except Exception:
-                launch_opts = {}
-            selected_java = str(launch_opts.get("java_path") or "").strip()
-            if selected_java:
-                if not os.path.isfile(selected_java):
-                    raise RuntimeError(f"本实例指定的 Java 不存在：{selected_java}")
-                from java_manager import java_major, minecraft_java_warning
-                selected_major = java_major(selected_java)
-                warning = minecraft_java_warning(v.get("base") or d.get("inheritsFrom") or d.get("id", ""), selected_major)
-                if warning:
-                    self.statusBar().showMessage("⚠ " + warning)
-                java_exe = selected_java
-            else:
-                java_max = 8 if required_java <= 8 else None
-                java_exe = ensure_java(paths.RUNTIME_DIR, required_java,
-                                       progress_callback=on_progress,
-                                       status_callback=self.statusBar().showMessage,
-                                       max_major=java_max,
-                                       prefer_managed=(required_java <= 8))
-            self.dl_indicator.hide()   # Java 检测/下载完成,收起圆环
-            # 2) 把版本 JSON 翻译成启动命令
-            #    运行目录按隔离策略来;安装目录和资源目录是所有版本共享的
-            #    用 v["id"](用户选中的实例目录名)而不是 d["id"](json 的 id):
-            #    整合包 json 可能从加载器版本复制而来,id 若没改对,游戏会被启动到
-            #    加载器的空白目录里(mod 全不加载)—— 游戏目录必须是所选实例自己的目录。
-            game_dir = self.game_dir_for(v["id"])
-            # 未开启版本隔离时，各版本共用 .minecraft/mods。bridge-mod 是严格
-            # 绑定 MC/加载器版本的自动管理组件，留下另一版本的包会让 Forge 在
-            # 游戏真正启动前就拒绝加载；只清理可识别的 bridge 包，不动普通 Mod。
-            current_loader = v.get("loader") or ""
-            current_base = v.get("base") or ""
-            if current_loader in ("fabric", "forge", "neoforge") and current_base:
-                try:
-                    import bridge_mod_dist
-                    removed_bridge = bridge_mod_dist.remove_incompatible_bridge_jars(
-                        game_dir, current_loader, current_base)
-                    if removed_bridge:
-                        self.statusBar().showMessage(
-                            "已移除不兼容的 bridge-mod: " + ", ".join(removed_bridge))
-                except Exception:
-                    pass
-            # 游戏语言默认跟随启动器：language=auto 时 i18n 已解析为系统语言。
-            # 关闭设置后不改 options.txt，玩家可在游戏里为该实例单独选择语言。
-            if self.settings.get("sync_minecraft_language", True):
-                try:
-                    from minecraft_language import sync_minecraft_language
-                    sync_minecraft_language(game_dir, i18n.get_base_language())
-                except Exception:
-                    pass  # 配置文件不可写不应妨碍正常启动
-            # 正版登录:若存了凭证,启动时用正版 UUID/令牌(online 服能过验证);否则离线
-            auth = None
-            username_load = self.settings.get("username", "Player")
-            if self.settings.get("login_method") == "microsoft":
-                cred = dict(self.settings.get("ms_credentials") or {})
-                # 顺手尝试刷新令牌(免每次重登;失败则用已存令牌)
-                if cred.get("refresh_token"):
-                    try:
-                        from microsoft_auth import refresh_with_ms_refresh
-                        new = refresh_with_ms_refresh(cred["refresh_token"])
-                        cred.update({
-                            "access_token": new.get("access_token", cred.get("access_token", "")),
-                            "uuid": new.get("uuid", cred.get("uuid", "")),
-                            "username": new.get("username", cred.get("username", "")),
-                        })
-                        self.settings["ms_credentials"] = cred
-                        save_settings(self.settings)
-                    except Exception:
-                        pass   # 刷新失败:用已存令牌(可能仍有效)
-                if cred.get("access_token") and cred.get("uuid"):
-                    auth = {
-                        "uuid": cred.get("uuid", ""),
-                        "access_token": cred.get("access_token", ""),
-                        "refresh_token": cred.get("refresh_token", ""),
-                        "username": cred.get("username", ""),
-                        "token_type": "msa",
-                    }
-                    username_load = cred.get("username") or username_load
-            # 强制正版(microsoft_login=true):【没有正版凭证】才禁止启动;
-            # 正版玩家即便切到离线昵称也会放行(凭证保留,可切回正版)。
-            force_online = self.settings.get("microsoft_login", True)
-            _creds = dict(self.settings.get("ms_credentials") or {})
-            if force_online and not _creds.get("uuid"):
-                self.dl_indicator.hide()
-                QMessageBox.warning(
-                    self, "需要正版登录",
-                    "当前为「强制正版」模式(config 的 microsoft_login=true)。\n"
-                    "本机还没有正版账号,请先完成微软正版登录才能启动游戏。\n\n"
-                    "若想完全跳过正版、纯离线使用,请把 config.json 的 microsoft_login 改为 false。")
-                return
-            # 实例级内存覆盖:读本实例 launch_options.json(memory_gb>0 则覆盖全局;0/缺失=用全局)
-            inst_mem = int(launch_opts.get("memory_gb") or 0)
-            mem_gb = inst_mem if inst_mem > 0 else self.settings.get("memory_gb", 4)
-            cmd = build_launch_command(
-                d, game_dir, java_exe,
-                username=username_load,
-                memory_gb=mem_gb,
-                assets_dir=os.path.join(paths.GAME_DIR, "assets"),
-                install_dir=paths.GAME_DIR,
-                auth=auth,
-            )
-        except Exception as e:
-            self.dl_indicator.hide()
-            self.statusBar().showMessage(f"启动准备失败: {e}")
-            return
+    def _on_launch_prepare_failed(self, error):
+        self.launch_btn.setEnabled(True)
+        self.dl_indicator.hide()
+        QMessageBox.warning(self, "启动准备没完成", redact_text(error, self.settings))
+
+    def _start_prepared_game(self, plan, v):
+        self.dl_indicator.hide()
+        d = plan.detail
+        game_dir = plan.game_dir
+        java_exe = plan.java_exe
+        cmd = plan.command
 
         # 3) 展开日志面板,显示要执行的命令(方便你理解"启动"到底是什么)
         # 3) 清空并写入要执行的命令到游戏日志(在「实例详情 → 游戏日志」里看)
         self.log_view.clear()
-        self.log_view.appendPlainText("> " + " ".join(cmd))
+        self.log_view.appendPlainText(redact_text("> " + " ".join(cmd), self.settings))
         # 首次运行提示:还没生成过完整游戏目录(saves/配置)时告诉用户
-        if not os.path.isdir(os.path.join(game_dir, "saves")):
+        if plan.first_run:
             self.statusBar().showMessage(
                 f"首次运行 {d['id']}:将生成完整游戏目录(存档/配置在 {game_dir})")
         else:
             self.statusBar().showMessage("游戏启动中...")
         self.launch_btn.setEnabled(False)
-
-        # Java 用 javaw(无控制台窗口,避免弹出黑框);启动进程本身也不开新窗口
-        java_dir = os.path.dirname(java_exe)
-        javaw = os.path.join(java_dir, "javaw.exe")
-        if os.path.isfile(javaw):
-            cmd = [javaw] + cmd[1:]
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
         # 游戏内 AI 通道:关闭 → 游戏启动前卸载本地模型(llama-server),把内存让给游戏;
         # 开启 → 可能用本地模型(看 ai_strategy),保持加载(游戏内 AI 通道)
@@ -1380,11 +1330,7 @@ class MainWindow(QMainWindow):
             self.ai_dock.stop_local_engine()
 
         try:
-            self.game_process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace", cwd=game_dir,
-                creationflags=creationflags,
-            )
+            self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
         except Exception as e:
             self.statusBar().showMessage(f"启动失败: {e}")
             self.launch_btn.setEnabled(True)
@@ -1413,55 +1359,31 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # 4) 后台线程读游戏输出 → 队列 → 定时器搬到日志页(生产-消费模式)
-        self.log_queue = queue.Queue()
-        threading.Thread(target=self._read_process, daemon=True).start()
-        self.log_timer = QTimer(self)
-        self.log_timer.timeout.connect(self._drain_log)
-        self.log_timer.start(100)
-
         # 记录本次运行起点,用于判断"本次是否新产生了崩溃报告"(即使退出码为 0)
         self._game_started_at = time.time()
 
-    def _read_process(self):
-        """后台线程:一行行读游戏输出,放进队列(生产)"""
-        for line in self.game_process.stdout:
-            self.log_queue.put(line.rstrip())
-        self.log_queue.put(None)  # 结束标记
+    def _on_game_log_line(self, line: str):
+        line = redact_text(line, self.settings)
+        self.log_view.appendPlainText(line)
+        self.skill_mgr.on_game_log(line)
 
-    def _drain_log(self):
-        """主线程(定时器):把队列里的日志搬到界面(消费)"""
-        while True:
-            try:
-                line = self.log_queue.get_nowait()
-            except queue.Empty:
-                return
-            if line is None:
-                self.log_timer.stop()
-                code = self.game_process.poll()
-                self.launch_btn.setEnabled(True)
-                self.statusBar().showMessage(f"游戏进程已退出(退出码 {code})")
-                # 运行实例指示:注销并刷新底部标签
-                inst_id = getattr(self, "_running_instance_id", None)
-                if inst_id:
-                    self._running_instances.discard(inst_id)
-                self._update_running_label()
-                # 通知技能系统:游戏退出(自动重启/备份提醒等技能在这里触发)
-                self.skill_mgr.on_game_stop(code)
-                # 主动避让(§5):游戏退出 → 恢复本地推理正常优先级,并按策略预热下次要用
-                try:
-                    self.ai_dock.set_game_stopped()
-                except Exception:
-                    pass
-                self._stop_in_game_ai()
-                if code not in (0, None):
-                    self._auto_debug(code)   # 异常退出 → 自动收集日志给 AI 分析
-                elif self._detect_log_crash():
-                    # 很多崩溃(尤其 F3+C 调试崩溃/Mod 崩溃)退出码其实是 0,但留下了崩溃报告或日志特征
-                    self._auto_debug(0)
-                return
-            self.log_view.appendPlainText(line)
-            self.skill_mgr.on_game_log(line)   # 每行日志实时喂给技能(自动重启等)
+    def _on_game_process_exited(self, code: int):
+        self.launch_btn.setEnabled(True)
+        self.statusBar().showMessage(f"游戏进程已退出(退出码 {code})")
+        inst_id = getattr(self, "_running_instance_id", None)
+        if inst_id:
+            self._running_instances.discard(inst_id)
+        self._update_running_label()
+        self.skill_mgr.on_game_stop(code)
+        try:
+            self.ai_dock.set_game_stopped()
+        except Exception:
+            pass
+        self._stop_in_game_ai()
+        if code not in (0, None):
+            self._auto_debug(code)
+        elif self._detect_log_crash():
+            self._auto_debug(0)
 
     def _start_in_game_ai(self, instance_id: str):
         """游戏内 AI(ai_in_game 开启):启动 InGameAI 轮询器(读 .bridge/ai_request.json)。
@@ -1502,53 +1424,13 @@ class MainWindow(QMainWindow):
         这里只判断"本次运行是否发生崩溃",不弹窗。"""
         inst_id = getattr(self, "_running_instance_id", None)
         game_dir = self.game_dir_for(inst_id) if inst_id else paths.GAME_DIR
-        # 1) 本次运行期间是否新产生了崩溃报告
-        cr_dir = os.path.join(game_dir, "crash-reports")
-        start = float(getattr(self, "_game_started_at", 0) or 0)
-        if os.path.isdir(cr_dir):
-            try:
-                for f in os.listdir(cr_dir):
-                    p = os.path.join(cr_dir, f)
-                    if os.path.isfile(p) and os.path.getmtime(p) >= start:
-                        return True
-            except Exception:
-                pass
-        # 2) 日志里是否有明显崩溃标记
-        log_path = os.path.join(game_dir, "logs", "latest.log")
-        if os.path.isfile(log_path):
-            try:
-                tail = open(log_path, encoding="utf-8", errors="replace").read()[-8000:].lower()
-            except Exception:
-                tail = ""
-            marks = ("---- minecraft crash report ----", "a fatal error has been detected",
-                     "failed to start the minecraft server", "outofmemoryerror", "java.lang.nullpointer")
-            if any(m in tail for m in marks):
-                return True
-        return False
+        return detect_crash(game_dir, getattr(self, "_game_started_at", 0))
 
     def _auto_debug(self, code: int):
         """游戏异常退出(退出码非 0 或检测到本次崩溃):自动抓最新日志 + 崩溃报告,问用户是否让 AI 分析"""
         inst_id = getattr(self, "_running_instance_id", None)
         game_dir = self.game_dir_for(inst_id) if inst_id else paths.GAME_DIR
-        parts = [f"游戏进程异常退出(退出码 {code})。"]
-        log_path = os.path.join(game_dir, "logs", "latest.log")
-        if os.path.isfile(log_path):
-            try:
-                lines = open(log_path, encoding="utf-8", errors="replace").read().splitlines()
-                parts.append("【最新日志(尾部 60 行)】\n" + "\n".join(lines[-60:]))
-            except Exception:
-                pass
-        cr_dir = os.path.join(game_dir, "crash-reports")
-        if os.path.isdir(cr_dir):
-            files = sorted(os.listdir(cr_dir), reverse=True)
-            if files:
-                try:
-                    text = open(os.path.join(cr_dir, files[0]),
-                                encoding="utf-8", errors="replace").read()
-                    parts.append("【最新崩溃报告(摘要)】\n" + text[:2000])
-                except Exception:
-                    pass
-        msg = "\n\n".join(parts)
+        msg = collect_crash_report(game_dir, code)
         preview = msg[:400] + ("…" if len(msg) > 400 else "")
         if QMessageBox.question(
                 self, "游戏异常退出",
@@ -1562,92 +1444,30 @@ class MainWindow(QMainWindow):
                         optimize_versions: dict | None = None,
                         fabric_api_version: str | None = None,
                         status_cb=None, progress_cb=None):
-        """下载一个"基础实例":原版本体 + (可选)加载器 + (可选)Fabric API + 光影/优化 Mod。
-        在后台线程运行,状态/进度通过回调上报(默认用主线程直调,兼容旧用法)。"""
-        if status_cb is None:
-            status_cb = self.statusBar().showMessage
-        if progress_cb is None:
-            progress_cb = self._set_progress
-
-        status_cb(f"开始下载实例 {version} ...")
-
-        # 1) 原版本体。带加载器时直接进入隐藏版本仓库，避免产生重复原版实例；
-        #    原版仍会下载，因为加载器继承它的 JSON/client jar。
-        if loader_key:
-            status_cb(f"准备基础原版 {version}({loader_key} 加载器依赖，存入版本仓库)...")
-        if not self.install_version(version, status_cb=status_cb, progress_cb=progress_cb,
-                                    repository_only=bool(loader_key)):
-            return
-
-        # 2) 加载器
-        instance_id = version
-        if loader_key:
-            try:
-                instance_id = install_loader(loader_key, version, paths.GAME_DIR,
-                                             loader_version=loader_version,
-                                             progress_callback=progress_cb,
-                                             status_callback=status_cb)
-            except Exception as e:
-                status_cb(f"加载器安装失败: {e}")
-                return
-
-        # 2.5) Fabric API(绝大多数 Fabric 模组的前置;选中 Fabric 且选了版本时自动装)
-        mods_dir = os.path.join(self.game_dir_for(instance_id), "mods")
-        if loader_key == "fabric" and fabric_api_version:
-            self._install_mod("fabric-api", version, "fabric", mods_dir, "Fabric API",
-                              version_number=fabric_api_version,
-                              status_cb=status_cb, progress_cb=progress_cb)
-
-        # 3) 光影 / 优化 Mod(下载到该实例自己的 mods 目录)
-        if shader and modrinth_loader:
-            slug = SHADER_MODS.get(modrinth_loader)
-            if slug:
-                self._install_mod(slug, version, modrinth_loader, mods_dir, "光影",
-                                  version_number=shader_version,
-                                  status_cb=status_cb, progress_cb=progress_cb)
-        if optimize and modrinth_loader:
-            for slug in OPTIMIZE_MODS.get(modrinth_loader, []):
-                want = None
-                if optimize_versions:
-                    want = optimize_versions.get(slug)
-                self._install_mod(slug, version, modrinth_loader, mods_dir, "优化",
-                                  version_number=want,
-                                  status_cb=status_cb, progress_cb=progress_cb)
-
-        status_cb(f"实例就绪:{instance_id} ✅ "
-                  f"(游戏目录:{self.game_dir_for(instance_id)};"
-                  f"首次运行会生成完整目录——存档/配置/日志)")
+        """兼容窗口和插件旧调用；实际流程由安装服务执行。"""
+        return self.instance_installer.create_instance(
+            version, loader_key, modrinth_loader, shader, optimize,
+            loader_version=loader_version,
+            shader_version=shader_version,
+            optimize_versions=optimize_versions,
+            fabric_api_version=fabric_api_version,
+            status_cb=status_cb or self.statusBar().showMessage,
+            progress_cb=progress_cb or self._set_progress,
+        )
 
     def _install_mod(self, slug: str, game_version: str, loader: str,
                      mods_dir: str, kind: str, version_number: str | None = None,
                      status_cb=None, progress_cb=None):
-        """下载一个 Mod 到实例的 mods 目录;失败只提示,不中断流程"""
-        if status_cb is None:
-            status_cb = self.statusBar().showMessage
-        try:
-            filename = download_mod(slug, game_version, loader, mods_dir,
-                                    version_number=version_number,
-                                    progress_callback=progress_cb)
-        except Exception as e:
-            status_cb(f"{kind} Mod {slug} 下载失败: {e}")
-            return
-        if filename:
-            status_cb(f"{kind} Mod 已装:{filename}")
-        else:
-            status_cb(f"{kind} Mod {slug} 暂无 {game_version}+{loader} 版本,已跳过")
+        """兼容旧调用；下载一个可选 Mod。"""
+        return self.instance_installer.install_mod(
+            slug, game_version, loader, mods_dir, kind, version_number,
+            status_cb or self.statusBar().showMessage, progress_cb,
+        )
 
     # ---- 下载 Mod 选项卡 ----
     def refresh_instances(self):
         """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的实例记录"""
-        self._tidy_base_versions()   # 把纯基础原版收进 _versions 仓库(一次性迁移)
-        instances = scan_instances(paths.GAME_DIR)
-
-        # 隐藏"依赖型原版实例":被 Mod 实例继承、且没有自己存档的原版,
-        # 只是加载器的地基,不单独显示(下载一个 Fabric 实例不会看到两个实例)
-        bases_in_use = {i["base"] for i in instances if i["loader"]}
-        shown = [i for i in instances
-                 if not (i["loader"] is None and i["id"] in bases_in_use
-                         and not os.path.isdir(os.path.join(self.game_dir_for(i["id"]), "saves")))]
+        shown = self.instance_catalog.refresh()
 
         # 1) 我的版本列表(带封面)
         # 保留当前选中:versions/ 目录变动会触发防抖自动刷新(500ms),clear() 会把当前项
@@ -1685,7 +1505,7 @@ class MainWindow(QMainWindow):
         self.home_panel.set_current_instances(shown)
 
         # 3) 实例记录(实例清单备忘,可手动编辑补充)
-        self.write_cheat_sheet(shown)
+        self.instance_catalog.write_record(shown)
 
         # 4) 资源中心的目标实例卡片(Mod/光影/数据包浏览器)
         self.resource_center.refresh_browser_instances(shown)
@@ -1734,6 +1554,27 @@ class MainWindow(QMainWindow):
 
     def _resource_download(self, hit, version, inst, target_dir, sub_dir):
         """资源中心下载回调:把项目下载到目标实例的对应目录(mods/shaderpacks/...)"""
+        if hit.get("source") == "curseforge":
+            if not target_dir:
+                self.statusBar().showMessage("未选择安装位置")
+                return
+            if not isinstance(version, dict) or not version.get("file_id"):
+                self.statusBar().showMessage("请先在“手动下载”中选择一个 CurseForge 文件版本")
+                return
+            title = hit.get("title") or "CurseForge Mod"
+            project_id = hit.get("curseforge_id")
+            file_id = version["file_id"]
+
+            def worker(status, progress):
+                try:
+                    from curseforge import download_mod
+                    filename = download_mod(project_id, file_id, target_dir, progress_callback=progress)
+                    status(f"✅ 已下载 {filename} → {sub_dir}")
+                except Exception as e:
+                    status(f"❌ 下载 CurseForge Mod {title} 失败: {e}")
+
+            self._run_download(worker)
+            return
         slug = hit["slug"]
         if not target_dir:
             self.statusBar().showMessage("未选择安装位置")
@@ -1837,39 +1678,8 @@ class MainWindow(QMainWindow):
         self._run_download(worker)
 
     def _tidy_base_versions(self):
-        """收纳加载器自动带出的、尚未启动过的基础原版到 versions/_versions/。
-
-        不能用存档目录判断：关闭版本隔离时所有版本共用同一个 gameDir，
-        会误把别的实例的存档当作基础原版自己的存档。改为检查版本安装目录
-        是否仍是下载后的最小形态（仅 ``<id>.json`` 与 ``<id>.jar``）：一旦
-        启动过，启动器会生成 natives 或其他文件，此时保留原目录不动。
-        """
-        try:
-            instances = scan_instances(paths.GAME_DIR)
-        except Exception:
-            return
-        bases_in_use = {i["base"] for i in instances if i["loader"]}
-        repo = os.path.join(paths.GAME_DIR, "versions", "_versions")
-        for inst in instances:
-            if inst["loader"] is not None or inst["id"] not in bases_in_use:
-                continue   # 不是"被继承的纯原版"
-            # 版本安装文件始终位于 versions/<id>；gameDir 在关闭隔离时是共用的，
-            # 不能用 game_dir_for() 来判断该版本是否启动过。
-            inst_dir = os.path.join(paths.GAME_DIR, "versions", inst["id"])
-            expected = {inst["id"] + ".json", inst["id"] + ".jar"}
-            try:
-                contents = set(os.listdir(inst_dir))
-            except OSError:
-                continue
-            if contents != expected:
-                continue   # 已启动/用户放入过文件/安装不完整 → 按真实原版保留
-            dest = os.path.join(repo, inst["id"])
-            try:
-                if not os.path.isdir(dest) and os.path.isdir(inst_dir):
-                    os.makedirs(repo, exist_ok=True)
-                    shutil.move(inst_dir, dest)
-            except OSError:
-                pass
+        """兼容旧调用；整理逻辑由实例目录服务负责。"""
+        self.instance_catalog.tidy_base_versions()
 
     @staticmethod
     def _instance_icon(instance_id: str):
@@ -1906,43 +1716,8 @@ class MainWindow(QMainWindow):
         return QIcon(pixmap)
 
     def write_cheat_sheet(self, instances: list):
-        """在 versions 目录生成「实例记录.json」:实例清单备忘,可手动编辑补充说明。
-        用户手动加过的备注(note)会在刷新时保留,不覆盖;旧版「打小抄.txt」自动清理。"""
-        import json
-        import datetime
-        path = os.path.join(paths.GAME_DIR, "versions", "实例记录.json")
-        old_notes = {}
-        if os.path.exists(path):
-            try:
-                with open(path, encoding="utf-8") as f:
-                    old = json.load(f)
-                for it in old.get("instances", []):
-                    if isinstance(it, dict) and it.get("id") and it.get("note"):
-                        old_notes[it["id"]] = it["note"]
-            except Exception:
-                pass
-        data = {
-            "note": "实例记录(启动器自动生成,可手动编辑补充说明;每实例的 note 会保留)",
-            "updated": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "instances": [
-                {"id": inst["id"], "loader": inst.get("loader") or "原版",
-                 "base": inst.get("base", ""), "note": old_notes.get(inst["id"], "")}
-                for inst in instances
-            ],
-        }
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass  # 记录文件写不写都不影响功能
-
-        # 清理旧版(打小抄.txt → 实例记录.json)
-        old_txt = os.path.join(paths.GAME_DIR, "versions", "打小抄.txt")
-        try:
-            if os.path.exists(old_txt):
-                os.remove(old_txt)
-        except Exception:
-            pass
+        """兼容旧调用；写入实例记录并保留用户备注。"""
+        self.instance_catalog.write_record(instances)
 
     def launch_selected_instance(self):
         """启动"我的版本"里选中的实例(双击或按钮)"""
@@ -1951,7 +1726,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("请先选一个实例(双击也可以直接启动)")
             return
         inst = item.data(Qt.ItemDataRole.UserRole)
-        self.selected_version = {"id": inst["id"], "local": True, "type": "instance"}
+        self.selected_version = {**inst, "local": True, "type": "instance"}
         self.statusBar().showMessage(f"启动实例: {inst['id']}")
         self.launch_selected()
 
@@ -1964,12 +1739,14 @@ class MainWindow(QMainWindow):
         inst = item.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
         menu.addAction("实例详情…", lambda: self.open_instance_manager(inst))
-        menu.addAction("一键配置 bridge-mod(推荐)…", lambda: self._one_click_bridge_for(inst))
-        rcon_menu_item = menu.addAction("一键配置 RCON(临时方案)…", lambda: self._one_click_rcon_for(inst))
+        config_menu = menu.addMenu("一键配置")
+        config_menu.addAction("Bridge Mod（推荐）…", lambda: self._one_click_bridge_for(inst))
+        rcon_menu_item = config_menu.addAction("RCON（临时方案）…", lambda: self._one_click_rcon_for(inst))
         rcon_menu_item.setToolTip("临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放")
         # 联机 mod 一键配置:按实例版本+加载器判断支持才显示(不支持不出现)
-        self._add_online_mod_menu_items(menu, inst)
+        self._add_online_mod_menu_items(config_menu, inst)
         menu.addAction("启动", self.launch_selected_instance)
+        menu.addAction("重命名实例…", lambda: self._rename_instance(inst))
         menu.addAction("备份实例", lambda: self.backup_current_instance(inst))
         menu.addAction("打开实例目录", lambda: open_path(self.game_dir_for(inst["id"])))
         mods_dir = os.path.join(self.game_dir_for(inst["id"]), "mods")
@@ -2164,8 +1941,7 @@ class MainWindow(QMainWindow):
                 msg = lan_tools.install_online_mod(
                     slug, gv, loader, mods_dir, progress_callback=progress_cb)
             except Exception as e:
-                status_cb(f"安装失败:{type(e).__name__}: {e}")
-                return
+                raise RuntimeError(f"安装失败:{type(e).__name__}: {e}") from e
             status_cb(msg)
 
         self._run_download(worker)
@@ -2204,8 +1980,7 @@ class MainWindow(QMainWindow):
                     self.game_dir_for(inst["id"]), inst["loader"], inst["base"],
                     progress_callback=progress_cb)
             except Exception as e:
-                status_cb(f"下载失败:{e}")
-                return
+                raise RuntimeError(f"下载失败:{e}") from e
             status_cb(f"bridge-mod 已安装:{fn}\n"
                       "重进世界后即可用本地指令口(无需对局域网开放)。")
 
@@ -2222,11 +1997,10 @@ class MainWindow(QMainWindow):
                                         inst["loader"], mods_dir,
                                         progress_callback=progress_cb)
             except Exception as e:
-                status_cb(f"下载失败:{e}")
-                return
+                raise RuntimeError(f"下载失败:{e}") from e
             if not filename:
                 status_cb(f"没有 {inst['base']}+{inst['loader']} 的版本,换个版本试试")
-                return
+                return False
             # 装好 → 自动写 RCON 配置
             from game_command import ensure_rcon_config
             cfg = ensure_rcon_config(self.game_dir_for(inst["id"]))
@@ -2300,8 +2074,48 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"已备份到:{out}")
 
+    def _rename_instance(self, inst):
+        """同步重命名安装目录、版本文件和继承引用。"""
+        from PySide6.QtWidgets import QInputDialog
+        from instance_metadata import rename_instance
+        if self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
+            QMessageBox.information(self, "稍等一下", "游戏或安装任务还在运行，结束后再改名吧。")
+            return
+        name, accepted = QInputDialog.getText(
+            self, "重命名实例",
+            '新名称（中文、英文、数字和空格均可）：\n'
+            '不能留空，不能包含 \\ / : * ? " < > |\n'
+            '不能以下划线开头、以句点结尾，或使用 CON、NUL、COM1 等系统保留名。\n'
+            '不能与已有实例重名。安装目录和版本文件会同步改名，存档与配置保留。',
+            QLineEdit.EchoMode.Normal, inst.get("name") or inst["id"])
+        if not accepted:
+            return
+        try:
+            rename_instance(paths.GAME_DIR, inst["id"], name.strip())
+        except (OSError, ValueError, RuntimeError) as error:
+            QMessageBox.warning(self, "名称暂时没改成", str(error))
+            return
+        new_id = name.strip()
+        if self.settings.get('last_played_instance') == inst['id']:
+            from settings import update_setting
+            self.settings['last_played_instance'] = new_id
+            try:
+                update_setting('last_played_instance', new_id)
+            except OSError as error:
+                self._log_feedback(f'实例已改名，但最近游玩记录保存失败：{error}')
+        self.refresh_instances()
+        for index in range(self.instance_list.count()):
+            item = self.instance_list.item(index)
+            if (item.data(Qt.ItemDataRole.UserRole) or {}).get('id') == new_id:
+                self.instance_list.setCurrentItem(item)
+                break
+        self.statusBar().showMessage(f"实例和安装目录已改名为：{new_id}")
+
     def _delete_instance(self, inst):
         """删除一个实例的安装文件(只删 versions/<id>，共用 gameDir 保留)。"""
+        if inst['id'] in self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
+            QMessageBox.information(self, "稍等一下", "游戏正在运行，或文件还在准备中，结束后再删除实例吧。")
+            return
         if QMessageBox.question(
                 self, "确认删除",
                 f"确定删除实例 {inst['id']} 吗?\n(只删该实例,共用文件保留)") != QMessageBox.StandardButton.Yes:
@@ -2350,10 +2164,17 @@ if __name__ == "__main__":
     from ui_style import apply_global_dark_palette
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
+    splash = startup_splash()
+    splash.show()
+    splash.showMessage("正在读取启动器设置…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                       QColor("#c9d6e2"))
+    app.processEvents()
+
     # 首次启动:还没配置过游戏目录 → 弹引导界面(选路径 + 首次配置 AI + 新手/老手)
     first = not (load_settings().get("game_dir") or "").strip()
     _auto_tutorial = False
     if first:
+        splash.hide()
         from onboarding import OnboardingDialog
         od = OnboardingDialog()
         od.exec()
@@ -2361,10 +2182,22 @@ if __name__ == "__main__":
         if getattr(od, "want_tutorial", False):
             _auto_tutorial = True
 
+        splash.show()
+        splash.showMessage("正在加载启动器组件…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                           QColor("#c9d6e2"))
+        app.processEvents()
+
+    splash.showMessage("正在加载功能模块与界面…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                       QColor("#c9d6e2"))
+    app.processEvents()
     window = MainWindow()
     window.setWindowIcon(application_icon())
+    splash.showMessage("正在扫描已有实例…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                       QColor("#c9d6e2"))
+    app.processEvents()
     window.load_versions()  # 启动时先加载一次
     window.show()
+    splash.finish(window)
     # 首次启动选了「新手」→ 自动走一遍引导式新手教程(用 QTimer 延迟到首帧后,保证控件就绪)
     if _auto_tutorial:
         QTimer.singleShot(400, lambda: _open_auto_tutorial_safe(window))

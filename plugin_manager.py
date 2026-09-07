@@ -39,6 +39,7 @@ PLUGIN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
 # ---------------- 全局注册表(插件登记的内容) ----------------
 # 各注册点 = {} 或 [],由消费方读取;插件 register() 时写入。
 TOOLS = {}            # name -> (描述, 参数schema, 处理函数)  (AI 工具)
+TOOL_POLICIES = {}    # name -> {write, confirm}，由统一执行器处理权限和确认
 SKILLS = []           # [Skill子类]                            (技能)
 LANGUAGE_PACKS = {}   # pack_id -> {"name", "pack"}            (语言包:文本覆盖)
 MAIN_TABS = []        # [(label, build_fn)]                    (主标签页,与 下载新资源/联机/设置 平级)
@@ -86,11 +87,13 @@ class PluginAPI:
 
     def set_config(self, key: str, value) -> None:
         """保存本插件自己的持久化配置；不允许直接改启动器核心设置。"""
-        self._settings[f"plugin.{self.plugin_id}.{key}"] = value
-        from settings import save_settings
-        save_settings(self._settings)
+        full_key = f"plugin.{self.plugin_id}.{key}"
+        self._settings[full_key] = value
+        from settings import update_setting
+        update_setting(full_key, value)
 
-    def register_tool(self, name, description, parameters, handler):
+    def register_tool(self, name, description, parameters, handler,
+                      write: bool = False, confirm: bool = False):
         """AI 工具。name 会加前缀 <插件id>__ 防冲突。handler(args_dict)->str。"""
         if not isinstance(name, str) or not name.replace("_", "").isalnum():
             raise ValueError("AI 工具名只能包含字母、数字和下划线")
@@ -104,6 +107,7 @@ class PluginAPI:
         if full in TOOLS:
             raise ValueError(f"AI 工具重名:{full}")
         TOOLS[full] = (description, parameters, handler)
+        TOOL_POLICIES[full] = {"write": bool(write), "confirm": bool(confirm)}
 
     def register_skill(self, skill_cls):
         """技能(Skill 子类,与 skill_manager.BUILTIN_SKILLS 同款接口)。"""
@@ -193,41 +197,50 @@ def discover_plugins_meta() -> dict:
     """扫描插件,返回 {name: {default_enabled, name, description, has_settings}}。
     只读插件模块元数据;has_settings 通过 inspect register 里是否调用 register_settings_page 判断。
     不污染全局 registry(_PLUGIN_META / TOOLS 等)。"""
+    import ast
     meta_out = {}
     for name, path in discover_plugins():
-        base = {"default_enabled": True, "name": name, "description": "", "has_settings": False}
+        base = {"default_enabled": True, "name": name, "description": "", "version": "",
+                "api_version": 0, "has_settings": False, "trust": "unsigned", "author": ""}
         try:
-            mod = _load_plugin_module(path)
-            m = _read_plugin_meta(mod)
-            # 用隔离的临时容器测"是否注册了设置页":替换 plugin 模块看到的全局注册表,
-            # 避免 register 的副作用(工具/页面/技能/语言包)泄漏到真实 registry。
-            import plugin_manager as _pm
-            saved = (_pm.TOOLS, _pm.SKILLS, _pm.LANGUAGE_PACKS,
-                     _pm.MAIN_TABS, _pm._PLUGIN_META)
-            try:
-                _pm.TOOLS, _pm.SKILLS = {}, []
-                _pm.LANGUAGE_PACKS, _pm.MAIN_TABS, _pm._PLUGIN_META = {}, [], {}
-                # 也隔离 i18n 语言包注册(register_language_pack 会写 i18n)
+            with open(path, encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source, filename=path)
+            constants = {}
+            for node in tree.body:
+                if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)):
+                    continue
+                key = node.targets[0].id
+                if key.startswith("PLUGIN_"):
+                    try:
+                        constants[key] = ast.literal_eval(node.value)
+                    except (ValueError, TypeError):
+                        pass
+            m = dict(base)
+            m.update({
+                "name": constants.get("PLUGIN_NAME") or name,
+                "description": str(constants.get("PLUGIN_DESCRIPTION") or ""),
+                "version": str(constants.get("PLUGIN_VERSION") or ""),
+                "api_version": constants.get("PLUGIN_API_VERSION", 0),
+                "default_enabled": bool(constants.get("PLUGIN_DEFAULT_ENABLED", True)),
+                "author": str(constants.get("PLUGIN_AUTHOR") or ""),
+            })
+            m["has_settings"] = any(
+                isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "register_settings_page"
+                for node in ast.walk(tree)
+            )
+            signature = constants.get("PLUGIN_SIGNATURE")
+            if signature:
                 try:
-                    import i18n as _i18n
-                    _saved_i18n = dict(_i18n._PACKS)
-                    _i18n._PACKS.clear()
+                    import plugin_sign
+                    ok, author = plugin_sign.verify_plugin(source, signature)
+                    m["trust"] = "official" if ok else (
+                        "signed_invalid" if plugin_sign.is_crypto_available() else "unsigned")
+                    m["author"] = author or m["author"]
                 except Exception:
-                    _saved_i18n = None
-                if hasattr(mod, "register"):
-                    mod.register(build_api(name))
-                m["has_settings"] = bool(_pm._PLUGIN_META.get(name, {}).get("settings_build_fn"))
-            finally:
-                (_pm.TOOLS, _pm.SKILLS, _pm.LANGUAGE_PACKS,
-                 _pm.MAIN_TABS, _pm._PLUGIN_META) = saved
-                try:
-                    if _saved_i18n is not None:
-                        import i18n as _i18n
-                        _i18n._PACKS.clear()
-                        _i18n._PACKS.update(_saved_i18n)
-                except Exception:
-                    pass
-            m["name"] = m["name"] or name
+                    m["trust"] = "unsigned"
             meta_out[name] = m
         except Exception:
             meta_out[name] = base
@@ -246,9 +259,9 @@ def plugin_is_disabled(settings: dict, name: str) -> bool:
     disabled = set(settings.get("plugins_disabled", []) or [])
     if name in disabled:
         return True
-    # 没禁用但插件默认关闭(且用户没显式启用):通过 plugins_enabled 白名单判断
-    # 逻辑见 load_all:默认关但未启用 => 禁用
-    return False
+    enabled = set(settings.get("plugins_enabled", []) or [])
+    meta = discover_plugins_meta().get(name, {})
+    return not bool(meta.get("default_enabled", True)) and name not in enabled
 
 
 def _load_plugin_module(path: str):
@@ -547,8 +560,8 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
     """启动时装载所有插件。disabled = 被禁用的插件 id 集合(显式禁用)。
     额外考虑"默认关闭"插件:PLUGIN_DEFAULT_ENABLED=False 且未被显式启用(settings['plugins_enabled'])
     的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
-    global TOOLS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS
-    TOOLS, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, [], {}, [], {}
+    global TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS
+    TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, {}, [], {}, [], {}
     LOAD_REPORTS = {}
     # 禁用集合 = 显式传入 disabled 并上 settings["plugins_disabled"](传 settings 时生效)
     disabled = set(disabled or [])

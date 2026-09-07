@@ -12,7 +12,7 @@ from PySide6.QtCore import QRectF, Qt, QPointF, QTimer
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont, QFontMetricsF, QPolygonF, QPainterPath
 from PySide6.QtWidgets import (
     QDialog, QGraphicsView, QGraphicsScene, QGraphicsItem, QLabel, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QPushButton,
+    QCheckBox, QLineEdit, QPushButton,
 )
 
 import mod_deps as md
@@ -26,11 +26,106 @@ _EDGE_COL = {
     md.INCOMPATIBLE: (QColor("#E05B5B"), Qt.PenStyle.DashLine),
 }
 _ARROW_LEN = 10.0
-_PAD = 60.0
+_PAD = 86.0
+
+
+def _node_label_lines(text: str, font: QFont, max_text_width: float = 184.0) -> list[str]:
+    """把较长 Mod 名按字符宽度拆为最多两行，保留 tooltip 作为极长名称兜底。"""
+    text = text or "(未命名 Mod)"
+    fm = QFontMetricsF(font)
+    if fm.horizontalAdvance(text) <= max_text_width:
+        return [text]
+    lines, current = [], ""
+    for char in text:
+        candidate = current + char
+        if current and fm.horizontalAdvance(candidate) > max_text_width:
+            lines.append(current)
+            current = char
+            if len(lines) == 1:
+                continue
+            break
+        current = candidate
+    if len(lines) < 2 and current:
+        lines.append(current)
+    # 两行仍放不下时，第二行省略；完整名称始终可通过 tooltip 查看。
+    consumed = sum(len(line) for line in lines)
+    if consumed < len(text):
+        lines[-1] = fm.elidedText(text[len(lines[0]):], Qt.TextElideMode.ElideRight, max_text_width)
+    return lines[:2]
+
+
+def _node_size(node: md.ModNode, font: QFont) -> tuple[float, float]:
+    fm = QFontMetricsF(font)
+    lines = _node_label_lines(node.name, font)
+    width = max(76.0, max(fm.horizontalAdvance(line) for line in lines) + 18.0)
+    return min(width, 202.0), max(28.0, len(lines) * math.ceil(fm.height()) + 10.0)
+
+
+def _fit_positions_to_scene(pos: dict, sizes: dict) -> tuple[dict, float, float]:
+    """按实际布局范围扩展场景并平移到正坐标，避免把外圈节点硬挤到边界。"""
+    if not pos:
+        return {}, 900.0, 620.0
+    min_x = min(x - sizes.get(nid, (90.0, 30.0))[0] / 2 for nid, (x, _y) in pos.items())
+    max_x = max(x + sizes.get(nid, (90.0, 30.0))[0] / 2 for nid, (x, _y) in pos.items())
+    min_y = min(y - sizes.get(nid, (90.0, 30.0))[1] / 2 for nid, (_x, y) in pos.items())
+    max_y = max(y + sizes.get(nid, (90.0, 30.0))[1] / 2 for nid, (_x, y) in pos.items())
+    shifted = {nid: (x - min_x + _PAD, y - min_y + _PAD) for nid, (x, y) in pos.items()}
+    return shifted, max(900.0, max_x - min_x + 2 * _PAD), max(620.0, max_y - min_y + 2 * _PAD)
+
+
+def _has_overlaps(pos: dict, nodes: list, sizes: dict) -> bool:
+    for i, a in enumerate(nodes):
+        for b in nodes[i + 1:]:
+            aw, ah = sizes.get(a, (90.0, 30.0)); bw, bh = sizes.get(b, (90.0, 30.0))
+            if abs(pos[a][0] - pos[b][0]) < (aw + bw) / 2 + 8 and \
+               abs(pos[a][1] - pos[b][1]) < (ah + bh) / 2 + 8:
+                return True
+    return False
+
+
+def _separate_overlaps(pos: dict, nodes: list, sizes: dict, width: float, height: float) -> None:
+    """布局收敛后的局部矩形避让，不改变网络整体的力导向结构。"""
+    for _ in range(260):
+        moved = False
+        delta = {nid: [0.0, 0.0] for nid in nodes}
+        for i, a in enumerate(nodes):
+            for j in range(i + 1, len(nodes)):
+                b = nodes[j]
+                aw, ah = sizes.get(a, (90.0, 30.0)); bw, bh = sizes.get(b, (90.0, 30.0))
+                dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
+                ox = (aw + bw) / 2 + 10.0 - abs(dx)
+                oy = (ah + bh) / 2 + 10.0 - abs(dy)
+                if ox <= 0 or oy <= 0:
+                    continue
+                moved = True
+                # 沿原有连心线微调，不按固定横纵轴塞成方格。
+                distance = math.hypot(dx, dy)
+                if distance < 0.01:
+                    angle = (i * 0.618 + j * 1.732) % (2 * math.pi)
+                    ux, uy = math.cos(angle), math.sin(angle)
+                else:
+                    ux, uy = dx / distance, dy / distance
+                push = min(max(ox, oy) / 2 + 0.35, 12.0)
+                delta[a][0] += ux * push; delta[a][1] += uy * push
+                delta[b][0] -= ux * push; delta[b][1] -= uy * push
+        for nid in nodes:
+            pos[nid][0] += delta[nid][0]
+            pos[nid][1] += delta[nid][1]
+        if not moved:
+            break
+    # 极密组件仍有少量碰撞时整体等比松开，而不是退化成方格；边的相对关系保留。
+    for _ in range(8):
+        if not _has_overlaps(pos, nodes, sizes):
+            break
+        cx = sum(pos[n][0] for n in nodes) / max(len(nodes), 1)
+        cy = sum(pos[n][1] for n in nodes) / max(len(nodes), 1)
+        for nid in nodes:
+            pos[nid][0] = cx + (pos[nid][0] - cx) * 1.13
+            pos[nid][1] = cy + (pos[nid][1] - cy) * 1.13
 
 
 def _force_layout(nodes: list, edges: list, width: float, height: float,
-                  iterations: int = 100) -> dict:
+                  sizes: dict | None = None, iterations: int = 150) -> dict:
     """轻量力导向布局(Fruchterman-Reingold 简化):返回 {mod_id: (x, y)}。
     初始按圆周分布(确定性),迭代松弛后回缩到边界。少数节点也稳定。"""
     n = len(nodes)
@@ -44,7 +139,9 @@ def _force_layout(nodes: list, edges: list, width: float, height: float,
     for i, nid in enumerate(nodes):
         ang = 2 * math.pi * i / n
         pos[nid] = [cx + r * math.cos(ang), cy + r * math.sin(ang)]
-    k = math.sqrt(width * height / n) * 0.9   # 理想边长
+    sizes = sizes or {}
+    k = math.sqrt(width * height / n) * 0.92  # 理想边长
+    temperature = k * 0.18
     for _ in range(iterations):
         disp = {nid: [0.0, 0.0] for nid in nodes}
         # 斥力
@@ -53,9 +150,22 @@ def _force_layout(nodes: list, edges: list, width: float, height: float,
             for j in range(i + 1, n):
                 b = nodes[j]
                 dx, dy = pos[a][0] - pos[b][0], pos[a][1] - pos[b][1]
-                d = math.hypot(dx, dy) or 0.01
+                # 节点不是点：把标签矩形的半宽/半高也算进最小间距。
+                aw, ah = sizes.get(a, (90.0, 30.0)); bw, bh = sizes.get(b, (90.0, 30.0))
+                need_x, need_y = (aw + bw) / 2 + 16.0, (ah + bh) / 2 + 14.0
+                if abs(dx) < need_x and abs(dy) < need_y:
+                    # 已重叠时沿更容易分开的轴额外推开，专门解决边缘节点相压。
+                    if need_x - abs(dx) < need_y - abs(dy):
+                        ux, uy = (1.0 if dx >= 0 else -1.0), 0.0
+                    else:
+                        ux, uy = 0.0, (1.0 if dy >= 0 else -1.0)
+                    push = min(k * 0.42, 70.0)
+                    disp[a][0] += ux * push; disp[a][1] += uy * push
+                    disp[b][0] -= ux * push; disp[b][1] -= uy * push
+                d = max(math.hypot(dx, dy), math.hypot(need_x, need_y) * 0.52, 0.01)
                 f = k * k / d
-                ux, uy = dx / d, dy / d
+                raw_d = math.hypot(dx, dy) or 0.01
+                ux, uy = dx / raw_d, dy / raw_d
                 disp[a][0] += ux * f; disp[a][1] += uy * f
                 disp[b][0] -= ux * f; disp[b][1] -= uy * f
         # 引力(沿边)
@@ -66,15 +176,18 @@ def _force_layout(nodes: list, edges: list, width: float, height: float,
             ux, uy = dx / d, dy / d
             disp[sa][0] -= ux * f; disp[sa][1] -= uy * f
             disp[sb][0] += ux * f; disp[sb][1] += uy * f
-        # 应用 + 限制单步位移 + 回缩到边界
+        # 应用 + 逐步冷却：早期先拉开，后期收敛，不会无限向外发散。
         for nid in nodes:
+            # 轻微向心力，避免所有外围节点长期撞在硬边界上排成一堵墙。
+            disp[nid][0] += (cx - pos[nid][0]) * 0.08
+            disp[nid][1] += (cy - pos[nid][1]) * 0.08
             dx, dy = disp[nid]
             d = math.hypot(dx, dy) or 0.01
-            step = min(d, k * 0.9)
+            step = min(d, temperature)
             pos[nid][0] += dx / d * step
             pos[nid][1] += dy / d * step
-            pos[nid][0] = max(_PAD, min(width - _PAD, pos[nid][0]))
-            pos[nid][1] = max(_PAD, min(height - _PAD, pos[nid][1]))
+        temperature *= 0.94
+    _separate_overlaps(pos, nodes, sizes, width, height)
     return {nid: (pos[nid][0], pos[nid][1]) for nid in nodes}
 
 
@@ -84,12 +197,9 @@ class _NodeItem(QGraphicsItem):
         self.node = node
         self._font = font
         fm = QFontMetricsF(font)
-        text = node.name
-        # 大型整合包节点多:宽度收紧(最短 56 / 最长 110),名字长了靠 tooltip 看全名
-        self._w = min(max(fm.horizontalAdvance(text) + 16, 56), 110)
-        self._h = 24
+        self._lines = _node_label_lines(node.name, font)
+        self._w, self._h = _node_size(node, font)
         self.setPos(x - self._w / 2, y - self._h / 2)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
         self.setToolTip(f"{node.name}  ({node.mod_id})\n"
                         f"文件:{node.file or '(缺失,未安装)'}\n"
@@ -119,8 +229,10 @@ class _NodeItem(QGraphicsItem):
         p.drawRoundedRect(self.boundingRect(), 5, 5)
         p.setPen(QColor("#ffffff"))
         p.setFont(self._font)
-        # 名字太长画不下 → 直接画省略号结尾
-        p.drawText(self.boundingRect(), Qt.AlignmentFlag.AlignCenter, self.node.name)
+        line_h = QFontMetricsF(self._font).height()
+        for i, line in enumerate(self._lines):
+            rect = QRectF(4, 4 + i * line_h, self._w - 8, line_h)
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, line)
 
 
 class _EdgeItem(QGraphicsItem):
@@ -199,9 +311,15 @@ class ModDependencyGraphDialog(QDialog):
 
     def __init__(self, inst_id: str, graph: md.ModGraph, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Mod 依赖网络 — {inst_id}")
-        self.resize(900, 660)
+        # 这是面向复杂整合包的分析工作台，而非实例详情的附属弹窗。
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setWindowTitle(f"Mod 依赖分析 — {inst_id}")
+        self.setObjectName("mod_dependency_workspace")
+        self.resize(1180, 760)
+        self.setMinimumSize(900, 620)
         self._graph = graph
+        self._focused_id = None
 
         font = QFont()
         font.setPointSize(9)
@@ -213,9 +331,17 @@ class ModDependencyGraphDialog(QDialog):
         # 画布按节点数扩大(避免几百个节点挤在一张小画布上):
         # 每 ~1 个节点大约需要边长 k ≈ sqrt(W*H/n)*0.9,这里直接按 sqrt(n) 线性放大。
         import math as _m
-        canvas_w = max(900, int(_m.sqrt(max(n, 1)) * 110))
-        canvas_h = max(620, int(_m.sqrt(max(n, 1)) * 82))
-        self._pos = _force_layout(node_ids, edge_pairs, canvas_w, canvas_h)
+        # 宽标签节点需要比“点布局”更大的平均间距；画布增大由初始 fit 负责缩放，
+        # 不会让打开图谱的第一眼更拥挤。
+        node_sizes = {nid: _node_size(node, font) for nid, node in graph.nodes.items()}
+        max_node_w = max((s[0] for s in node_sizes.values()), default=90.0)
+        max_node_h = max((s[1] for s in node_sizes.values()), default=30.0)
+        # 给长名称留足空间，但不强行按网格放大画布；相关 Mod 应优先保持相邻。
+        node_scale = _m.sqrt(max(n, 1))
+        canvas_w = max(1000, int(node_scale * 185), int(max_node_w * node_scale * 1.06 + 2 * _PAD))
+        canvas_h = max(700, int(node_scale * 140), int(max_node_h * node_scale * 4.8 + 2 * _PAD))
+        raw_pos = _force_layout(node_ids, edge_pairs, canvas_w, canvas_h, node_sizes)
+        self._pos, canvas_w, canvas_h = _fit_positions_to_scene(raw_pos, node_sizes)
 
         self.scene = QGraphicsScene(self)
         self.scene.setSceneRect(0, 0, canvas_w, canvas_h)
@@ -263,6 +389,9 @@ class ModDependencyGraphDialog(QDialog):
         zout.clicked.connect(lambda: self.view.scale(1 / 1.2, 1 / 1.2))
         clear_btn = QPushButton("取消高亮")
         clear_btn.clicked.connect(lambda: self._apply_highlight(None))
+        self.focus_only = QCheckBox("专注模式")
+        self.focus_only.setToolTip("选中节点后隐藏无关节点和连线，适合大型整合包逐块排查")
+        self.focus_only.toggled.connect(lambda _checked: self._apply_highlight(self._focused_id))
 
         top = QHBoxLayout()
         top.addWidget(self.search_edit, 1)
@@ -270,6 +399,7 @@ class ModDependencyGraphDialog(QDialog):
         top.addWidget(fit_btn)
         top.addWidget(zin)
         top.addWidget(zout)
+        top.addWidget(self.focus_only)
         top.addWidget(clear_btn)
 
         # ---- 概览 ----
@@ -284,7 +414,8 @@ class ModDependencyGraphDialog(QDialog):
         legend = QLabel(
             "● 蓝=已装  ·  ● 灰=已禁用  ·  ● 红=缺失(被依赖但没装)\n"
             "实线=必须依赖  ·  虚线=可选依赖  ·  红色虚线=不兼容冲突\n"
-            "拖拽平移、滚轮缩放;点节点高亮它和它依赖/被依赖的对象,再滚近点看细节\n"
+            "这是独立分析窗口：可保留打开并继续管理实例。拖拽平移、滚轮缩放；点节点高亮它和它依赖/被依赖的对象，"
+            "大型整合包可开启「专注模式」隐藏无关节点。\n"
             "⚠ 注意:红色「缺失」也可能是整合包**主动去掉的选装/需自行编译资源**(如 voxy 为选装、需跑编译脚本),"
             "未必真缺——结合整合包说明判断,别盲目补装。")
 
@@ -296,6 +427,7 @@ class ModDependencyGraphDialog(QDialog):
 
     # ---- 高亮:点节点 → 它 + 直接相连的节点全亮,其余变淡 ----
     def _apply_highlight(self, focus: str | None):
+        self._focused_id = focus
         nb = set()
         if focus:
             for s, t, _i in self._edge_items:
@@ -305,10 +437,10 @@ class ModDependencyGraphDialog(QDialog):
                     nb.add(s)
         for mid, item in self._items.items():
             on = focus is None or mid == focus or mid in nb
-            item.setOpacity(1.0 if on else 0.18)
+            item.setOpacity(1.0 if on else (0.0 if self.focus_only.isChecked() else 0.18))
         for s, t, item in self._edge_items:
             on = focus is None or focus in (s, t)
-            item.setOpacity(1.0 if on else 0.10)
+            item.setOpacity(1.0 if on else (0.0 if self.focus_only.isChecked() else 0.10))
 
     def _focus_node(self, mod_id: str):
         item = self._items.get(mod_id)

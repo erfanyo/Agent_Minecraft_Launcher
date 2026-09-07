@@ -393,7 +393,20 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
     def executor(name: str, args: dict) -> str:
         action_preview = ""
         undo = {}
-        if name in CONFIRM_TOOLS:
+        plugin_policy = {}
+        try:
+            import plugin_manager
+            plugin_policy = plugin_manager.TOOL_POLICIES.get(name, {})
+        except Exception:
+            pass
+        mcp_annotations = {}
+        if name in _mcp_callers:
+            entry = _mcp_callers[name]
+            if len(entry) >= 3 and isinstance(entry[2], dict):
+                mcp_annotations = entry[2]
+        mcp_write = name in _mcp_callers and mcp_annotations.get("readOnlyHint") is not True
+        needs_confirm = (name in CONFIRM_TOOLS or plugin_policy.get("confirm") or mcp_write)
+        if needs_confirm:
             from ai_action_log import preview
             action_preview = preview(name, args)
             if name == "set_setting":
@@ -415,6 +428,8 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
 
         # MCP 工具(mcp__服务器__工具)优先路由到对应 MCP 服务器
         if name in _mcp_callers:
+            if mcp_write:
+                require_launcher_write(settings)
             from mcp_client import mcp_tool_call
             return finish(mcp_tool_call(_mcp_callers, name, args))
         # create_plugin:生成启动器插件(语法校验 + 落盘 plugins/<name>.py)——写操作,需工作区写权限
@@ -436,16 +451,20 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
                         "已在 plugins/ 落盘,【重启启动器】后生效。可在 设置→插件 里启用/停用。" + note)
             return finish(f"❌ 插件生成失败:{r.get('error', '未知错误')}")
         # 插件注册的工具(plugin_manager.TOOLS)优先于内置 getattr 兜底
+        plugin_entry = None
         try:
             import plugin_manager
-            if name in plugin_manager.TOOLS:
-                _desc, _params, handler = plugin_manager.TOOLS[name]
-                try:
-                    return finish(handler(dict(args or {})))
-                except Exception as e:
-                    return finish(f"插件工具执行失败:{type(e).__name__}: {e}")
+            plugin_entry = plugin_manager.TOOLS.get(name)
         except Exception:
             pass
+        if plugin_entry is not None:
+            if plugin_policy.get("write"):
+                require_launcher_write(settings)
+            _desc, _params, handler = plugin_entry
+            try:
+                return finish(handler(dict(args or {})))
+            except Exception as e:
+                return finish(f"插件工具执行失败:{type(e).__name__}: {e}")
         # 动态查找:函数名 == 工具名,便于测试打桩与后续扩展
         fn = getattr(agent_tools, name, None)
         if fn is None:
@@ -1117,7 +1136,7 @@ class AISettingsForm(QWidget):
         self.local_model.setText(s.get("ai_local_model", ""))
         self.local_auto_dl.setChecked(bool(s.get("ai_local_auto_download", True)))
         # 通用
-        cur = s.get("ai_permission", "readonly")
+        cur = s.get("ai_permission", "launcher_write")
         idx = self.permission.findData(cur)
         self.permission.setCurrentIndex(idx if idx >= 0 else 0)
         # 权限下拉:从只读切到"工作区可写"弹二级确认+免责声明;取消则回只读
@@ -1336,7 +1355,7 @@ class AISettingsDialog(QDialog):
             "· ⚠️ 本地是小模型:只擅长直白指令,理解不了模糊描述(如\"按功能找 mod/我要个能加速熔炉的东西\"),"
             "甚至会选错工具;这类要靠云端大模型,想要稳定体验请配云端;\n"
             "· 发图片:和用哪家无关,取决于所选模型本身会不会\"看图\"(内置本地模型不支持,自动关闭);\n"
-            "文件权限:只读 = AI 只能看文件;工作区可写 = AI 只能在启动器目录里改文件。")
+            "文件权限：只读只能查看；日常可写允许装 Mod、改设置；工作区可写还允许生成插件和改源码。")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {muted_color()};")
 
@@ -1441,15 +1460,13 @@ class AIChatDock(QDockWidget):
         top_row.addSpacing(6)
         top_row.addWidget(self.local_status_label)
         top_row.addStretch()
-        top_row.addWidget(action_log_btn)
-        top_row.addWidget(undo_btn)
         top_row.addWidget(skills_btn)
 
         # 文件权限:放在输入框附近,一眼可见、一键切换(不藏进二级菜单)
         perm_btn = QPushButton("切换")
         perm_btn.setFixedWidth(44)
-        perm_btn.setToolTip("在 只读 / 工作区可写 之间切换\n"
-                            "只读 = AI 不能改任何文件;工作区可写 = AI 只能改启动器目录内的文件")
+        perm_btn.setToolTip("只读：只能查看\n日常可写：安装 Mod、改游戏和启动器设置\n"
+                            "工作区可写：还允许生成插件、修改源码")
         perm_btn.clicked.connect(self._cycle_permission)
         perm_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
@@ -1460,8 +1477,12 @@ class AIChatDock(QDockWidget):
         perm_row.setContentsMargins(2, 0, 2, 0)
         perm_row.addWidget(QLabel("文件权限:"))
         perm_row.addWidget(self.perm_label)
-        perm_row.addStretch()
         perm_row.addWidget(perm_btn)
+        perm_row.addStretch()
+        audit_row = QHBoxLayout()
+        audit_row.addStretch()
+        audit_row.addWidget(action_log_btn)
+        audit_row.addWidget(undo_btn)
         self._update_permission_label()
 
         row = QHBoxLayout()
@@ -1495,6 +1516,7 @@ class AIChatDock(QDockWidget):
         chat_lay.addLayout(top_row)            # 顶部:技能管理入口
         chat_lay.addWidget(self.history, 1)    # 历史区上下弹性伸缩
         chat_lay.addLayout(perm_row)
+        chat_lay.addLayout(audit_row)
         chat_lay.addWidget(self.img_row_widget)  # 图片缩略图 + 上下文环
         chat_lay.addLayout(row)                 # 输入行
         self.tabs.addTab(chat_tab, "💬 聊天")

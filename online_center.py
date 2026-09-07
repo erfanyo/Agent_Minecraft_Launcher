@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -33,6 +34,25 @@ from ui_style import card_btn_style, launch_btn_style, muted_color, panel_style,
 
 def _open_url(url: str):
     QDesktopServices.openUrl(QUrl(url))
+
+
+def _open_lan_bridge_settings(owner: QWidget):
+    """从联机中心直达 CLI 桥接配置；默认关闭时带用户去插件开关，而非留下死按钮。"""
+    root = owner.window()
+    settings_center = getattr(root, "settings_center", None)
+    main_tabs = getattr(root, "main_tabs", None)
+    if settings_center is None or main_tabs is None:
+        return
+    index = main_tabs.indexOf(settings_center)
+    if index >= 0:
+        main_tabs.setCurrentIndex(index)
+    if settings_center.shell.switch_by_label("插件:联机 CLI 桥接"):
+        return
+    settings_center.shell.switch_by_label(t("PLUGINS"))
+    QMessageBox.information(
+        owner, "联机 CLI 桥接",
+        "联机 CLI 桥接目前未启用。请在这里启用它并重启启动器；重启后可从联机页或设置页进入配置。",
+    )
 
 # --------------------------------------------------------------------------
 # 现有方案卡片(按场景 tab)
@@ -390,8 +410,11 @@ class RecommendWizard(QWidget):
         self.et_status.setStyleSheet(f"color: {muted_color()};")
         self.et_gen = QPushButton(t("GENERATE_ROOM_SHARE"))
         self.et_gen.clicked.connect(self._easytier_gen)
+        self.et_config = QPushButton("配置联机 CLI 桥接")
+        self.et_config.clicked.connect(lambda: _open_lan_bridge_settings(self))
         et.addWidget(self.et_status)
         et.addWidget(self.et_gen)
+        et.addWidget(self.et_config)
         self.et_key = QLineEdit()
         self.et_key.setReadOnly(True)
         self.et_key.setPlaceholderText(t("ROOM_KEY_NAME_SECRET"))
@@ -567,13 +590,15 @@ class OnlineCenter(QWidget):
         self.shell.add_section(t("HOME"), self._build_home)
         # 帮我推荐(第二步最常用,方便拿不准的玩家)
         self.shell.add_section(t("RECOMMEND"),
-                               lambda: RecommendWizard(self._view_tutorial))
+                               lambda: RecommendWizard(self._view_tutorial), lazy=True)
         # 各方案分类(左菜单一列)
         for title, items in SCHEMES:
             self.shell.add_section(title.split("(")[0].strip(),
-                                   lambda ti=title, ii=items: self._build_tab(ti, ii))
+                                   lambda ti=title, ii=items: self._build_tab(ti, ii),
+                                   lazy=True)
         # 教程与资料
-        self.shell.add_section(t("TUTORIALS"), build_tutorials_tab)
+        self.shell.add_section(t("TUTORIALS"), build_tutorials_tab, lazy=True)
+        self.shell.switch_to(0)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -631,6 +656,12 @@ class OnlineCenter(QWidget):
         c.mousePressEvent = lambda _e, u=url: _open_url(u)   # 点击卡片主题也可打开
         r = QHBoxLayout()
         r.addWidget(open_btn)
+        if name == "EasyTier":
+            bridge_btn = QPushButton("配置 CLI 桥接")
+            bridge_btn.setFixedWidth(118)
+            set_style(bridge_btn, card_btn_style)
+            bridge_btn.clicked.connect(lambda _c=False: _open_lan_bridge_settings(self))
+            r.addWidget(bridge_btn)
         r.addStretch()
         lay.addWidget(name_label)
         lay.addWidget(desc_label)

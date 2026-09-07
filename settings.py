@@ -8,14 +8,19 @@
 """
 import json
 import os
+import tempfile
+import threading
 
 from paths import CONFIG_PATH  # 与 paths.BASE_DIR 一致(打包后 = exe 旁边,便携)
+
+_SETTINGS_LOCK = threading.RLock()
 
 DEFAULTS = {
     "username": "Steve",        # 离线模式游戏名
     "memory_gb": 4,              # 给游戏分配的内存(默认 4G,整合包/Mod 多才够;设置里可改)
     "version_isolation": True,   # 版本隔离:每版本独立游戏目录
     "last_played_instance": "", # 最近一次成功启动的实例;首页启动时优先选中
+    "java_paths": {},            # Java 大版本首选路径，如 {"8": ".../java.exe"};实例设置可覆盖
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
     "language": "auto",          # 界面语言:auto(跟随系统)/ zh / en / 语言包id(如玩梗版;见 i18n.py)
@@ -75,6 +80,7 @@ DEFAULTS = {
     # 是否用官方由 mirror_strategy 决定,这里不再出现 "official"
     "mirror_source": "bmclapi",
     "custom_mirrors": [],          # 自定义镜像源列表:[{"id","name","url"}]
+    "curseforge_api_key": "",     # 仅供获批 Third-Party API Key 的开发者预览（本机保存）
     "plugin_registries": [
         # 默认填官方插件仓库(erfanyo/Agent_Minecraft_Launcher);用户可手动添加其它仓库
         {"url": "https://github.com/erfanyo/Agent_Minecraft_Launcher", "name": "erfanyo/Agent_Minecraft_Launcher"},
@@ -206,8 +212,41 @@ def _migrate_ai(data: dict, saved: dict):
 
 
 def save_settings(settings: dict) -> None:
-    """把设置写回 config.json"""
-    data = dict(DEFAULTS)
-    data.update(settings)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """原子保存配置；保留调用方旧副本里尚未包含的插件私有设置。"""
+    with _SETTINGS_LOCK:
+        current = {}
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                raw = json.load(f)
+                current = raw if isinstance(raw, dict) else {}
+        except (OSError, ValueError):
+            pass
+        data = dict(DEFAULTS)
+        data.update(settings)
+        for key, value in current.items():
+            if key.startswith("plugin.") and key not in settings:
+                data[key] = value
+        folder = os.path.dirname(os.path.abspath(CONFIG_PATH))
+        os.makedirs(folder, exist_ok=True)
+        fd, temp_path = tempfile.mkstemp(prefix="config-", suffix=".tmp", dir=folder)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, CONFIG_PATH)
+        except Exception:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+            raise
+
+
+def update_setting(key: str, value) -> dict:
+    """读取最新配置后只更新一个字段，避免不同页面用旧副本互相覆盖。"""
+    with _SETTINGS_LOCK:
+        data = load_settings()
+        data[str(key)] = value
+        save_settings(data)
+        return data

@@ -12,6 +12,7 @@
 import json
 import os
 import platform
+import shutil
 import sys
 
 from downloader import download_many, download_maven, download_with_mirror
@@ -104,8 +105,11 @@ def library_entries(d: dict) -> list:
             url = artifact.get("url") or None  # url 可能为空串 → 交给 maven 轮询
             entries.append((artifact["path"], url, artifact.get("sha1"),
                             artifact.get("size", 0)))
-        elif "name" in lib:
-            # 没有下载地址的库:按 Maven 坐标拼路径
+        elif "name" in lib and not dl:
+            # 没有 downloads 节的库:按 Maven 坐标拼路径。
+            # 旧版原版(如 1.12.2 的 jinput-platform)可能只声明 natives
+            # classifiers，没有基础 artifact；这时不能凭 name 虚构一个
+            # ``artifact-version.jar`` 下载任务，否则所有 Maven 源都会 404。
             path = _maven_path(lib["name"])
             if path:
                 entries.append((path, None, None, 0))
@@ -138,6 +142,40 @@ def _need_download(task: tuple) -> bool:
             return True  # 大小不对 = 文件坏了/没下完,重下
         return False
     return True
+
+
+def _materialize_legacy_assets(index: dict, game_dir: str) -> None:
+    """为使用 ``.lang`` 资源的旧版重建 ``assets/virtual/legacy``。
+
+    1.12.2 的语言文件与 ``pack.mcmeta`` 在 objects 哈希仓库中，但旧客户端的
+    DefaultResourcePack 需要按原始路径读取它们；没有此目录时游戏能启动，却只
+    认得 jar 内的英语，语言菜单为空。同盘优先硬链接，不额外复制资源数据。
+    """
+    objects = index.get("objects") or {}
+    if not any(name.startswith("minecraft/lang/") and name.endswith(".lang")
+               for name in objects):
+        return
+    root = os.path.join(game_dir, "assets", "virtual", "legacy")
+    for name, obj in objects.items():
+        digest = str(obj.get("hash") or "")
+        if len(digest) < 3:
+            continue
+        relative = os.path.normpath(name)
+        if relative.startswith("..") or os.path.isabs(relative):
+            continue
+        source = os.path.join(game_dir, "assets", "objects", digest[:2], digest)
+        target = os.path.join(root, relative)
+        if not os.path.isfile(source):
+            continue
+        if os.path.isfile(target) and os.path.getsize(target) == os.path.getsize(source):
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        try:
+            if os.path.exists(target):
+                os.remove(target)
+            os.link(source, target)
+        except OSError:
+            shutil.copy2(source, target)
 
 
 def install_version_files(d: dict, game_dir: str,
@@ -177,6 +215,7 @@ def install_version_files(d: dict, game_dir: str,
 
     # 2) 整理完整任务清单:依赖库 + 资源对象(索引此时已在磁盘上)
     tasks = _collect_tasks(d, game_dir)
+    index = None
     if idx_dest and os.path.exists(idx_dest):
         with open(idx_dest, encoding="utf-8") as f:
             index = json.load(f)
@@ -212,6 +251,10 @@ def install_version_files(d: dict, game_dir: str,
                          download_maven(p, de, sha1=s, progress_callback=cb)))
     d2, failures = download_many(jobs, progress_callback=progress_callback)
     downloaded += d2
+
+    # 旧版客户端的语言/资源索引需要真实路径视图；下载完成后再建，确保源对象齐全。
+    if index is not None:
+        _materialize_legacy_assets(index, game_dir)
 
     if failures and status_callback:
         status_callback(f"{len(failures)} 个文件下载失败(重跑安装会自动补齐)")
