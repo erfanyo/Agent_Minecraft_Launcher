@@ -38,6 +38,10 @@ def register(api):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addWidget(QLabel("示例标签页:插件注册的一个【主标签页】(和「下载新资源」「设置」平级)。"))
+        api.bind_ai_context(
+            w, "overview", "Hello 示例插件",
+            "这是插件 API 的演示页面。提供 hello 打招呼工具，支持自定义问候文案。",
+            provider=lambda: "当前问候文案：" + str(api.get_config("greeting", "你好")))
         return w
 
     api.register_main_tab(label="示例标签", build_fn=build_main_tab)

@@ -38,6 +38,33 @@ def register(api):
 | `get_config(key, default=None)` / `set_config(key, value)` | 读取或保存插件私有配置 | 自动使用 `plugin.<插件id>.*` 命名空间 |
 
 ### 2.1 `register_tool`
+### 图钉上下文（API v1 的兼容扩展）
+
+`api.bind_ai_context(widget, context_id, name, description, provider=None)`
+让用户从 AI Dock 拖图钉到插件控件上，固定插件说明与当前状态。
+ID 在插件内部应稳定且唯一；启动器自动加插件命名空间。
+
+```python
+api.bind_ai_context(
+    panel, "connection_status", "联机状态",
+    "展示本插件的连接状态，不代表用户授权连接或断开。",
+    provider=lambda: "当前状态：" + status_label.text(),
+)
+api.exclude_ai_context(secret_panel)  # 包括子控件，禁止固定敏感内容
+```
+
+`provider()` 在用户放下图钉时于 GUI 线程调用，必须快速返回字符串；
+不要联网、读大文件、修改状态或执行操作。省略时仅发送名称和说明。
+不要返回密钥、密码、访问令牌或不相关的私人内容。
+启动器会对快照脱敏并截断，用户发消息时才发送给所选模型。
+固定之后的内容不会随页面变化；重新固定同 ID 可更新快照。
+不需要导入启动器内部模块，不会注册工具，也不改变原有工具权限。
+这不是 Python 沙箱，无法隔离第三方插件代码本身。
+
+普通文字标签和按钮支持文字固定；输入框不自动捕获。
+控件绑定的插件描述优先于其子控件的普通文字；敏感标记优先级最高。
+
+### `register_tool` 示例
 ```python
 def register(api):
     def my_action(args: dict) -> str:

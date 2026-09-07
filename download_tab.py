@@ -63,7 +63,9 @@ class DownloadTab(QWidget):
         self.menu = QListWidget()
         self.menu.setFixedWidth(140)
         for title in ("游戏版本", "加载器", "光影 Mod", "优化 Mod"):
-            QListWidgetItem(title, self.menu)
+            item = QListWidgetItem(title, self.menu)
+            item.setData(Qt.ItemDataRole.UserRole, title)
+        self.menu.ai_pin_provider = self._pin_section
         self.menu.currentRowChanged.connect(self._switch_panel)
 
         # ---- 右侧:四个分类面板 ----
@@ -120,9 +122,42 @@ class DownloadTab(QWidget):
         self.on_start_requested.emit() if hasattr(self, "on_start_requested") else None
 
     # ================= 面板构建 =================
+    def _pin_section(self, pos):
+        item = self.menu.itemAt(self.menu.viewport().mapFromGlobal(pos))
+        if item is None:
+            return None
+        title = item.text()
+        descriptions = {"游戏版本": "选择要下载的 Minecraft 版本",
+                        "加载器": "选择原版或 Mod 加载器及其版本",
+                        "光影 Mod": "选择提供光影支持的 Mod",
+                        "优化 Mod": "选择随实例安装的性能优化 Mod"}
+        return {"id": "download-section:" + title, "kind": "download_section",
+                "name": "下载实例 · " + title, "content": descriptions.get(title, title),
+                "minecraft": self.mc or "尚未选择",
+                "note": "固定的是下载设置区域，不代表执行下载或更改选项"}
+
+    def _pin_version(self, pos):
+        item = self.version_tree.itemAt(self.version_tree.viewport().mapFromGlobal(pos))
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(data, dict):
+            return None
+        version = data.get("id")
+        if version:
+            return {"id": "mc-version:" + version, "kind": "mc_version",
+                    "name": f"MC {version} 版", "content": f"MC {version} 版",
+                    "minecraft": version, "version_type": data.get("type", ""),
+                    "note": "用户引用的游戏版本，尚未授权下载"}
+        major = data.get("__major__")
+        if major:
+            return {"id": "mc-series:" + major, "kind": "mc_version",
+                    "name": f"MC {major}.x 系列", "content": f"MC {major}.x 系列（未指定具体版本）",
+                    "recommended": data.get("recommended") or ""}
+        return None
+
     def _build_version_panel(self):
         panel = QWidget()
         self.version_tree = QTreeWidget()
+        self.version_tree.ai_pin_provider = self._pin_version
         self.version_tree.setObjectName("version_tree")
         self.version_tree.setHeaderLabel("版本")
         self.version_tree.currentItemChanged.connect(self._on_version_selected)

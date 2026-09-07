@@ -320,6 +320,12 @@ class MainWindow(QMainWindow):
         # ---- AI 助手/游戏日志:停靠在右侧,做成"标签页"(tab)形式 ----
         # 允许拖动(可浮出成子窗口)、可关闭;标签页之间点击切换显示/隐藏。
         self.ai_dock = AIChatDock(self, self.settings)
+        def log_pin(pos):
+            selected = self.log_view.textCursor().selectedText()
+            return {"id": "game-log", "name": "游戏日志选段" if selected else "最近游戏日志",
+                    "kind": "log", "content": selected.replace("\u2029", "\n") if selected
+                    else self.log_view.toPlainText()[-4000:]}
+        self.log_view.ai_pin_provider = log_pin
         self.ai_dock.setAllowedAreas(Qt.DockWidgetArea.AllDockWidgetAreas)
         self.ai_dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable
                                  | QDockWidget.DockWidgetFeature.DockWidgetFloatable

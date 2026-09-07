@@ -1517,6 +1517,9 @@ class AIChatDock(QDockWidget):
         chat_lay.addWidget(self.history, 1)    # 历史区上下弹性伸缩
         chat_lay.addLayout(perm_row)
         chat_lay.addLayout(audit_row)
+        from ai_context_pins import ContextPins
+        self.context_pins = ContextPins(self)
+        chat_lay.addWidget(self.context_pins)
         chat_lay.addWidget(self.img_row_widget)  # 图片缩略图 + 上下文环
         chat_lay.addLayout(row)                 # 输入行
         self.tabs.addTab(chat_tab, "💬 聊天")
@@ -2500,6 +2503,11 @@ class AIChatDock(QDockWidget):
             self._append_system(f"🎮 {result}")
             return
         self._append_user(text + (f"  [📷×{len(images)}]" if images else ""))
+        pin_context = self.context_pins.message()
+        if pin_context:
+            self._append_system("📍 本条消息附带固定对象快照：" +
+                                ", ".join(d.get("name", "参考对象") for d, _ in self.context_pins.records))
+            text += pin_context
         self._append_system("⏳ 正在请求 AI...")
         # 无图片时 content 保持纯字符串(省 token、兼容老接口);有图片才用多模态 list
         # (OpenAI 兼容 data URL 格式;模型不支持视觉会报错提示)
@@ -2548,7 +2556,7 @@ class AIChatDock(QDockWidget):
                     from task_router import route, match_rule
                     strategy = str(self.settings.get("ai_strategy", "local_first") or "local_first")
                     # 追问降级:上一轮是规则/chat 作答 → 本轮 follow_up=True,强制转模型
-                    follow_up = bool(getattr(self, "_cheap_replied", False))
+                    follow_up = bool(getattr(self, "_cheap_replied", False)) or bool(pin_context)
                     setattr(self, "_cheap_replied", False)
                     # cloud_first 时把云端可用性告诉 route:未配云端 → 规则/本地兜底(降级链不报错)
                     have_cloud = (self._cloud_available() if strategy == "cloud_first" else True)

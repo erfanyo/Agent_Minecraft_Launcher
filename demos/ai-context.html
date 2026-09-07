@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AMCL · AI 上下文交互 Demo</title>
+<style>
+:root{color-scheme:light dark;--bg:#f4f6fa;--panel:#fff;--text:#263144;--muted:#768299;--line:#e2e7ef;--accent:#377ee8;--soft:#edf4ff;--bubble:#f0f3f8}
+@media(prefers-color-scheme:dark){:root{--bg:#171b22;--panel:#222832;--text:#e4eaf4;--muted:#96a3b8;--line:#343e4e;--accent:#8ab4ff;--soft:#293a53;--bubble:#2a323f}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.6 system-ui,'Microsoft YaHei',sans-serif;background:var(--bg);color:var(--text)}button,input,textarea,select{font:inherit;color:inherit}button{cursor:pointer;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:6px 11px;transition:background .14s,border-color .14s}button:hover{border-color:var(--accent);background:var(--soft)}button:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}header{padding:20px 28px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--line)}header strong{font-size:17px}small,.muted{color:var(--muted)}header small{margin-left:auto}.app{display:grid;grid-template-columns:minmax(420px,1fr) 425px;max-width:1360px;margin:22px auto;padding:0 24px;gap:20px;height:calc(100vh - 120px);min-height:620px}.details,.assistant{background:var(--panel);border:1px solid var(--line);border-radius:15px;overflow:hidden}.details{padding:24px;overflow:auto}.heading{display:flex;gap:12px;align-items:center}.heading h1{margin:0;font-size:25px}.cover{width:52px;height:52px;display:grid;place-items:center;background:var(--soft);border-radius:12px;font-size:27px}select{background:var(--bg);border:1px solid var(--line);padding:7px;border-radius:8px;margin-left:auto}.tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin:23px 0 18px;color:var(--muted)}.tabs span{padding-bottom:10px}.tabs .active{color:var(--accent);border-bottom:2px solid var(--accent)}.hint{background:var(--soft);border-radius:10px;padding:12px 14px;color:var(--accent);margin:16px 0}.mod{display:flex;width:100%;align-items:center;text-align:left;padding:14px;gap:14px;margin-bottom:10px;border-radius:11px}.mod.selected{border-color:var(--accent);background:var(--soft)}.mod .icon{font-size:22px;width:37px;height:37px;background:var(--bubble);display:grid;place-items:center;border-radius:8px}.mod strong{display:block}.mod small{display:block}.mod .mark{margin-left:auto;color:var(--accent)}h3{font-size:14px;margin:24px 0 10px}pre{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:9px;font:12px/1.8 monospace;padding:13px;user-select:text}.assistant{display:flex;flex-direction:column}.aihead{padding:16px 18px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.messages{flex:1;overflow:auto;padding:20px}.message{margin-bottom:20px}.message .who{font-size:12px;color:var(--accent);margin-bottom:5px}.message.user .who{color:var(--muted)}.message .body{background:var(--bubble);padding:12px 14px;border-radius:10px}.message.user .body{background:var(--soft)}.snap{font-size:11px;color:var(--muted);margin-top:7px}.composer{padding:15px;border-top:1px solid var(--line)}.context-head{display:flex;justify-content:space-between;margin-bottom:9px;font-size:12px;color:var(--muted)}.tags{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;min-height:29px}.tag{display:flex;align-items:center;max-width:100%;border:1px solid var(--line);border-radius:7px;background:var(--bg);font-size:12px}.tag.pinned{border-color:var(--accent)}.tag .name{padding:3px 6px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.tag button{padding:2px 5px;border:0;background:transparent;color:var(--muted)}textarea{resize:vertical;min-height:82px;width:100%;border:1px solid var(--line);border-radius:9px;background:var(--bg);padding:10px;outline:none}.bottom{display:flex;justify-content:space-between;align-items:center;margin-top:9px}.send{background:var(--accent);color:var(--panel);border-color:transparent}.quick{display:flex;gap:7px;margin-bottom:12px;flex-wrap:wrap}.quick button{font-size:12px}.settings{font-size:12px;color:var(--muted);margin-top:12px}.settings label{cursor:pointer}.empty{color:var(--muted);font-size:12px}.more{font-size:12px;padding:3px 7px}#notice{font-size:12px;color:var(--muted);min-height:20px}.message{animation:appear .16s ease-out}@keyframes appear{from{opacity:.6;transform:translateY(3px)}to{opacity:1;transform:none}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:950px){.app{grid-template-columns:1fr;height:auto;min-height:0}.assistant{min-height:600px}.messages{min-height:180px;max-height:400px}header small{display:none}}
+.pin-icon{width:18px;height:22px;display:block;overflow:visible}.tag button.pin-toggle{padding:3px 7px;display:grid;place-items:center;min-width:30px;min-height:30px}.pin-toggle[aria-pressed="true"]{color:var(--accent);background:var(--soft)}.pin-icon path{fill:var(--panel);stroke:currentColor;stroke-width:1.7;transition:fill .14s}.pin-icon circle{fill:currentColor}.pin-toggle[aria-pressed="true"] path,.mod .pin-icon path{fill:currentColor}.pin-toggle[aria-pressed="true"] circle,.mod .pin-icon circle{fill:var(--panel)}.mod .mark{display:flex;align-items:center;gap:8px}.tag.pinned{background:var(--soft)}
+
+.pin-source{display:flex;align-items:center;gap:7px;color:var(--accent);touch-action:none;cursor:grab}.pin-source:active{cursor:grabbing}.pin-source[aria-pressed="true"]{background:var(--soft);border-color:var(--accent)}
+body.pinning [data-pin-target]{outline:1px dashed var(--accent);outline-offset:3px}
+body.pinning [data-pin-target].drop-target{outline:2px solid var(--accent);background:var(--soft)}
+[data-pin-target]{position:relative;scroll-margin:30px}.landed{position:absolute;right:5px;top:-9px;color:var(--accent);pointer-events:none;filter:drop-shadow(0 2px 2px #0002)}
+.landed .pin-icon path{fill:currentColor}.landed .pin-icon circle{fill:var(--panel)}
+.pin-ghost{position:fixed;z-index:100;pointer-events:none;display:flex;align-items:center;gap:8px;color:var(--accent);transform:translate(-50%,-100%)}.pin-ghost .pin-icon{width:28px;height:34px}.pin-ghost span{background:var(--panel);border:1px solid var(--line);padding:4px 8px;border-radius:7px;white-space:nowrap;font-size:12px;box-shadow:0 3px 14px #0002}
+.tag .name[role="button"]{cursor:pointer}.tag .name:hover{color:var(--accent)}.locate-flash{outline:2px solid var(--accent);background:var(--soft)}
+.aihead{align-items:center;gap:12px}#pinHelp{font-size:12px;color:var(--muted);padding:9px 16px;border-bottom:1px solid var(--line)}
+</style>
+<header><strong>◈ Agent Minecraft Launcher</strong><span class="muted">/ 实例详情</span><small>交互原型 · 不调用模型，不修改游戏文件</small></header>
+<main class="app">
+<section class="details"><div class="heading" data-pin-target="instance"><div class="cover">⛏</div><div><h1 id="instanceTitle">ATM10</h1><small id="instanceInfo">Minecraft 1.21.1 · NeoForge</small></div><select id="instance" aria-label="切换实例"><option>ATM10</option><option>轻量生存</option></select></div>
+<div class="tabs"><span>概览</span><span class="active">Mod 管理</span><span>存档</span><span>运行设置</span></div>
+<div class="hint">从右侧 AI 助手拖出图钉，放到实例标题、Mod 卡片或日志上。区域亮起后松手，就钉住了。</div>
+<div style="display:flex;justify-content:space-between;margin-bottom:10px"><small>已安装 · 演示数据</small><button id="clearSelection">取消选择</button></div><div id="mods"></div>
+<h3>游戏日志片段</h3><small>选中下面的一段文字，再点“附带选区”；没有选区时附带整段演示日志。</small>
+<pre id="log" data-pin-target="log">[Render thread/INFO] Loading resource packs…
+[Render thread/WARN] Example warning: resource reload took 1240 ms
+[Render thread/INFO] Resource reload completed</pre><button id="attachLog">＋ 附带日志选区</button><p id="notice" role="status"></p>
+</section>
+<section class="assistant"><div class="aihead"><strong>✦ AI 助手</strong><button id="pinSource" class="pin-source" aria-pressed="false" title="拖到左侧对象；也可以点击后选择目标，Esc 取消">拖出图钉</button></div><div id="pinHelp" role="status">拖到哪里，就把哪里附带给 AI · Esc 取消</div><div id="messages" class="messages" aria-live="polite"><div class="message"><div class="who">AI 助手</div><div class="body">选中左边的 Mod 后，可以直接问“这个有什么用”。<br>固定两个对象，再问“这两个有什么区别”，就不用反复复制名字了。</div></div></div>
+<div class="composer"><div class="context-head"><span>本次附带 <span id="count"></span></span><label><input id="follow" type="checkbox" checked> 跟随选择</label></div><div id="tags" class="tags"></div>
+<div class="quick"><button data-prompt="这个有什么用？">这个有什么用？</button><button data-prompt="这两个有什么区别？">比较选中的对象</button><button data-prompt="禁用选中的 Mod">禁用选中的 Mod</button></div>
+<textarea id="input" placeholder="直接说“这个”就好…" aria-label="发送给 AI 的消息"></textarea><div class="bottom"><small>Enter 发送 · Shift+Enter 换行</small><button id="send" class="send">发送 ↑</button></div><div class="settings">日常可写 · 操作仍需按权限确认 · <strong>本页仅模拟</strong></div></div></section></main>
+<script>
+const $=id=>document.getElementById(id);
+function mapPin(){return '<svg class="pin-icon" viewBox="0 0 24 28" aria-hidden="true"><path d="M12 26S3 16.8 3 10a9 9 0 0 1 18 0c0 6.8-9 16-9 16Z"/><circle cx="12" cy="10" r="3.2"/></svg>'}
+const catalog=[{id:'ae2',name:'应用能源 2',icon:'◇',desc:'Applied Energistics 2 · 存储与自动化'}, {id:'rs',name:'精致存储',icon:'▦',desc:'Refined Storage · 存储与自动化'}, {id:'jade',name:'玉',icon:'◉',desc:'Jade · 方块与实体信息提示'}, {id:'jei',name:'JEI',icon:'▤',desc:'Just Enough Items · 物品与配方查询'}];
+let instance='ATM10',selection=new Set(['ae2']),pins=[],excluded=new Set(),expanded=false;
+function current(){if(!$('follow').checked)return [];return [{id:instance+':instance',name:instance,kind:'instance',instance},...catalog.filter(m=>selection.has(m.id)).map(m=>({...m,id:instance+':'+m.id,kind:'mod',instance}))].filter(x=>!excluded.has(x.id))}
+function contexts(){const seen=new Set();return [...pins,...current()].filter(x=>!seen.has(x.id)&&seen.add(x.id))}
+function label(x){return (x.kind==='instance'?'▣ ':x.kind==='log'?'▤ ':'🧩 ')+x.name+(x.kind!=='instance'?' · '+x.instance:'')}
+function render(){
+ $('instanceTitle').textContent=instance;$('instanceInfo').textContent=instance==='ATM10'?'Minecraft 1.21.1 · NeoForge':'Minecraft 1.20.1 · Forge';
+ $('mods').replaceChildren();catalog.forEach(m=>{let b=document.createElement('button');b.dataset.pinTarget=m.id;b.className='mod'+(selection.has(m.id)?' selected':'');b.setAttribute('aria-pressed',selection.has(m.id));b.innerHTML='<span class="icon"></span><span><strong></strong><small></small></span><span class="mark"></span>';b.querySelector('.icon').textContent=m.icon;b.querySelector('strong').textContent=m.name;b.querySelector('small').textContent=m.desc;b.querySelector('.mark').textContent=selection.has(m.id)?'✓':'';b.onclick=e=>{if(e.ctrlKey||e.metaKey){selection.has(m.id)?selection.delete(m.id):selection.add(m.id)}else selection=new Set([m.id]);excluded.clear();render()};$('mods').append(b)});
+ const all=contexts();$('count').textContent=all.length+' 项';$('tags').replaceChildren();(expanded?all:all.slice(0,3)).forEach(x=>{let tag=document.createElement('span');let pinned=pins.some(p=>p.id===x.id);tag.className='tag'+(pinned?' pinned':'');let name=document.createElement('span');name.className='name';name.textContent=label(x);name.title=x.text||label(x);name.setAttribute('role','button');name.tabIndex=0;name.title='点击定位 · '+(x.text||label(x));name.onclick=()=>locate(x);name.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();locate(x)}};tag.append(name);let pin=document.createElement('button');pin.innerHTML=mapPin();pin.className='pin-toggle';pin.setAttribute('aria-pressed',String(pinned));pin.title=pinned?'取消固定':'固定此上下文';pin.setAttribute('aria-label',pin.title+' '+x.name);pin.onclick=()=>{pins=pinned?pins.filter(p=>p.id!==x.id):[...pins,{...x}];render()};tag.append(pin);let remove=document.createElement('button');remove.textContent='×';remove.setAttribute('aria-label','移除 '+x.name);remove.onclick=()=>{pins=pins.filter(p=>p.id!==x.id);excluded.add(x.id);render()};tag.append(remove);$('tags').append(tag)});
+ if(all.length>3){let more=document.createElement('button');more.className='more';more.textContent=expanded?'收起':'还有 '+(all.length-3)+' 项';more.onclick=()=>{expanded=!expanded;render()};$('tags').append(more)}if(!all.length)$('tags').textContent='不附带选择内容';paintPins();
+}
+function message(who,text,snapshot){let el=document.createElement('div');el.className='message'+(who==='你'?' user':'');let title=document.createElement('div');title.className='who';title.textContent=who;let body=document.createElement('div');body.className='body';body.textContent=text;el.append(title,body);if(snapshot){let s=document.createElement('div');s.className='snap';s.textContent='发送时附带：'+(snapshot.map(label).join(' / ')||'无');el.append(s)}$('messages').append(el);$('messages').scrollTop=$('messages').scrollHeight;return body}
+function send(){let text=$('input').value.trim();if(!text)return;const snapshot=JSON.parse(JSON.stringify(contexts()));message('你',text,snapshot);$('input').value='';const mods=snapshot.filter(x=>x.kind==='mod');if(/禁用|删除|安装/.test(text)){let body=message('AI 助手 · 操作预览',mods.length?'将模拟禁用：'+mods.map(label).join('、')+'。':'还没选中 Mod，先选一个吧。');if(mods.length){let confirm=document.createElement('button');confirm.textContent='确认（模拟）';confirm.onclick=()=>{confirm.disabled=true;message('模拟结果','已确认目标：'+mods.map(label).join('、')+'。这是演示，没有修改任何文件。')};body.append(document.createElement('br'),confirm)}return}message('AI 助手 · 模拟回复',mods.length>=2?'本次会比较 '+mods.map(label).join(' 与 ')+'。实际接入后，模型会按这些对象回答；现在切换左侧选择，也不会改变这条消息的目标。':mods.length?'我知道“这个”指的是 '+label(mods[0])+'。实际接入后，可以读取它的介绍、依赖和兼容信息，再回答你的问题。':'本次附带了 '+snapshot.length+' 项上下文。这里只展示上下文如何传递，不调用真实 AI。')}
+$('send').onclick=send;$('input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}};document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{$('input').value=b.dataset.prompt;$('input').focus()});$('instance').onchange=e=>{instance=e.target.value;selection.clear();excluded.clear();render()};$('follow').onchange=render;$('clearSelection').onclick=()=>{selection.clear();render()};$('attachLog').onclick=()=>{let s=window.getSelection();let text=s&&$('log').contains(s.anchorNode)&&$('log').contains(s.focusNode)?s.toString().trim():'';text=text||$('log').textContent;pins.push({id:'log:'+Date.now(),kind:'log',name:'日志选区',instance,text});$('notice').textContent='日志已固定，切换实例后也会保留；悬停标签可查看片段。';render()};render();
+
+let drag=null,armed=false,hoverTarget=null,ghost=null,suppressClick=false;
+const pinSource=$('pinSource');
+pinSource.insertAdjacentHTML('afterbegin',mapPin());
+function resolveTarget(element){
+ const key=element.dataset.pinTarget;
+ if(key==='instance')return {id:instance+':instance',name:instance,kind:'instance',instance};
+ if(key==='log')return {id:instance+':log',name:'游戏日志',kind:'log',instance,text:$('log').textContent};
+ const mod=catalog.find(m=>m.id===key);
+ return mod?{...mod,id:instance+':'+key,kind:'mod',instance}:null;
+}
+function paintPins(){
+ document.querySelectorAll('[data-pin-target]').forEach(el=>{
+  el.querySelectorAll('.landed').forEach(p=>p.remove());
+  const target=resolveTarget(el);
+  if(target&&pins.some(p=>p.id===target.id)){
+   const marker=document.createElement('span');marker.className='landed';marker.innerHTML=mapPin();marker.title='已固定';el.append(marker);
+  }
+ });
+}
+function locate(context){
+ if(instance!==context.instance){instance=context.instance;$('instance').value=instance;selection.clear();excluded.clear();render()}
+ const key=context.kind==='instance'?'instance':context.kind==='log'?'log':context.id.slice(context.instance.length+1);
+ const target=[...document.querySelectorAll('[data-pin-target]')].find(el=>el.dataset.pinTarget===key);
+ if(!target){$('pinHelp').textContent='目标暂时找不到了，标签内容仍然保留。';return}
+ target.scrollIntoView({block:'center',behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
+ target.classList.add('locate-flash');setTimeout(()=>target.classList.remove('locate-flash'),900);
+ $('pinHelp').textContent='已定位：'+label(context);
+}
+function highlight(x,y){
+ if(hoverTarget)hoverTarget.classList.remove('drop-target');
+ hoverTarget=document.elementFromPoint(x,y)?.closest('[data-pin-target]')||null;
+ if(hoverTarget)hoverTarget.classList.add('drop-target');
+ if(ghost){ghost.style.left=x+'px';ghost.style.top=(y-4)+'px';ghost.querySelector('span').textContent=hoverTarget?'松手固定 · '+resolveTarget(hoverTarget).name:'这里暂时不能固定'}
+}
+function endPin(){
+ if(hoverTarget)hoverTarget.classList.remove('drop-target');
+ hoverTarget=null;drag=null;armed=false;ghost?.remove();ghost=null;
+ document.body.classList.remove('pinning');pinSource.setAttribute('aria-pressed','false');
+}
+function land(element){
+ const target=resolveTarget(element);if(!target)return;
+ if(!pins.some(p=>p.id===target.id))pins.push(target);
+ excluded.delete(target.id);
+ endPin();render();$('pinHelp').textContent='已钉住：'+label(target)+'。点击下方标签可以返回这里。';
+}
+pinSource.addEventListener('pointerdown',e=>{
+ if(e.button!==0)return;
+ drag={id:e.pointerId,x:e.clientX,y:e.clientY,moved:false};
+ pinSource.setPointerCapture(e.pointerId);
+});
+pinSource.addEventListener('pointermove',e=>{
+ if(!drag)return;
+ if(!drag.moved&&Math.hypot(e.clientX-drag.x,e.clientY-drag.y)>5){
+  drag.moved=true;document.body.classList.add('pinning');pinSource.setAttribute('aria-pressed','true');
+  ghost=document.createElement('div');ghost.className='pin-ghost';ghost.innerHTML=mapPin()+'<span></span>';document.body.append(ghost);
+ }
+ if(drag.moved){e.preventDefault();highlight(e.clientX,e.clientY)}
+});
+pinSource.addEventListener('pointerup',e=>{
+ if(!drag)return;
+ const moved=drag.moved;
+ if(moved){
+  highlight(e.clientX,e.clientY);const target=hoverTarget;
+  suppressClick=true;setTimeout(()=>suppressClick=false,0);
+  if(target)land(target);else{endPin();$('pinHelp').textContent='这里暂时还不能固定，试试有描边的实例、Mod 或日志。'}
+ }else drag=null;
+ if(pinSource.hasPointerCapture(e.pointerId))pinSource.releasePointerCapture(e.pointerId);
+});
+pinSource.addEventListener('pointercancel',()=>{endPin();$('pinHelp').textContent='已取消固定。'});
+pinSource.addEventListener('click',()=>{
+ if(suppressClick)return;
+ if(armed){endPin();return}
+ armed=true;document.body.classList.add('pinning');pinSource.setAttribute('aria-pressed','true');
+ $('pinHelp').textContent='点击左侧一个对象即可固定，按 Esc 取消。';
+});
+document.addEventListener('click',e=>{
+ if(!armed||pinSource.contains(e.target))return;
+ const target=e.target.closest('[data-pin-target]');
+ if(target){e.preventDefault();e.stopPropagation();land(target)}
+},true);
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){endPin();$('pinHelp').textContent='已取消固定。'}});
+window.addEventListener('blur',endPin);
+paintPins();
+
+</script>
+</html>

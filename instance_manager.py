@@ -155,6 +155,10 @@ class InstanceManagerDialog(QWidget):
             f"目录: {inst.inst_dir}<br><br>"
             f"Mod 数: {len(inst._mod_files())} · 存档: {len(inst._save_names())}")
         info.setWordWrap(True)
+        snapshot = {"id": self.inst_dir, "name": self.inst_id, "kind": "instance",
+                    "instance": self.inst_id, "directory": self.inst_dir,
+                    "minecraft": self._inst_base, "loader": self._inst_loader or "vanilla"}
+        info.ai_pin_provider = lambda pos, data=snapshot: dict(data)
         info.setStyleSheet("font-size: 14px;")
         launch_btn = QPushButton("▶ 启动游戏")
         open_btn = QPushButton("打开实例目录")
@@ -473,6 +477,19 @@ class InstanceManagerDialog(QWidget):
     def _build_mods_tab(self) -> QWidget:
         tab = QWidget()
         self.mods_list = self._dir_list_widget()
+        pin_instance, pin_directory = self.inst_id, self.inst_dir
+        pin_base, pin_loader = self._inst_base, self._inst_loader or "vanilla"
+        pin_list = self.mods_list
+        def mod_pin(pos):
+            item = pin_list.itemAt(pin_list.viewport().mapFromGlobal(pos))
+            if item is None:
+                return None
+            filename = str(item.data(Qt.ItemDataRole.UserRole) or item.text())
+            return {"id": os.path.join(pin_directory, "mods", filename),
+                    "name": filename, "kind": "mod", "instance": pin_instance,
+                    "minecraft": pin_base, "loader": pin_loader,
+                    "directory": pin_directory, "filename": filename}
+        self.mods_list.ai_pin_provider = mod_pin
         self.mods_list._on_drop = self._drop_to_mods   # 拖文件到 mods 列表 → 拷进 mods 目录
         enable_btn = QPushButton("启用所选")
         disable_btn = QPushButton("禁用所选")
@@ -495,7 +512,7 @@ class InstanceManagerDialog(QWidget):
             row.addWidget(b)
         row.addStretch()
 
-        hint = QLabel("勾选 = 启用;禁用 = 把 .jar 改名为 .jar.disabled(游戏会跳过它,随时可改回)")
+        hint = QLabel("选中后可启用或禁用；按 Ctrl / Shift 多选。禁用不会删除文件。悬停卡片可查看完整名称。")
         hint.setStyleSheet(hint_style())
 
         layout = QVBoxLayout(tab)
@@ -516,6 +533,8 @@ class InstanceManagerDialog(QWidget):
             from ui_style import text_color, muted_color
             item.setForeground(QColor(muted_color()) if disabled else QColor(text_color()))
             self.mods_list.addItem(item)
+        from installed_resource_cards import load_cards
+        load_cards(self.mods_list, os.path.join(self.inst_dir, "mods"), self._inst_loader, self._inst_base)
 
     def _open_dep_graph(self):
         """「Mod 依赖网络」:后台解析依赖(带进度条)→ 打开网络图。"""
@@ -696,6 +715,8 @@ class InstanceManagerDialog(QWidget):
             return
         for name in sorted(os.listdir(dest)):
             self.pack_list.addItem(name)
+        from installed_resource_cards import load_cards
+        load_cards(self.pack_list, dest)
 
     def _open_pack_dir(self, ptype: str):
         if ptype == "datapack" and not self._pack_dest_dir(ptype).endswith("datapacks"):

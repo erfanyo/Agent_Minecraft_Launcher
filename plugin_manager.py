@@ -113,6 +113,33 @@ class PluginAPI:
         """技能(Skill 子类,与 skill_manager.BUILTIN_SKILLS 同款接口)。"""
         SKILLS.append(skill_cls)
 
+    def bind_ai_context(self, widget, context_id: str, name: str, description: str, provider=None):
+        """Expose an explicit read-only pin snapshot on a plugin widget (GUI thread).
+
+        Optional provider() returns a string describing current state. Never perform
+        network requests, writes or actions here. Binding does not register tools.
+        """
+        from PySide6.QtWidgets import QWidget
+        if not isinstance(widget, QWidget):
+            raise TypeError("图钉目标必须是 QWidget")
+        if not all(isinstance(value, str) and value.strip() for value in (context_id, name, description)):
+            raise ValueError("图钉需要非空的 ID、名称和说明")
+        if provider is not None and not callable(provider):
+            raise TypeError("provider 必须可调用")
+        plugin_id = self.plugin_id
+        def snapshot(pos):
+            content = provider() if provider is not None else ""
+            if not isinstance(content, str):
+                raise TypeError("图钉 provider 必须返回字符串")
+            return {"id": f"plugin:{plugin_id}:{context_id}", "kind": "plugin",
+                    "plugin_id": plugin_id, "name": name, "description": description,
+                    "content": content}
+        widget.ai_pin_provider = snapshot
+
+    def exclude_ai_context(self, widget):
+        """Disallow pin capture for a sensitive widget and all of its children."""
+        widget.setProperty("ai_pin_sensitive", True)
+
     def register_settings_page(self, build_fn):
         """为插件注册一个【独立设置页】(build_fn() 返回 QWidget)。
         设置左菜单会为它单开一行(按插件名)。"""

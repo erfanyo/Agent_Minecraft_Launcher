@@ -402,6 +402,7 @@ class ResourceBrowser(QWidget):
 
         # ---- 结果列表 + 详情面板 ----
         self.result_list = QListWidget()
+        self.result_list.ai_pin_provider = self._pin_resource
         self.result_list.setWordWrap(True)
         self.result_list.setIconSize(QSize(44, 44))     # 资源卡片左侧显示 Mod 图标(默认 16px 太小不显眼)
         self.result_list.setSpacing(2)
@@ -792,6 +793,8 @@ class ResourceBrowser(QWidget):
         self.instance_cards_layout.takeAt(0)  # 清空"无"卡片
         for inst in instances:
             card = QPushButton(inst["label"])
+            snapshot = self._instance_pin_snapshot(inst)
+            card.ai_pin_provider = lambda pos, data=snapshot: dict(data)
             card.setCheckable(True)
             card.setMinimumHeight(40)
             set_style(card, card_btn_style)
@@ -812,6 +815,15 @@ class ResourceBrowser(QWidget):
         self.cards_scroll.updateGeometry()
 
         self._sync_target_ui()
+
+    @staticmethod
+    def _instance_pin_snapshot(inst):
+        import paths
+        directory = os.path.join(paths.GAME_DIR, "versions", inst["id"])
+        return {"id": directory, "kind": "instance", "instance": inst["id"],
+                "name": inst.get("name") or inst["id"], "directory": directory,
+                "minecraft": inst.get("base") or inst["id"],
+                "loader": inst.get("loader") or "vanilla"}
 
     def _apply_inst_cards(self, inst_id):
         """把卡片勾选状态对齐到某个实例(inst_id 为 None 时勾"无")。"""
@@ -1053,6 +1065,23 @@ class ResourceBrowser(QWidget):
         self._more_loading = False
         # 只给当前可见的条目按顺序懒加载图标(用户没看到的先不拉不存)
         self._icon_visibility_timer.start(80)
+
+    def _pin_resource(self, pos):
+        item = self.result_list.itemAt(self.result_list.viewport().mapFromGlobal(pos))
+        hit = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(hit, dict):
+            return None
+        source = hit.get("source") or "modrinth"
+        project_id = hit.get("curseforge_id") if source == "curseforge" else hit.get("project_id") or hit.get("slug")
+        if project_id is None:
+            return None
+        return {"id": f"resource:{source}:{project_id}", "kind": "resource",
+                "name": hit.get("title") or hit.get("slug") or str(project_id),
+                "source": source, "project_id": str(project_id),
+                "resource_type": self.project_type, "description": hit.get("description") or "",
+                "url": hit.get("website_url") or (f"https://modrinth.com/project/{project_id}" if source == "modrinth" else ""),
+                "target_instance": (self.selected_inst or {}).get("id") or "未选择",
+                "version_selection": "未固定具体版本，下载前需确认与目标实例兼容"}
 
     def _maybe_load_more(self, value: int = 0):
         """滚动到底附近 → 加载下一页(分页)。"""

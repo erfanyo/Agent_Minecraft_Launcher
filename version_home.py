@@ -726,6 +726,7 @@ class VersionHome(QWidget):
         lay.addLayout(gdir_row)
 
         self.instance_list = QListWidget()
+        self.instance_list.ai_pin_provider = self._pin_instance
         self.instance_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)   # 逐像素滚动,触控板更顺
         set_style(self.instance_list, list_style)
         self.instance_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -829,6 +830,20 @@ class VersionHome(QWidget):
         if item is None:
             return None
         return item.data(Qt.ItemDataRole.UserRole)
+
+    def _pin_instance(self, pos):
+        """Capture the hovered instance, not whichever row is currently selected."""
+        import os
+        import paths
+        item = self.instance_list.itemAt(self.instance_list.viewport().mapFromGlobal(pos))
+        inst = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(inst, dict) or not inst.get("id"):
+            return None
+        directory = os.path.join(paths.GAME_DIR, "versions", inst["id"])
+        return {"id": directory, "kind": "instance", "instance": inst["id"],
+                "name": inst.get("name") or inst["id"], "directory": directory,
+                "minecraft": inst.get("base") or inst["id"],
+                "loader": inst.get("loader") or "vanilla"}
 
     # ---------- 内部逻辑 ----------
     def _on_selection_changed(self, current, _previous):
