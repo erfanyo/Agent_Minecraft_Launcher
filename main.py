@@ -13,6 +13,15 @@ import os
 import shutil
 import sys
 import tempfile
+if __name__ == '__main__' and '--amcl-java-probe' in sys.argv:
+    _probe_index = sys.argv.index('--amcl-java-probe')
+    _probe_java = sys.argv[_probe_index + 1]
+    _probe_output = sys.argv[_probe_index + 2]
+    from java_manager import java_version_probe
+    _probe_major, _probe_error = java_version_probe(_probe_java)
+    with open(_probe_output, 'w', encoding='utf-8') as _probe_file:
+        json.dump({'major': _probe_major, 'error': _probe_error}, _probe_file, ensure_ascii=False)
+    raise SystemExit(0 if _probe_major else 1)
 _CI_STARTUP_SMOKE = __name__ == '__main__' and '--amcl-ci-smoke' in sys.argv
 if _CI_STARTUP_SMOKE:
     sys.argv.remove('--amcl-ci-smoke')
@@ -100,12 +109,12 @@ def application_icon() -> QIcon:
 def startup_splash() -> QSplashScreen:
     """轻量启动屏：主窗口构建期间给出确定的视觉反馈，不引入额外 UI 框架。"""
     pixmap = QPixmap(540, 300)
-    pixmap.fill(QColor("#151b24"))
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor("#26384a"))
-    painter.drawRoundedRect(18, 18, 504, 264, 18, 18)
+    painter.drawRoundedRect(1, 1, 538, 298, 20, 20)
     icon = application_icon().pixmap(QSize(58, 58))
     painter.drawPixmap(44, 58, icon)
     painter.setPen(QColor("#f2f6fb"))
@@ -113,15 +122,18 @@ def startup_splash() -> QSplashScreen:
     title_font.setPointSize(20)
     title_font.setBold(True)
     painter.setFont(title_font)
-    painter.drawText(122, 88, "Agent Minecraft Launcher")
+    painter.drawText(122, 88, "AMCL")
     painter.setPen(QColor("#aebdca"))
     sub_font = QFont()
     sub_font.setPointSize(10)
     painter.setFont(sub_font)
     painter.drawText(122, 116, "正在准备你的游戏与工具…")
     painter.end()
-    splash = QSplashScreen(pixmap)
-    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash = QSplashScreen(
+        pixmap,
+        Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint,
+    )
+    splash.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
     return splash
 
 

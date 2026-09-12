@@ -19,6 +19,7 @@ import tempfile
 import zipfile
 
 from downloader import download_file
+from os_platform.process import external_process_environment
 
 # Adoptium 免登录下载地址模板
 ADOPTIUM_API = ("https://api.adoptium.net/v3/binary/latest/{major}/ga/"
@@ -92,9 +93,10 @@ def java_version_probe(java_exe: str) -> tuple[int, str]:
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         with tempfile.TemporaryFile() as f:
-            completed = subprocess.run(
-                [java_exe, "-version"], stdout=f, stderr=subprocess.STDOUT,
-                timeout=15, creationflags=creationflags)
+            with external_process_environment() as env:
+                completed = subprocess.run(
+                    [java_exe, "-version"], stdout=f, stderr=subprocess.STDOUT,
+                    timeout=15, creationflags=creationflags, env=env)
             f.seek(0)
             text = f.read().decode("utf-8", "replace")
         returncode = int(getattr(completed, "returncode", 0) or 0)

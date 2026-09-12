@@ -3,6 +3,8 @@ from contextvars import ContextVar, copy_context
 import subprocess
 import time
 
+from os_platform.process import external_process_environment
+
 cancel_event = ContextVar('cancel_event', default=None)
 
 class TaskCancelled(BaseException):
@@ -18,7 +20,10 @@ def submit(pool, fn, *args):
 
 def run_process(command, *, timeout, capture_output=True, **kwargs):
     checkpoint()
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    supplied_env = kwargs.pop('env', None)
+    with external_process_environment(supplied_env) as env:
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, **kwargs)
     started = time.monotonic()
     try:
         while True:

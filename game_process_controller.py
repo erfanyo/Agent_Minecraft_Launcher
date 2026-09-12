@@ -8,6 +8,7 @@ import subprocess
 import threading
 
 from PySide6.QtCore import QObject, QTimer, Signal
+from os_platform.process import external_process_environment
 
 _PROCESS_EXIT = object()
 
@@ -42,16 +43,18 @@ class GameProcessController(QObject):
         import tempfile
         output = tempfile.TemporaryFile(mode='w+b') if independent else None
         try:
-            process = subprocess.Popen(
-            cmd,
-            stdout=output if independent else subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=cwd,
-            creationflags=creationflags,
-            )
+            with external_process_environment() as env:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=output if independent else subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=cwd,
+                    creationflags=creationflags,
+                    env=env,
+                )
         except Exception:
             if output:
                 output.close()
