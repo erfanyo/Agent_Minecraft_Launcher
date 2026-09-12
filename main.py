@@ -32,7 +32,7 @@ from datetime import datetime
 
 import requests
 from log_privacy import redact_text
-from download_feedback import failure_advice
+from downloader import failure_advice
 
 from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         self.online_center.setObjectName("online_center")
         self._online_tab_idx = self.main_tabs.addTab(self.online_center, t("MULTIPLAYER"))
         # 设置:与下载新资源平级；左侧按游戏/语言/个性化/系统/软件信息/AI等功能分区。
-        from settings_center import SettingsCenter
+        from settings.center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
         self.settings_center.applied.connect(self._on_settings_applied)
         self.settings_center.visual_changed.connect(self._on_visual_settings_changed)
@@ -414,18 +414,12 @@ class MainWindow(QMainWindow):
     def open_settings(self, tab: str | None = None):
         """打开设置:切换到「设置」标签卡(非模态,现为顶部标签页)。
         tab 可选 "mirror":直接切到镜像源小节(设置菜单 → 镜像源…)"""
-        from settings_dialog import SettingsDialog
         idx = self.main_tabs.indexOf(self.settings_center)
-        if idx >= 0:
-            self.main_tabs.setCurrentIndex(idx)
-            if tab == "mirror":
-                self.settings_center.shell.switch_by_label(t("MIRROR"))
+        if idx < 0:
             return
-        # 兜底:兼容未挂tab的旧路径(一般不会走到)
-        dlg = SettingsDialog(self.settings, self, tab=tab)
-        if dlg.exec():
-            self.settings = dlg.settings
-            self._on_settings_applied()
+        self.main_tabs.setCurrentIndex(idx)
+        if tab == "mirror":
+            self.settings_center.shell.switch_by_label(t("MIRROR"))
 
     def _on_settings_applied(self):
         """设置(标签卡)保存后:刷新本窗口与各处联动。"""
@@ -1530,7 +1524,7 @@ class MainWindow(QMainWindow):
     # ---- 下载 Mod 选项卡 ----
     def refresh_instances(self):
         """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的实例记录"""
-        from instance_fingerprint import fingerprint
+        from instance_catalog_service import fingerprint
         scanned_fingerprint = fingerprint(paths.GAME_DIR)
         shown = self.instance_catalog.refresh()
 
@@ -1626,7 +1620,7 @@ class MainWindow(QMainWindow):
     def _on_instance_dir_debounced(self):
         """防抖到期:确实有变动才刷新。避免 refresh→tidy→目录变动→refresh 死循环。"""
         try:
-            from instance_fingerprint import fingerprint
+            from instance_catalog_service import fingerprint
             if fingerprint(paths.GAME_DIR) == getattr(self, '_instance_fingerprint', None):
                 return
             self.refresh_instances()

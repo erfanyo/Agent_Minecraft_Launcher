@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
-from settings_center import SettingsCenter
+from settings.center import SettingsCenter
 
 
 class SettingsLayoutTests(unittest.TestCase):

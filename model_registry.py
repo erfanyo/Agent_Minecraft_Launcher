@@ -17,7 +17,7 @@
 TODO(未完成,标记待办):
   - 本地 AI 模型的"下载/管理界面"尚未接入启动器设置页,目前只有本模块的命令行/代码调用入口。
   - 接入时:下载源策略直接复用本文件的 _hf_candidates()(已跟随启动器"设置 → 镜像源"
-    的 mirror_strategy,与 Minecraft 下载同一套策略),界面部分参考 settings_dialog 的镜像源页。
+    的 mirror_strategy,与 Minecraft 下载同一套策略),界面配置位于 settings.center。
 """
 import hashlib
 import json

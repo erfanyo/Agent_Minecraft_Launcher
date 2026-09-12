@@ -43,6 +43,30 @@ class VersionTreeUiTests(unittest.TestCase):
         tab = DownloadTab(auto_load_versions=False)
         self.assertTrue(tab.version_tree.isHeaderHidden())
 
+    def test_loader_network_failure_keeps_card_available_for_retry(self):
+        tab = DownloadTab(auto_load_versions=False)
+        tab.mc = "1.21.1"
+        key, card, _arrow, _combo = next(
+            row for row in tab.loader_rows if row[0] == "neoforge")
+        tab._loader_checking.add((key, tab.mc))
+
+        tab._on_loader_availability_error(key, card, tab.mc, "offline")
+
+        self.assertTrue(card.isEnabled())
+        self.assertFalse(card.isHidden())
+        self.assertFalse((key, tab.mc) in tab._loader_checking)
+        self.assertNotIn(key, tab.loader_available)
+
+    def test_stale_loader_result_does_not_overwrite_new_minecraft_version(self):
+        tab = DownloadTab(auto_load_versions=False)
+        tab.mc = "1.21.4"
+        key, card, _arrow, _combo = next(
+            row for row in tab.loader_rows if row[0] == "neoforge")
+
+        tab._on_loader_availability(key, ["21.1.250"], card, "1.21.1")
+
+        self.assertNotIn(key, tab.loader_available)
+
 
 if __name__ == "__main__":
     unittest.main()

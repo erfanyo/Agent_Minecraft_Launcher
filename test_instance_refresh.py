@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 from instance_catalog_service import InstanceCatalogService
-from instance_fingerprint import fingerprint
+from instance_catalog_service import fingerprint
 
 
 class RefreshTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class RefreshTests(unittest.TestCase):
 
     def test_cancel_keeps_game_directory(self):
         from PySide6.QtWidgets import QApplication, QLineEdit, QFileDialog
-        from settings_center import SettingsCenter
+        from settings.center import SettingsCenter
         app = QApplication.instance() or QApplication([])
         owner = Mock()
         owner.game_dir_edit = QLineEdit('E:/test/.minecraft')

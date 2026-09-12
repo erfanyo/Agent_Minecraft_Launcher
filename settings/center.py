@@ -302,7 +302,7 @@ class SettingsCenter(QWidget):
         l.addWidget(self.animations_check)
         l.addSpacing(8)
         # 已临时弃用 / 废案功能登记
-        from deprecated_features import get_deprecated
+        from settings.deprecated import get_deprecated
         for d in get_deprecated():
             info = QLabel(f"<b>{d.get('name')}</b>  ·  状态:{d.get('status','')}<br>"
                           f"<span style='color:{muted_color()};'>{d.get('note','')}</span>")
@@ -1018,7 +1018,7 @@ class SettingsCenter(QWidget):
         translate_row = QHBoxLayout(); translate_row.addWidget(self.mod_translate_check); translate_row.addWidget(self.mod_translate_source, 1)
         l.addWidget(self.ai_form); l.addLayout(translate_row); l.addWidget(self.cloud_tool_log_check); l.addWidget(self.model_dl_btn)
         l.addWidget(self.model_dl_status); l.addWidget(hint); l.addStretch()
-        # 复用 settings_dialog 的模型下载逻辑(三态按钮)
+        # 模型下载按钮使用未下载/下载中/已就绪三态。
         self._init_model_dl_button()
         return self._wrap_scroll(w)
 

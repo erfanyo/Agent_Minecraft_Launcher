@@ -11,6 +11,28 @@ from collections.abc import Callable
 from instances import scan_instances
 
 
+def fingerprint(root):
+    """快速判断实例目录是否变化，忽略启动器生成的目录清单。"""
+    rows = []
+    versions = os.path.join(root, 'versions')
+    try:
+        with os.scandir(versions) as entries:
+            for entry in entries:
+                if entry.name.startswith('_') or not entry.is_dir():
+                    continue
+                for path in (os.path.join(entry.path, entry.name + '.json'),
+                             os.path.join(entry.path, 'amcl_instance.json'),
+                             os.path.join(versions, '_imports', entry.name + '.json')):
+                    try:
+                        stat = os.stat(path)
+                        rows.append((path, stat.st_mtime_ns, stat.st_size))
+                    except OSError:
+                        rows.append((path, None, None))
+    except OSError:
+        pass
+    return (os.path.normcase(os.path.abspath(root)), tuple(sorted(rows)))
+
+
 class InstanceCatalogService:
     def __init__(self, game_root: Callable[[], str], game_dir_for: Callable[[str], str]):
         self._game_root = game_root

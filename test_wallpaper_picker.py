@@ -6,7 +6,7 @@ from PySide6.QtCore import QMimeData, QUrl
 from PySide6.QtGui import QImage, QColor
 from PySide6.QtWidgets import QApplication
 from wallpaper_picker import WallpaperDropButton
-from settings_center import SettingsCenter
+from settings.center import SettingsCenter
 
 
 class WallpaperPickerTests(unittest.TestCase):

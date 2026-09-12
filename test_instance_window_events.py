@@ -42,7 +42,7 @@ class WindowImportTests(unittest.TestCase):
         owner.instance_catalog.refresh.return_value = []
         method, namespace = handler('refresh_instances')
         namespace['paths'] = SimpleNamespace(GAME_DIR='game')
-        with patch('instance_fingerprint.fingerprint', side_effect=['before', 'after']) as fingerprint:
+        with patch('instance_catalog_service.fingerprint', side_effect=['before', 'after']) as fingerprint:
             method(owner)
             self.assertNotEqual(owner._instance_fingerprint, fingerprint('game'))
         owner.home_panel.set_current_instances.assert_called_once_with([])

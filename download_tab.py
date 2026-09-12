@@ -59,7 +59,7 @@ class DownloadTab(QWidget):
         # 异步加载:版本/Mod 列表来自网络,全部放后台线程,UI 不卡
         self._async_cache = {}      # cache_key -> 已加载的版本列表
         self._async_tasks = set()   # 保持任务对象存活，并便于窗口关闭时统一释放
-        self._async_inflight = {}   # 同一版本查询的等待回调，防止快速切换造成重复请求
+        self._async_inflight = {}   # cache_key -> [(成功回调, 失败回调)]
 
         # ---- 左侧:同级别菜单 ----
         self.menu = QListWidget()
@@ -356,16 +356,16 @@ class DownloadTab(QWidget):
             self._request_optimize()
 
     # ================= 异步加载(网络请求不卡 UI) =================
-    def _async(self, cache_key: tuple, fetch, on_done):
+    def _async(self, cache_key: tuple, fetch, on_done, on_error=None):
         """后台线程跑网络请求 fetch(),完成后回主线程调 on_done(版本列表)。
         结果按 cache_key 缓存,第二次直接同步回调(不重复请求)。"""
         if cache_key in self._async_cache:
             on_done(self._async_cache[cache_key])
             return
         if cache_key in self._async_inflight:
-            self._async_inflight[cache_key].append(on_done)
+            self._async_inflight[cache_key].append((on_done, on_error))
             return
-        self._async_inflight[cache_key] = [on_done]
+        self._async_inflight[cache_key] = [(on_done, on_error)]
 
         task = BackgroundTask(lambda _task: fetch(), self)
         self._async_tasks.add(task)
@@ -373,14 +373,26 @@ class DownloadTab(QWidget):
         def apply_result(result):
             self._async_cache[cache_key] = result
             callbacks = self._async_inflight.pop(cache_key, [])
-            for callback in callbacks:
+            for callback, _error_callback in callbacks:
                 try:
                     callback(result)
                 except Exception:
                     pass
 
+        def apply_error(error):
+            # 网络失败不是“服务器成功返回空列表”，不能缓存，也不能据此隐藏加载器。
+            callbacks = self._async_inflight.pop(cache_key, [])
+            for callback, error_callback in callbacks:
+                try:
+                    if error_callback is not None:
+                        error_callback(error)
+                    else:
+                        callback([])
+                except Exception:
+                    pass
+
         task.succeeded.connect(apply_result)
-        task.failed.connect(lambda _error: apply_result([]))
+        task.failed.connect(apply_error)
         task.finished.connect(lambda: self._async_tasks.discard(task))
         task.start()
 
@@ -470,13 +482,14 @@ class DownloadTab(QWidget):
         combo.setEnabled(True)
         combo.setCurrentIndex(0)
 
-    def _loader_versions_of(self, key: str) -> list:
+    def _loader_versions_of(self, key: str, mc: str | None = None) -> list:
         """返回某加载器在 self.mc 下的可用版本列表(fabric/forge/neoforge)。"""
+        mc = mc or self.mc
         if key == "fabric":
-            return list_fabric_loaders(self.mc)
+            return list_fabric_loaders(mc)
         if key == "forge":
-            return list_forge_versions(self.mc)
-        return list_neoforge_versions(self.mc)
+            return list_forge_versions(mc)
+        return list_neoforge_versions(mc)
 
     def _request_loader_versions(self, key=None):
         """异步加载某加载器的版本列表(只刷 key,不重复请求其他加载器)"""
@@ -494,16 +507,24 @@ class DownloadTab(QWidget):
         combo.clear()
         combo.addItem("加载中...", None)
         combo.setEnabled(False)
-        ck = ("loader", key, self.mc)
+        requested_mc = self.mc
+        ck = ("loader", key, requested_mc)
 
         def fetch():
-            if key == "fabric":
-                return list_fabric_loaders(self.mc)
-            if key == "forge":
-                return list_forge_versions(self.mc)
-            return list_neoforge_versions(self.mc)
+            return self._loader_versions_of(key, requested_mc)
 
-        self._async(ck, fetch, lambda vs, c=combo: self._fill_loader_combo(c, vs))
+        self._async(
+            ck, fetch,
+            lambda vs, c=combo, mc=requested_mc:
+                self._fill_loader_combo(c, vs) if self.mc == mc else None,
+            lambda error, c=combo, mc=requested_mc:
+                self._fill_loader_error(c, error) if self.mc == mc else None,
+        )
+
+    def _fill_loader_error(self, combo: QComboBox, _error):
+        combo.clear()
+        combo.addItem("(获取失败，收起后重新展开即可重试)", None)
+        combo.setEnabled(False)
 
     # ================= 加载器卡片可用性(按版本决定显示哪些卡片) =================
     def _refresh_loader_cards(self):
@@ -528,26 +549,48 @@ class DownloadTab(QWidget):
             if key in self.loader_available and self.loader_available[key].get("mc") == self.mc:
                 self._apply_loader_availability(key, card, self.loader_available[key]["ok"])
                 continue
-            if key in self._loader_checking:
+            requested_mc = self.mc
+            checking_key = (key, requested_mc)
+            if checking_key in self._loader_checking:
                 continue
-            self._loader_checking.add(key)
-            ck = ("loader", key, self.mc)   # 与版本下拉复用同一 cache_key,避免重复下载
-            self._async(ck, lambda k=key: self._loader_versions_of(k),
-                        lambda vs, k=key, c=card: self._on_loader_availability(k, vs, c))
+            self._loader_checking.add(checking_key)
+            ck = ("loader", key, requested_mc)   # 与版本下拉复用同一 cache_key,避免重复下载
+            self._async(
+                ck,
+                lambda k=key, mc=requested_mc: self._loader_versions_of(k, mc),
+                lambda vs, k=key, c=card, mc=requested_mc:
+                    self._on_loader_availability(k, vs, c, mc),
+                lambda error, k=key, c=card, mc=requested_mc:
+                    self._on_loader_availability_error(k, c, mc, error),
+            )
 
-    def _on_loader_availability(self, key, versions, card):
+    def _on_loader_availability(self, key, versions, card, requested_mc=None):
         """异步检测回调:记录可用性并应用显示/隐藏。"""
-        self._loader_checking.discard(key)
+        requested_mc = requested_mc or self.mc
+        self._loader_checking.discard((key, requested_mc))
+        if self.mc != requested_mc:
+            return
         ok = bool(versions)
-        self.loader_available[key] = {"mc": self.mc, "ok": ok}
+        self.loader_available[key] = {"mc": requested_mc, "ok": ok}
         self._apply_loader_availability(key, card, ok)
         # 若当前选中的加载器变为不可用,回退到"原版",避免状态停留在隐形的加载器上
         if not ok and self.loader_key == key:
             self._select_loader(None)
 
+    def _on_loader_availability_error(self, key, card, requested_mc, _error):
+        """查询失败时保持入口可见；用户展开卡片即可重试，不伪装成不兼容。"""
+        self._loader_checking.discard((key, requested_mc))
+        if self.mc != requested_mc:
+            return
+        self.loader_available.pop(key, None)
+        self._apply_loader_availability(key, card, True)
+        card.setToolTip("暂时无法查询版本；点击卡片后展开版本列表可重试")
+
     def _apply_loader_availability(self, key, card, ok):
         card.setVisible(ok)
         card.setEnabled(ok)
+        if ok:
+            card.setToolTip("点击卡片选中该加载器")
 
     # ================= 光影 =================
     def _request_shader(self):
