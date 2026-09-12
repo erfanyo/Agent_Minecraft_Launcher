@@ -29,7 +29,8 @@ class SafetyTests(unittest.TestCase):
 
     def test_paths(self):
         with tempfile.TemporaryDirectory() as root:
-            self.assertEqual(safe_child(root, 'mods/good.jar'), os.path.join(root, 'mods', 'good.jar'))
+            expected = os.path.realpath(os.path.join(root, 'mods', 'good.jar'))
+            self.assertEqual(safe_child(root, 'mods/good.jar'), expected)
             for path in ['../escape', 'mods/../../escape', r'mods\..\escape',
                          '/absolute', 'C:/outside', 'C:relative', r'\\server\file',
                          'mods/a:stream', 'NUL.txt', 'mods/.. /escape']:
