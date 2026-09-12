@@ -215,7 +215,8 @@ def install_mod(slug: str, instance: str, version: str = "",
     gv = inst["base"]
     mods_dir = os.path.join(game_dir, "versions", instance, "mods")
     filename = download_mod(slug, gv, loader, mods_dir, version_number=version or None,
-                            progress_callback=progress_callback)
+                            progress_callback=progress_callback,
+                            strict=os.path.isfile(os.path.join(game_dir, 'diagnostic_snapshots', instance, 'constraint.json')))
     if filename:
         return f"已安装 {filename} 到 {instance}"
     return (f"错误:{slug} 没有 {gv}+{loader} 的"
@@ -257,7 +258,8 @@ def install_mods(slugs: list[str] | str, instance: str, game_dir: str | None = N
 
     def dl_one(s: str) -> str:
         slug = _resolve_slug(str(s))
-        filename = download_mod(slug, gv, loader, mods_dir, progress_callback=progress_callback)
+        filename = download_mod(slug, gv, loader, mods_dir, progress_callback=progress_callback,
+                                strict=os.path.isfile(os.path.join(_gd(game_dir), 'diagnostic_snapshots', instance, 'constraint.json')))
         if filename:
             return f"• {slug}: 已安装 {filename} ✅"
         return f"• {slug}: 错误:没有 {gv}+{loader} 的可用版本 ❌"
@@ -399,47 +401,15 @@ def backup_instance(instance: str, game_dir: str | None = None) -> str:
 
 
 def launch_game(instance: str, game_dir: str | None = None) -> str:
-    """启动某实例的游戏(写操作,需要工作区写权限)。
-    注意:这样启动的进程启动器不跟踪日志/退出,关闭游戏窗口即退出。"""
-    import os as _os
-    import subprocess
-    from java_manager import ensure_java
-    from launcher import build_launch_command, resolve_inherited_json
-    gd = _gd(game_dir)
-    inst = next((i for i in scan_instances(gd) if i["id"] == instance), None)
-    if inst is None:
-        return f"错误:没有实例 {instance}(可用 list_instances 查看)"
-    try:
-        d = resolve_inherited_json(inst["id"], gd)
-    except Exception as e:
-        return f"错误:读取 {inst['id']} 版本数据失败:{e}"
-    required_java = (d.get("javaVersion") or {}).get("majorVersion", 8)
-    try:
-        java_exe = ensure_java(_os.path.join(gd, "runtime"), required_java)
-    except Exception as e:
-        return f"错误:准备 Java 失败:{e}"
-    game_dir_run = _os.path.join(gd, "versions", inst["id"])   # PCL2 风格实例目录
-    try:
-        from settings import load_settings as _ls
-        _memory = _ls().get("memory_gb", 4)
-        cmd = build_launch_command(
-            d, game_dir_run, java_exe,
-            username="Player", memory_gb=_memory,
-            assets_dir=_os.path.join(gd, "assets"),
-            install_dir=gd)
-    except Exception as e:
-        return f"错误:构建启动命令失败:{e}"
-    # javaw:无控制台黑框
-    javaw = _os.path.join(_os.path.dirname(java_exe), "javaw.exe")
-    if _os.path.isfile(javaw):
-        cmd = [javaw] + cmd[1:]
-    creationflags = subprocess.CREATE_NO_WINDOW if _os.name == "nt" else 0
-    try:
-        p = subprocess.Popen(cmd, cwd=game_dir_run, creationflags=creationflags)
-    except Exception as e:
-        return f"错误:启动失败:{e}"
-    return (f"✅ 已启动 {inst['id']}(PID {p.pid})。"
-            f"注意:这样启动的进程启动器不跟踪日志,关闭游戏窗口即退出。")
+    from diagnostic_tools import diagnostic_launch
+    return diagnostic_launch(instance, game_dir)
+
+
+from diagnostic_tools import (snapshot_instance, restore_instance_snapshot, list_instance_snapshots,
+                              inspect_mod_jar, set_mod_enabled, observe_game,
+                              find_compatible_mod_versions, find_compatible_mod_replacement,
+                              replace_mod_version, compare_instance_snapshot,
+                              inspect_instance_core)
 
 
 def send_game_command(instance: str, command: str, game_dir: str | None = None,
@@ -613,8 +583,38 @@ def translate_mod_desc(slug: str, game_version: str = "", loader: str = "") -> s
     return head + r["text"] + note
 
 
+def repair_instance_core(instance: str, status_callback=None):
+    from instance_maintenance import perform
+    return perform(paths.GAME_DIR, instance, 'repair_core', status=status_callback)
+
+
+def complete_instance_files(instance: str, status_callback=None):
+    from instance_maintenance import perform
+    return perform(paths.GAME_DIR, instance, 'complete_files', status=status_callback)
+
+
+def reset_instance(instance: str, status_callback=None):
+    from instance_maintenance import perform
+    return perform(paths.GAME_DIR, instance, 'reset', status=status_callback)
+
+
 # 工具名 → 实现函数(供 assistant 工具调用注册)
 TOOL_FUNCS = {
+    'compare_instance_snapshot': compare_instance_snapshot,
+    'inspect_instance_core': inspect_instance_core,
+    'snapshot_instance': snapshot_instance,
+    'restore_instance_snapshot': restore_instance_snapshot,
+    'list_instance_snapshots': list_instance_snapshots,
+    'inspect_mod_jar': inspect_mod_jar,
+    'set_mod_enabled': set_mod_enabled,
+    'observe_game': observe_game,
+    'find_compatible_mod_versions': find_compatible_mod_versions,
+    'find_compatible_mod_replacement': find_compatible_mod_replacement,
+    'replace_mod_version': replace_mod_version,
+    'launch_game': launch_game,
+    'repair_instance_core': repair_instance_core,
+    'complete_instance_files': complete_instance_files,
+    'reset_instance': reset_instance,
     "list_instances": list_instances,
     "list_mods": list_mods,
     "search_mods": search_mods,

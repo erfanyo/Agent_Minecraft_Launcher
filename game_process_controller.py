@@ -29,7 +29,9 @@ class GameProcessController(QObject):
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def start(self, command: list[str], java_exe: str, cwd: str):
+    def start(self, command: list[str], java_exe: str, cwd: str, independent=False):
+        from instance_maintenance import assert_not_maintaining
+        assert_not_maintaining()
         if self.is_running:
             raise RuntimeError("游戏进程已经在运行")
         cmd = list(command)
@@ -37,22 +39,40 @@ class GameProcessController(QObject):
         if os.path.isfile(javaw):
             cmd = [javaw] + cmd[1:]
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        process = subprocess.Popen(
+        import tempfile
+        output = tempfile.TemporaryFile(mode='w+b') if independent else None
+        try:
+            process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
+            stdout=output if independent else subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
             cwd=cwd,
             creationflags=creationflags,
-        )
+            )
+        except Exception:
+            if output:
+                output.close()
+            raise
         self.process = process
         self._accept_events = True
         self._lines = queue.Queue()
-        threading.Thread(target=self._read, args=(process,), daemon=True).start()
+        if independent:
+            # Child inherits a file handle, not a pipe whose reader dies with AMCL.
+            # Qt logs are unavailable in this mode; Minecraft still writes latest.log.
+            output.close()
+            threading.Thread(target=self._wait_only, args=(process,), daemon=True).start()
+        else:
+            threading.Thread(target=self._read, args=(process,), daemon=True).start()
         self._timer.start()
         return process
+
+    def _wait_only(self, process):
+        code = process.wait()
+        if self._accept_events:
+            self._lines.put((_PROCESS_EXIT, code))
 
     def _read(self, process) -> None:
         stream = process.stdout

@@ -80,14 +80,12 @@ def java_major(java_exe: str) -> int:
     检测时不弹控制台黑窗口(CREATE_NO_WINDOW)。"""
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        ver_file = os.path.join(tempfile.gettempdir(), "aml_java_ver.txt")
-        with open(ver_file, "wb") as f:
+        with tempfile.TemporaryFile() as f:
             subprocess.run([java_exe, "-version"], stdout=f,
                            stderr=subprocess.STDOUT, timeout=15,
                            creationflags=creationflags)
-        with open(ver_file, "rb") as f:
+            f.seek(0)
             text = f.read().decode("utf-8", "replace")
-        os.remove(ver_file)
         return parse_java_major(text)
     except Exception:
         return 0
@@ -111,31 +109,94 @@ def find_java(runtime_dir: str, min_major: int,
     return _pick_compatible_java(candidates, min_major, max_major)
 
 
+def _java_search_roots() -> list[str]:
+    """Common install collections; never recursively search entire disks."""
+    roots = []
+    program_dirs = [os.environ.get(key, '') for key in
+                    ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)')]
+    if os.name == 'nt':
+        import ctypes
+        for letter in 'ABCDEFGHIJKLMNOPQRSTUVWXYZ':
+            drive = letter + ':\\'
+            if ctypes.windll.kernel32.GetDriveTypeW(drive) == 3:  # Local fixed disks only.
+                roots.extend(os.path.join(drive, part) for part in
+                             ('Java', 'JDK', 'programs/Java', 'programs/JDK',
+                              'tools/Java', 'tools/JDK'))
+                program_dirs.extend(os.path.join(drive, part) for part in
+                                    ('Program Files', 'Program Files (x86)'))
+    for directory in filter(None, program_dirs):
+        roots.extend(os.path.join(directory, vendor) for vendor in
+                     ('Eclipse Adoptium', 'Java', 'Microsoft', 'Amazon Corretto',
+                      'Zulu', 'BellSoft', 'Semeru'))
+    roots.extend(os.path.join(os.path.expanduser('~'), part) for part in
+                 ('.jdks', '.sdkman/candidates/java', 'scoop/apps/temurin', 'scoop/apps/openjdk'))
+    return list(dict.fromkeys(roots))
+
+
+def _registry_java_homes() -> list[str]:
+    if os.name != 'nt':
+        return []
+    import winreg
+    homes = []
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+            for product in ('Java Runtime Environment', 'Java Development Kit', 'JRE', 'JDK'):
+                try:
+                    with winreg.OpenKey(hive, 'SOFTWARE\\JavaSoft\\' + product,
+                                        0, winreg.KEY_READ | view) as key:
+                        for index in range(winreg.QueryInfoKey(key)[0]):
+                            try:
+                                with winreg.OpenKey(key, winreg.EnumKey(key, index)) as version:
+                                    home, _ = winreg.QueryValueEx(version, 'JavaHome')
+                                    if isinstance(home, str):
+                                        homes.append(home)
+                            except OSError:
+                                continue
+                except OSError:
+                    continue
+    return homes
+
+
 def _java_candidates(runtime_dir: str, extra_paths=None) -> list[str]:
     candidates = [str(path) for path in (extra_paths or []) if path]
     if os.path.isdir(runtime_dir):
         for root, _dirs, files in os.walk(runtime_dir):
             if "java.exe" in files:
                 candidates.append(os.path.join(root, "java.exe"))
-    java_home = os.environ.get("JAVA_HOME")
-    if java_home:
-        candidates.append(os.path.join(java_home, "bin", "java.exe"))
+    homes = _registry_java_homes()
+    for key in ('JAVA_HOME', 'JDK_HOME', 'JRE_HOME'):
+        if os.environ.get(key):
+            homes.append(os.environ[key].strip().strip('"'))
+    candidates.extend(os.path.join(home, 'bin', 'java.exe') for home in homes)
     for directory in os.environ.get("PATH", "").split(os.pathsep):
+        directory = os.path.expandvars(directory.strip().strip('"'))
+        if not directory:
+            continue
         executable = os.path.join(directory, "java.exe")
         if os.path.isfile(executable):
             candidates.append(executable)
-    program_files = [os.environ.get("ProgramFiles", ""),
-                     os.environ.get("ProgramW6432", ""),
-                     os.environ.get("ProgramFiles(x86)", "")]
-    for root in dict.fromkeys(path for path in program_files if path):
-        for vendor in ("Eclipse Adoptium", "Java", "Microsoft"):
-            base = os.path.join(root, vendor)
-            try:
-                for name in os.listdir(base):
-                    candidates.append(os.path.join(base, name, "bin", "java.exe"))
-            except OSError:
-                pass
-    return list(dict.fromkeys(os.path.abspath(path) for path in candidates if path))
+    roots = _java_search_roots()
+    for path in list(candidates):
+        path = os.path.expandvars(path.strip().strip('"'))
+        if os.path.isdir(path):
+            roots.append(path)
+        elif os.path.basename(os.path.dirname(path)).lower() == 'bin':
+            roots.append(os.path.dirname(os.path.dirname(os.path.dirname(path))))
+    for base in dict.fromkeys(roots):
+        candidates.append(os.path.join(base, 'bin', 'java.exe'))
+        try:
+            with os.scandir(base) as entries:
+                for entry in entries:
+                    if entry.is_dir():
+                        candidates.append(os.path.join(entry.path, 'bin', 'java.exe'))
+        except OSError:
+            pass
+    unique = {}
+    for path in candidates:
+        path = os.path.abspath(os.path.expandvars(path.strip().strip('"')))
+        if os.path.isfile(path):
+            unique.setdefault(os.path.normcase(os.path.realpath(path)), path)
+    return list(unique.values())
 
 
 def list_java_installations(runtime_dir: str, extra_paths=None) -> list[dict]:

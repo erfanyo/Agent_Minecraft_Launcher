@@ -175,15 +175,15 @@ class SendWithRing(QWidget):
         self._used = 0
         self._limit = 1
         self._color = success_color()
-        self.setFixedSize(40, 40)
+        self.setFixedSize(28, 28)
         self.setToolTip("发送(Enter) | 上下文: 0%")
         self.setStyleSheet("background: transparent;")
         self.btn = QPushButton("↑", self)
-        self.btn.setFixedSize(26, 26)
-        self.btn.move(7, 7)
+        self.btn.setFixedSize(20, 20)
+        self.btn.move(4, 4)
         self.btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn.setStyleSheet(
-            f"QPushButton{{border-radius:13px; background:#3E7CB1; color:white;"
+            f"QPushButton{{border-radius:10px; background:#3E7CB1; color:white;"
             f" font-size:15px; font-weight:bold; border:none;}}"
             f"QPushButton:hover{{background:{accent_color()};}}"
             f"QPushButton:pressed{{background:#2E5A85;}}")
@@ -339,7 +339,7 @@ class _ChatInput(QPlainTextEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(56)
+        self.setMinimumHeight(100)
         self.setMaximumHeight(160)
         # 发送按钮缩小居中,外圈环绕上下文占用环(与下载指示器同款表示)
         self.send_btn = SendWithRing(self)
@@ -388,6 +388,13 @@ class _ChatInput(QPlainTextEdit):
         # 右下角按钮顺序(从右到左):发送环 → 🛠 → 📷 → 🖼 → 🎤
         # 📷/🖼 是图片相关按钮,模型不支持多模态时隐藏(见 set_vision_enabled)
         self._corner_btns = [self.send_btn, self.test_btn, self.img_btn, self.recent_btn, self.voice_btn]
+        for button in self._corner_btns[1:]:
+            button.setFixedSize(22, 22)
+            button.setStyleSheet(
+                "QPushButton { border-radius:11px; background:rgba(128,128,128,90);"
+                " font-size:12px; border:none; padding:0px; min-width:0px; min-height:0px; }"
+                "QPushButton:hover { background:rgba(128,128,128,160); }")
+        self.setViewportMargins(0, 0, 0, 38)
         self._vision = True
         self._has_model = True            # 是否已选择模型(未选择时隐藏发送/自测按钮)
 

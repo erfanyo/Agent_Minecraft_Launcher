@@ -6,12 +6,46 @@ import tempfile
 import threading
 import unittest
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 from instance_metadata import atomic_json, rename_display
 from instances import scan_instances
 from task_context import TaskCancelled, cancel_event
 
 class InstanceTests(unittest.TestCase):
+    def test_manually_copied_instance_with_loader_named_files_is_recognized_and_healed(self):
+        from launcher import load_version_json
+        from modpack import heal_instance_json
+        with tempfile.TemporaryDirectory() as root:
+            instance = 'my-neoforge-pack'
+            loader_id = '1.21.1-NeoForge_21.1.250'
+            folder = os.path.join(root, 'versions', instance)
+            data = {
+                'id': loader_id,
+                'mainClass': 'cpw.mods.bootstraplauncher.BootstrapLauncher',
+                'arguments': {'game': ['--fml.mcVersion', '1.21.1',
+                                       '--fml.neoForgeVersion', '21.1.250']},
+                'libraries': [],
+            }
+            atomic_json(os.path.join(folder, loader_id + '.json'), data)
+            with open(os.path.join(folder, loader_id + '.jar'), 'wb') as file:
+                file.write(b'client')
+
+            items = {item['id']: item for item in scan_instances(root)}
+            self.assertEqual(items[instance]['base'], '1.21.1')
+            self.assertEqual(items[instance]['loader'], 'neoforge')
+            self.assertEqual(load_version_json(instance, root)['id'], loader_id)
+
+            self.assertTrue(heal_instance_json(instance, root))
+            expected_json = os.path.join(folder, instance + '.json')
+            expected_jar = os.path.join(folder, instance + '.jar')
+            self.assertTrue(os.path.isfile(expected_json))
+            self.assertEqual(Path(expected_jar).read_bytes(), b'client')
+            with open(expected_json, encoding='utf-8') as file:
+                self.assertEqual(json.load(file)['id'], instance)
+            self.assertTrue(os.path.isfile(os.path.join(folder, loader_id + '.json')))
+            self.assertTrue(os.path.isfile(os.path.join(folder, loader_id + '.jar')))
+
     def test_physical_rename_and_rollback(self):
         from instance_metadata import rename_instance
         with tempfile.TemporaryDirectory() as root:

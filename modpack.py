@@ -291,30 +291,44 @@ def _tuck_framework_version(version_id: str, game_dir: str) -> None:
 
 
 def heal_instance_json(instance_id: str, game_dir: str) -> bool:
-    """自愈:若实例 json 的 id 与目录名不一致,把 id 改写为目录名。
+    """自愈:为入口文件沿用加载器名称的手动实例生成同名启动入口。
 
     旧版本导入的整合包,版本 json 是从加载器版本复制来的,其 id 仍是加载器
     (如 neoforge-21.1.233),启动时 game_dir_for(d["id"]) 会解析到加载器的空白
     目录 → 白板启动、mod 全不加载。发现不一致就改写为实例目录名,让启动落到
     本实例自己的游戏目录。返回是否改过。
 
-    ⚠️ 只在该实例"自包含"(自己的目录下有 <实例名>.jar)时才改写:改写后
-    build_launch_command 会用 d["id"] 拼客户端 jar 路径(versions/<id>/<id>.jar)。
-    导入的整合包会复制自己的 jar 到 <实例名>.jar,改写安全;而"改了目录名但 jar
-    仍是旧 id"的实例没有 <实例名>.jar,改了反而指向不存在的 jar —— 不写。
+    标准入口不存在时，只接受唯一且有同名 JAR 的版本 JSON；保留原 JSON/JAR，复制
+    出 <实例名>.json/.jar 并把新 JSON 的 id 改为实例名。已有标准入口时保持旧版的
+    id 自愈行为。这样列表、游戏目录和客户端 classpath 使用同一个实例 id。
     """
     try:
         inst_dir = os.path.join(game_dir, "versions", instance_id)
         path = os.path.join(inst_dir, instance_id + ".json")
-        with open(path, encoding="utf-8") as f:
-            j = json.load(f)
-        if j.get("id") == instance_id:
+        from instances import find_instance_version_json
+        source_json = find_instance_version_json(inst_dir, instance_id)
+        if not source_json:
             return False
-        if not os.path.isfile(os.path.join(inst_dir, instance_id + ".jar")):
-            return False   # 目录下没有对应的 <实例名>.jar:不自包含,不该改 id
+        with open(source_json, encoding="utf-8") as f:
+            j = json.load(f)
+        if source_json == path and j.get("id") == instance_id:
+            return False
+        target_jar = os.path.join(inst_dir, instance_id + ".jar")
+        source_stem = os.path.splitext(os.path.basename(source_json))[0]
+        source_jar = os.path.join(inst_dir, source_stem + '.jar')
+        if not os.path.isfile(target_jar) and not os.path.isfile(source_jar):
+            return False
         j["id"] = instance_id
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(j, f, ensure_ascii=False, indent=2)
+        created_jar = False
+        if not os.path.isfile(target_jar):
+            shutil.copy2(source_jar, target_jar)
+            created_jar = True
+        try:
+            atomic_json(path, j)
+        except Exception:
+            if created_jar:
+                os.remove(target_jar)
+            raise
         return True
     except Exception:
         return False
@@ -591,7 +605,7 @@ def import_modpack(path: str, game_dir: str,
         if base_instance and base_instance != mc:
             _tuck_framework_version(base_instance, game_dir)
 
-        atomic_json(safe_child(inst_dir, 'amcl_instance.json'), {'minecraft_version': mc})
+        atomic_json(safe_child(inst_dir, 'amcl_instance.json'), {'minecraft_version': mc, 'source_type': 'modpack'})
         os.unlink(state_path)
         return instance_id
     except Exception:

@@ -614,13 +614,19 @@ class VersionHome(QWidget):
         from paths import GAME_DIR as _cur_game_dir
         s = load_settings()
         cur = (s.get("game_dir") or _cur_game_dir or "").strip()
-        self.game_dir_combo.clear()
-        self.game_dir_combo.addItem(f"当前:{cur or '(默认)'}", cur)     # 0 当前
-        for p in self._game_dirs():
-            if p and p != cur:
-                self.game_dir_combo.addItem(p, p)
-        self.game_dir_combo.insertSeparator(self.game_dir_combo.count())
-        self.game_dir_combo.addItem("＋ 添加新路径…", "__add__")          # 最后一项 = 添加
+        previous = self.game_dir_combo.blockSignals(True)
+        try:
+            self.game_dir_combo.clear()
+            self.game_dir_combo.addItem(f"当前:{cur or '(默认)'}", cur)     # 0 当前
+            for p in self._game_dirs():
+                if p and p != cur:
+                    self.game_dir_combo.addItem(p, p)
+            self.game_dir_combo.insertSeparator(self.game_dir_combo.count())
+            self.game_dir_combo.addItem("＋ 添加新路径…", "__add__")          # 最后一项 = 添加
+        finally:
+            # Rebuilding selects row 0. Without blocking, currentIndexChanged calls
+            # _set_game_dir(), which rebuilds the combo again until the UI freezes.
+            self.game_dir_combo.blockSignals(previous)
 
     def _on_game_dir_changed(self, idx: int):
         data = self.game_dir_combo.itemData(idx)
@@ -634,7 +640,9 @@ class VersionHome(QWidget):
         """弹目录选择,把新路径加入历史并切换。"""
         import paths
         start = paths.GAME_DIR or paths.DEFAULT_GAME_DIR
-        d = QFileDialog.getExistingDirectory(self, "选择 MC 存储路径(.minecraft 目录)", start)
+        d = QFileDialog.getExistingDirectory(
+            self, "选择 MC 存储路径(.minecraft 目录)", start,
+            QFileDialog.Option.DontUseNativeDialog)
         if not d:
             self._fill_game_dir_combo()   # 取消 → 恢复选择
             return
@@ -661,12 +669,6 @@ class VersionHome(QWidget):
         # 刷新实例列表 / 状态栏
         try:
             self.refresh_requested.emit()
-        except Exception:
-            pass
-        try:
-            win = self.window()
-            if win is not None and hasattr(win, "refresh_instances"):
-                win.refresh_instances()
         except Exception:
             pass
 
@@ -725,7 +727,8 @@ class VersionHome(QWidget):
         gdir_row.addWidget(self.game_dir_combo, 1)
         lay.addLayout(gdir_row)
 
-        self.instance_list = QListWidget()
+        from instance_drop_list import InstanceDropList
+        self.instance_list = InstanceDropList()
         self.instance_list.ai_pin_provider = self._pin_instance
         self.instance_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)   # 逐像素滚动,触控板更顺
         set_style(self.instance_list, list_style)

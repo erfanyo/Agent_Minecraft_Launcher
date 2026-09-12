@@ -63,3 +63,8 @@ dist_061/
 
 dist_070/
 
+# 本地发布压缩包、调试报告和渲染预览
+dist_*.zip
+output/
+tmp/
+

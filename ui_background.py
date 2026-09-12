@@ -122,7 +122,7 @@ def preset_pixmap(preset_id: str, size=(1600, 900)) -> QPixmap:
     return pm
 
 
-def load_wallpaper(settings: dict) -> QPixmap | None:
+def _load_wallpaper_source(settings: dict) -> QPixmap | None:
     """按设置加载当前壁纸(返回 QPixmap;无壁纸/加载失败返回 None)。
     设置键:ui_wallpaper_source(none/preset/official/user) + 各源对应键。"""
     src = (settings or {}).get("ui_wallpaper_source", "none") or "none"
@@ -145,6 +145,82 @@ def load_wallpaper(settings: dict) -> QPixmap | None:
         # 降级:官方不可用 → 预设
         return preset_pixmap((settings or {}).get("ui_wallpaper_preset", DEFAULT_PRESET))
     return None
+
+
+_wallpaper_cache_key = None
+_wallpaper_original = None
+_wallpaper_blurred = None
+_wallpaper_blur_radius = None
+
+
+def blur_strength(settings: dict) -> int:
+    """0 disables blur; migrate the old boolean switch to its original radius."""
+    value = (settings or {}).get('ui_wallpaper_blur', 0)
+    if isinstance(value, bool):
+        return 24 if value else 0
+    try:
+        return max(0, min(80, int(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _bake_wallpaper_blur(source: QPixmap, radius: int = 24) -> QPixmap:
+    """Render an offscreen effect once; never attach a live effect to the UI."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QGraphicsScene, QGraphicsPixmapItem, QGraphicsBlurEffect
+    # Bound preprocessing cost even for 4K images. Wallpaper does not need crisp detail.
+    work = source.scaled(1600, 1600, Qt.AspectRatioMode.KeepAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation) if max(source.width(), source.height()) > 1600 else source
+    scene = QGraphicsScene()
+    item = QGraphicsPixmapItem(work)
+    scene.addItem(item)
+    effect = QGraphicsBlurEffect()
+    effect.setBlurRadius(radius)
+    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+    item.setGraphicsEffect(effect)
+    rect = QRectF(work.rect())
+    scene.setSceneRect(rect)
+    result = QPixmap(work.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    try:
+        scene.render(painter, rect, rect)
+    finally:
+        painter.end()
+    return result
+
+
+def load_wallpaper(settings: dict) -> QPixmap | None:
+    """Cache one source and its blurred variant; theme/mask/resize don't invalidate it."""
+    global _wallpaper_cache_key, _wallpaper_original, _wallpaper_blurred, _wallpaper_blur_radius
+    settings = settings or {}
+    src = settings.get('ui_wallpaper_source', 'none')
+    path = ''
+    if src in ('user', 'official'):
+        from paths import cache_dir
+        rel = settings.get('ui_wallpaper_user_path', '') if src == 'user' else os.path.join(
+            'wallpapers', f"official_{settings.get('ui_wallpaper_official_id', '')}.png")
+        if rel:
+            path = os.path.join(cache_dir(), rel)
+    try:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        stamp = None
+    key = (src, path, stamp, settings.get('ui_wallpaper_preset', DEFAULT_PRESET))
+    if key != _wallpaper_cache_key:
+        _wallpaper_original = _load_wallpaper_source(settings)
+        _wallpaper_blurred = None
+        _wallpaper_cache_key = key
+    if _wallpaper_original is None:
+        return None
+    radius = blur_strength(settings)
+    if radius == 0:
+        return _wallpaper_original
+    if _wallpaper_blurred is None or _wallpaper_blur_radius != radius:
+        _wallpaper_blurred = _bake_wallpaper_blur(_wallpaper_original, radius)
+        _wallpaper_blur_radius = radius
+    return _wallpaper_blurred
 
 
 def mask_strength(settings: dict) -> float:

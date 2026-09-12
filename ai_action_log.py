@@ -19,9 +19,47 @@ def recent_text(limit=30):
     return read_recent(limit)
 
 
-def preview(name: str, args: dict) -> str:
+def _plain_preview(name: str, args: dict) -> str:
+    instance = args.get('instance') or '当前实例'
+    enabled = bool(args.get('enabled'))
+    reason = str(args.get('reason') or '')
+    mod_change = (f'这个 Mod 是给另一个游戏版本或加载器的，当前实例不能用，所以会从本次启动中移出；'
+                  f'原文件仍会保留：“{args.get("filename") or "这个 Mod"}”。'
+                  if not enabled and reason in {'wrong_game_version', 'wrong_loader'} else
+                  f'{"恢复到本次启动" if enabled else "暂时从本次启动中移出"}“{args.get("filename") or "这个 Mod"}”；文件不会删除。')
+    summaries = {
+        'snapshot_instance': f'保存“{instance}”当前状态，方便出现问题时恢复。',
+        'restore_instance_snapshot': f'把“{instance}”恢复到之前保存的状态；现在的状态也会保留。',
+        'repair_instance_core': f'补齐“{instance}”缺少或损坏的游戏文件；存档和 Mod 会保留。',
+        'complete_instance_files': f'补齐“{instance}”运行需要的文件；存档和 Mod 会保留。',
+        'reset_instance': f'恢复“{instance}”的启动、画面和按键设置；存档和 Mod 会保留。',
+        'set_mod_enabled': mod_change,
+        'replace_mod_version': f'把“{args.get("filename") or "这个 Mod"}”换成兼容版本；旧文件会保留。',
+        'install_mod': f'给“{instance}”安装 {args.get("slug") or "这个 Mod"}。',
+        'install_mods': f'给“{instance}”安装选中的一组 Mod。',
+        'set_setting': f'把启动器设置“{args.get("key") or "指定项目"}”改为“{args.get("value", "")}”。',
+        'send_game_command': f'立即在“{instance}”的当前世界执行一条游戏指令。',
+        'install_instance': '保留当前实例，创建一个新的独立游戏实例，并下载运行所需文件。',
+        'install_modpack': '创建一个新的独立整合包实例，不覆盖当前实例。',
+        'create_plugin': '给启动器添加一项新功能；需要重启启动器后生效。',
+    }
+    return summaries.get(name, '执行完成当前任务所需的一项操作。')
+
+
+def preview(name: str, args: dict, response_style: str = 'technical') -> str:
     """返回适合确认弹窗显示的中文变更清单。"""
     args = dict(args or {})
+    if response_style == 'plain':
+        return _plain_preview(name, args)
+    if name in {'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'}:
+        scopes = {'snapshot_instance': '复制完整实例，默认锁定 MC 和加载器；需要额外磁盘空间。',
+                  'restore_instance_snapshot': '恢复指定快照，当前实例先移到保留目录；不是合并文件。',
+                  'set_mod_enabled': '改变指定 Mod 启用状态，可能影响依赖和存档内容；不删除文件。',
+                  'replace_mod_version': '下载并校验指定版本后替换旧 JAR；旧文件保留，前置不自动安装。'}
+        return scopes[name] + '\n具体参数：' + json.dumps(args, ensure_ascii=False)
+    if name in {'repair_instance_core', 'complete_instance_files', 'reset_instance'}:
+        from instance_maintenance import maintenance_preview
+        return maintenance_preview(name, args)
     if name == "install_mod":
         version = args.get("version") or "自动选择兼容最新版"
         return (f"安装 Mod\n实例：{args.get('instance', '未指定')}\n"

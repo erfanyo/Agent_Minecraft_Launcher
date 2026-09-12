@@ -1,11 +1,9 @@
 # ===== 运行时依赖(直接 pip install -r requirements.txt 即可运行) =====
 PySide6>=6.6          # GUI 框架
 requests>=2.31        # 网络请求(版本清单/Modrinth/微软认证/模型下载等)
+psutil>=5.9           # 可用内存检测、实例游戏进程峰值采样
 
 # ===== 可选依赖(不装也能运行,装了增强特定功能) =====
-# psutil —— CPU/温度采样,供「过热劝退」提示。可选:未装时自动走 Windows WMI 兜底。
-#   pip install psutil
-psutil>=5.9
 # cryptography —— 插件 ed25519 签名验签(溯源)。可选:未装时验签降级为"未审核"。
 #   pip install cryptography
 cryptography>=40

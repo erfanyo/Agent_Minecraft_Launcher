@@ -12,6 +12,13 @@ import json
 import os
 import shutil
 import sys
+if __name__ == '__main__' and '--amcl-memory-relief' in sys.argv:
+    from memory_relief import main as memory_relief_main
+    raise SystemExit(memory_relief_main(sys.argv[sys.argv.index('--amcl-memory-relief') + 1]))
+# Dispatch before importing Qt or constructing the launcher in the helper process.
+if __name__ == '__main__' and '--amcl-plugin-web-window' in sys.argv:
+    from plugin_web_worker import main as web_window_main
+    raise SystemExit(web_window_main())
 import tempfile
 import time
 from datetime import datetime
@@ -55,6 +62,7 @@ from bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
 from task_controllers import DownloadTaskController, VersionManifestController
 from background_tasks import BackgroundTask
 from assistant import AIChatDock, permission_instructions  # AI 助手(右侧停靠对话栏)
+from ai_actions import plain_language_instructions
 from download_indicator import DownloadDetailWidget, DownloadIndicator  # 左下角下载指示器
 from updater_dialog import UpdateDialog  # 检查更新对话框(独立模块)
 from download_tab import DownloadTab  # 下载新实例选项卡(左侧菜单 + 分类面板)
@@ -224,6 +232,8 @@ class MainWindow(QMainWindow):
         # 右键菜单:实例(启动/打开目录/删除)
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu)
+        from folder_instance_import import start_import
+        self.instance_list.folders_dropped.connect(lambda folders: start_import(self, folders))
 
         # ---- 主选项卡(我的实例 / 实例详情 / 下载新资源 / 联机 / 设置) ----
         self.main_tabs = QTabWidget()
@@ -245,7 +255,7 @@ class MainWindow(QMainWindow):
         self.online_center = OnlineCenter()
         self.online_center.setObjectName("online_center")
         self._online_tab_idx = self.main_tabs.addTab(self.online_center, t("MULTIPLAYER"))
-        # 设置:改成"和下载新资源平级的标签卡",左菜单(游戏/界面/AI/镜像源)+ 右面板(非模态,引导遮罩可用)
+        # 设置:与下载新资源平级；左侧按游戏/语言/个性化/系统/软件信息/AI等功能分区。
         from settings_center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
         self.settings_center.applied.connect(self._on_settings_applied)
@@ -413,10 +423,7 @@ class MainWindow(QMainWindow):
         self.settings = s
         from ui_anim import set_animations_enabled
         set_animations_enabled(s.get("ui_animations_enabled", True))
-        self.ai_dock.settings = s
-        self.ai_dock.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
-        self.ai_dock.update_local_status()   # 本地模型 provider 切换 → 刷新状态
-        self.ai_dock.maybe_preload_local()   # 切到内置本地模型 → 空闲期预热 server(§8.2)
+        self.ai_dock.apply_settings(s)
         self.skill_mgr.settings = s
         self.resource_center.set_ui_mode(s.get("ui_mode", "beginner"))
         self.refresh_instances()   # 游戏目录可能被改了,重新扫描
@@ -701,7 +708,7 @@ class MainWindow(QMainWindow):
             "你是 Agent Minecraft Launcher 启动器里内置的 AI 助手。",
             lang_instr,
             f"启动器设置: 离线游戏名 {self.settings.get('username', 'Player')},"
-            f" 内存 {self.settings.get('memory_gb', 4)}G,"
+            f" 内存 {str(self.settings.get('memory_gb')) + 'G' if self.settings.get('memory_gb') else '自动（按可用内存）'},"
             f" 版本隔离 {'开' if self.settings.get('version_isolation', True) else '关'}",
         ]
         inst = None
@@ -712,6 +719,7 @@ class MainWindow(QMainWindow):
             lines.append(f"当前选中的实例: {inst['id']}"
                          f"(加载器:{inst['loader'] or '原版'}, 基础版本:{inst['base']})")
         lines.append(permission_instructions(self.settings))
+        lines.append(plain_language_instructions(self.settings))
         # t16:不再在 system 里枚举工具名——工具 schema 由请求 body 提供(云端按需挂载),
         # 枚举既冗余(每轮多花几百 token)又会误导模型去调用未挂载的工具。
         # 技能提示:任务拆分 / 指令指南 等启用的技能注入行为指导
@@ -1011,6 +1019,7 @@ class MainWindow(QMainWindow):
     def _build_drop_overlay(self):
         """拖入文件时的覆盖层:整窗发白,提示「松手 → 尝试作为整合包安装」。"""
         ov = QWidget(self)
+        ov.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         ov.setObjectName("dropOverlay")
         ov.setStyleSheet("background: rgba(255,255,255,0.90);")
         lay = QVBoxLayout(ov)
@@ -1051,16 +1060,27 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_drop_overlay"):
             self._drop_overlay.hide()
         if e.mimeData().hasUrls() and self._on_my_instances_page():
+            folders = []
             for u in e.mimeData().urls():
                 path = u.toLocalFile()
-                if path:
+                if u.isLocalFile() and os.path.isdir(path):
+                    folders.append(path)
+                elif u.isLocalFile() and path:
                     self.install_modpack_from_path(path)
-            e.acceptProposedAction()
+            if folders:
+                from folder_instance_import import start_import
+                start_import(self, list(dict.fromkeys(folders)))
+            e.setDropAction(Qt.DropAction.CopyAction)
+            e.accept()
         else:
             e.ignore()   # 其它页面:不当作整合包,交由该页控件处理(如实例详情列表拷入文件夹)
 
     def install_modpack_from_path(self, path: str):
         """把本地的整合包文件导入成新实例(拖放入口;自动识别格式)。"""
+        if os.path.isdir(path):
+            from folder_instance_import import start_import
+            start_import(self, [path])
+            return
         from modpack import detect_modpack_format, import_modpack
         from PySide6.QtWidgets import QInputDialog
         fmt = detect_modpack_format(path)
@@ -1311,6 +1331,12 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "启动准备没完成", redact_text(error, self.settings))
 
     def _start_prepared_game(self, plan, v):
+        from memory_launch_card import offer_memory_actions
+        if offer_memory_actions(self, plan, v, self._start_game_after_memory):
+            return
+        self._start_game_after_memory(plan, v)
+
+    def _start_game_after_memory(self, plan, v, exit_after=False):
         self.dl_indicator.hide()
         d = plan.detail
         game_dir = plan.game_dir
@@ -1336,11 +1362,17 @@ class MainWindow(QMainWindow):
             self.ai_dock.stop_local_engine()
 
         try:
-            self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
+            if exit_after:
+                self.game_process = self.game_processes.start(cmd, java_exe, game_dir, independent=True)
+            else:
+                self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
         except Exception as e:
             self.statusBar().showMessage(f"启动失败: {e}")
             self.launch_btn.setEnabled(True)
             return
+
+        from memory_policy import track_process
+        track_process(self.game_process, os.path.join(paths.GAME_DIR, 'versions', v['id']))
 
         # 只在进程确实已拉起后记录，下载/Java/命令拼装失败不会污染下次默认选择。
         if self.settings.get("last_played_instance") != v["id"]:
@@ -1367,6 +1399,9 @@ class MainWindow(QMainWindow):
 
         # 记录本次运行起点,用于判断"本次是否新产生了崩溃报告"(即使退出码为 0)
         self._game_started_at = time.time()
+        if exit_after:
+            from memory_launch_card import exit_when_ready
+            exit_when_ready(self, self.game_process)
 
     def _on_game_log_line(self, line: str):
         line = redact_text(line, self.settings)
@@ -1473,6 +1508,8 @@ class MainWindow(QMainWindow):
     # ---- 下载 Mod 选项卡 ----
     def refresh_instances(self):
         """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的实例记录"""
+        from instance_fingerprint import fingerprint
+        scanned_fingerprint = fingerprint(paths.GAME_DIR)
         shown = self.instance_catalog.refresh()
 
         # 1) 我的版本列表(带封面)
@@ -1515,6 +1552,8 @@ class MainWindow(QMainWindow):
 
         # 4) 资源中心的目标实例卡片(Mod/光影/数据包浏览器)
         self.resource_center.refresh_browser_instances(shown)
+        self._instance_fingerprint = scanned_fingerprint
+        self._watch_versions_dir()
 
     # ---- 实例目录文件变动 → 自动刷新实例列表 ----
     def _setup_instance_watcher(self):
@@ -1524,6 +1563,10 @@ class MainWindow(QMainWindow):
         self._inst_refresh_timer.setSingleShot(True)
         self._inst_refresh_timer.setInterval(500)   # 防抖:多次文件变动合并成一次刷新
         self._inst_refresh_timer.timeout.connect(self._on_instance_dir_debounced)
+        self._inst_poll_timer = QTimer(self)
+        self._inst_poll_timer.setInterval(3000)
+        self._inst_poll_timer.timeout.connect(self._on_instance_dir_debounced)
+        self._inst_poll_timer.start()
         try:
             self._inst_watcher = QFileSystemWatcher(self)
             self._inst_watcher.directoryChanged.connect(self._on_instance_dir_changed)
@@ -1534,15 +1577,22 @@ class MainWindow(QMainWindow):
 
     def _watch_versions_dir(self):
         """(重新)把监听指向当前游戏目录的 versions/。游戏目录变更时也调用。"""
-        if self._inst_watcher is None:
+        if getattr(self, '_inst_watcher', None) is None:
             return
         try:
             dirs = self._inst_watcher.directories()
             if dirs:
                 self._inst_watcher.removePaths(dirs)
             versions_dir = os.path.join(paths.GAME_DIR, "versions")
+            if os.path.isdir(paths.GAME_DIR):
+                self._inst_watcher.addPath(paths.GAME_DIR)
             if os.path.isdir(versions_dir):
                 self._inst_watcher.addPath(versions_dir)
+                with os.scandir(versions_dir) as entries:
+                    children = [entry.path for entry in entries
+                                if entry.is_dir() and not entry.name.startswith('_')]
+                if children:
+                    self._inst_watcher.addPaths(children)
         except Exception as e:
             self._log_feedback(f"监听 versions/{os.path.basename(paths.GAME_DIR)} 失败:{e}", "警告")
 
@@ -1554,6 +1604,9 @@ class MainWindow(QMainWindow):
     def _on_instance_dir_debounced(self):
         """防抖到期:确实有变动才刷新。避免 refresh→tidy→目录变动→refresh 死循环。"""
         try:
+            from instance_fingerprint import fingerprint
+            if fingerprint(paths.GAME_DIR) == getattr(self, '_instance_fingerprint', None):
+                return
             self.refresh_instances()
         except Exception as e:
             self._log_feedback(f"实例目录变动刷新失败:{e}", "警告")

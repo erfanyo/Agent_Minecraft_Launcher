@@ -62,6 +62,7 @@ class InstanceCatalogService:
         versions_dir = os.path.join(self.game_root, "versions")
         path = os.path.join(versions_dir, "实例记录.json")
         old_notes = {}
+        old = {}
         try:
             with open(path, encoding="utf-8") as file:
                 old = json.load(file)
@@ -84,6 +85,10 @@ class InstanceCatalogService:
                 for item in instances
             ],
         }
+        # Rewriting the catalog itself emits directoryChanged on Windows.
+        # Do not turn every refresh into another refresh indefinitely.
+        if isinstance(old, dict) and old.get('instances') == data['instances'] and old.get('note') == data['note']:
+            return
         try:
             os.makedirs(versions_dir, exist_ok=True)
             with open(path, "w", encoding="utf-8") as file:

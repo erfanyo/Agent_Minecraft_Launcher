@@ -34,10 +34,26 @@ def register(api):
 
     # 2) 主标签页:与 下载新资源/联机/设置 平级(演示插件能注册全新的主 tab)
     def build_main_tab():
-        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addWidget(QLabel("示例标签页:插件注册的一个【主标签页】(和「下载新资源」「设置」平级)。"))
+        if hasattr(api, 'open_web_window'):
+            button = QPushButton('打开独立网页窗口示例')
+            def open_demo():
+                api.open_web_window('插件网页窗口示例', '''
+                    <style>body{font:16px system-ui;padding:32px;color-scheme:light dark}
+                    button{padding:10px 18px}pre{white-space:pre-wrap}</style>
+                    <h1>这是插件自己的窗口</h1>
+                    <p>使用系统网页组件，不随启动器打包 Chromium。</p>
+                    <button id="run" disabled>向插件打个招呼</button><pre id="result"></pre>
+                    <script>addEventListener('pywebviewready',()=>{
+                      const b=document.getElementById('run'); b.disabled=false;
+                      b.onclick=async()=>{const r=await window.amcl.call('hello',{name:'玩家'});
+                        document.getElementById('result').textContent=r.ok?r.result:r.error;};
+                    });</script>''', handlers={'hello': hello_action})
+            button.clicked.connect(open_demo)
+            lay.addWidget(button)
         api.bind_ai_context(
             w, "overview", "Hello 示例插件",
             "这是插件 API 的演示页面。提供 hello 打招呼工具，支持自定义问候文案。",
@@ -45,6 +61,8 @@ def register(api):
         return w
 
     api.register_main_tab(label="示例标签", build_fn=build_main_tab)
+    if hasattr(api, 'register_center_page'):
+        api.register_center_page('online', 'demo', '插件界面示例', build_main_tab)
 
     # 3) 独立设置页:在设置左菜单【单开一行】显示(按插件名)
     #     插件相关说明(能注册什么/能放什么)放这里讲,页面本身保持干净。

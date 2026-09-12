@@ -263,7 +263,7 @@ class OnboardingDialog(QDialog):
         except Exception:
             _saved_mem = None
         if _saved_mem is None:
-            self.settings["memory_gb"] = suggested_memory_gb()
+            self.settings["memory_gb"] = 0  # 每次启动时按当前可用内存计算
         # 记录是否要自动进新手教程(新手→播;老手→跳过,随时可重播)
         self.want_tutorial = self.rb_new.isChecked()
         save_settings(self.settings)

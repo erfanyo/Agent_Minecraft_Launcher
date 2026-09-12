@@ -330,6 +330,8 @@ class GrammarToolEngine:
              "-c", "2048", "--no-webui", "-np", "1", "--log-disable"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=flags)
+        from memory_policy import register_model_process
+        register_model_process(self.proc)
         for _ in range(wait):
             try:
                 if requests.get(f"{self.base}/health", timeout=3).status_code == 200:

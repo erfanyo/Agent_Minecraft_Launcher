@@ -43,7 +43,10 @@ def load_version_json(version_id: str, game_dir: str) -> dict:
     """
     path = os.path.join(game_dir, "versions", version_id, version_id + ".json")
     if not os.path.exists(path):
-        path = os.path.join(game_dir, "versions", "_versions", version_id, version_id + ".json")
+        from instances import find_instance_version_json
+        folder = os.path.join(game_dir, 'versions', version_id)
+        path = find_instance_version_json(folder, version_id) or os.path.join(
+            game_dir, "versions", "_versions", version_id, version_id + ".json")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
@@ -271,6 +274,9 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
     }
 
     # 4) JVM 参数:现代版本 JSON 自带一部分,我们再加上内存设置
+    if int(memory_gb or 0) <= 0:
+        from memory_policy import automatic_gb
+        memory_gb = automatic_gb()
     jvm = [f"-Xmx{memory_gb}G", "-XX:+UseG1GC"]
     if "arguments" in d:
         jvm += resolve_args(d["arguments"].get("jvm", []), tokens)

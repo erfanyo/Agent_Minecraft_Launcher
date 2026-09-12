@@ -17,7 +17,7 @@ _SETTINGS_LOCK = threading.RLock()
 
 DEFAULTS = {
     "username": "Steve",        # 离线模式游戏名
-    "memory_gb": 4,              # 给游戏分配的内存(默认 4G,整合包/Mod 多才够;设置里可改)
+    "memory_gb": 0,              # 0=启动时按可用内存自动预算；正数=手动 GB
     "version_isolation": True,   # 版本隔离:每版本独立游戏目录
     "last_played_instance": "", # 最近一次成功启动的实例;首页启动时优先选中
     "java_paths": {},            # Java 大版本首选路径，如 {"8": ".../java.exe"};实例设置可覆盖
@@ -47,6 +47,8 @@ DEFAULTS = {
     "ai_model": "deepseek-chat",
     # 默认仅允许启动器数据(AMCL)和游戏目录(.minecraft)内的正常操作；每项 AI 动作仍会先展示预览确认。
     "ai_permission": "launcher_write",    # AI 文件权限:readonly / launcher_write / workspace_write
+    "ai_response_style": "plain",          # plain=普通用户语言 / technical=技术详情
+    "ai_confirmation_mode": "per_action", # per_action=逐项确认 / backup_continue=备份后连续处理
     "context_window": 65536,       # AI 上下文窗口上限(tokens),DeepSeek-chat 为 64K
     "ai_multimodal": False,        # 模型是否支持图片输入(多模态):True = AI 对话框显示图片相关按钮;
                                    # 目前准备使用的本地模型不支持,未来换多模态模型时把这里改成 True 即可
@@ -91,46 +93,15 @@ DEFAULTS = {
     "ui_wallpaper_user_path": "",      # 用户图片相对路径(相对 AMCL/cache/,复制进来的)
     "ui_wallpaper_official_id": "",    # 官方壁纸 id(素材待项目方提供)
     "ui_wallpaper_mask": 60,           # 遮罩强度 0~80(%);默认 60(深色遮罩/浅色遮罩自动换色)
+    "ui_wallpaper_blur": 0,            # 模糊强度 0~80，0=关闭；旧布尔值兼容
     "ui_animations_enabled": True,     # 界面动画开关(淡入/标签切换等);关闭后动画立即到位
 }
 
 
 def suggested_memory_gb() -> int:
-    """按机器实际物理内存,返回一个合理的默认给游戏的内存(GB)。
-
-    原则:给够、又不给到反伤(太低整合包开不了,太高在 8G 机器上反而卡)。
-    - 物理内存 ≤ 8G  → 4G(保守,整合包勉强够,原版/少量 Mod 流畅)
-    - 物理内存 16G   → 6G(整合包 + 光影可跑)
-    - 物理内存 ≥ 32G → 8G(放开,可再手动调)
-    读不到内存就回退 4G(默认值)。"""
-    try:
-        if os.name != "nt":
-            return 4   # 非 Windows:读物理内存走 psutil 等,这里给保守默认
-        import ctypes
-        class MEMORYSTATUSEX(ctypes.Structure):
-            _fields_ = [
-                ("dwLength", ctypes.c_ulong),
-                ("dwMemoryLoad", ctypes.c_ulong),
-                ("ullTotalPhys", ctypes.c_ulonglong),
-                ("ullAvailPhys", ctypes.c_ulonglong),
-                ("ullTotalPageFile", ctypes.c_ulonglong),
-                ("ullAvailPageFile", ctypes.c_ulonglong),
-                ("ullTotalVirtual", ctypes.c_ulonglong),
-                ("ullAvailVirtual", ctypes.c_ulonglong),
-                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-            ]
-        stat = MEMORYSTATUSEX()
-        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-            total_gb = stat.ullTotalPhys / (1024 ** 3)
-            if total_gb >= 32:
-                return 8
-            if total_gb >= 16:
-                return 6
-            return 4
-    except Exception:
-        pass
-    return 4
+    """按当前可用内存预算，不能保证满足特定整合包需求。"""
+    from memory_policy import automatic_gb
+    return automatic_gb()
 
 
 def load_settings() -> dict:

@@ -56,7 +56,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ai_actions import (PERMISSIONS, PermissionDenied, permission_instructions,
+from ai_actions import (ALWAYS_CONFIRM_ACTIONS, PERMISSIONS, PermissionDenied, permission_instructions,
                         require_launcher_write, require_workspace_write)
 from agent_tools import TOOL_FUNCS
 from assistant_ui import (
@@ -186,6 +186,10 @@ TOOLS = [
           {"slug_or_url": {"type": "string", "description": "Modrinth 整合包 slug 或链接,如 https://modrinth.com/modpack/smithing"},
            "instance_name": {"type": "string", "description": "可选,自定义实例名(不传用整合包名)"}},
           ["slug_or_url"]),
+    _tool("repair_instance_core", "修补当前实例核心：重新安装相同游戏及加载器版本，原核心备份。保留存档和 Mod；先退出游戏。", {"instance": {"type": "string"}}, ["instance"]),
+    _tool("inspect_instance_core", "只读核验实例核心：检查版本 JSON、客户端 JAR、加载器版本及声明依赖库的大小/SHA1。先用它取得核心损坏证据；不会下载或修改文件。", {"instance": {"type": "string"}}, ["instance"]),
+    _tool("complete_instance_files", "校验并补全游戏客户端、依赖库和资源，不补第三方 Mod。先退出游戏。", {"instance": {"type": "string"}}, ["instance"]),
+    _tool("reset_instance", "重置实例启动选项及游戏画面、按键设置；先备份，保留存档、Mod 和 Mod 配置。仅在确认设置导致故障时使用，需要用户确认。", {"instance": {"type": "string"}}, ["instance"]),
     _tool("backup_instance", "备份某实例:存档打包 zip + 模组列表 txt(写操作)",
           {"instance": {"type": "string"}}, ["instance"]),
     _tool("set_setting", "修改启动器设置,如 memory_gb=6(写操作)",
@@ -237,12 +241,32 @@ TOOLS = [
           ["name", "code"]),
 ]
 
+TOOLS.extend([{"type":"function","function":{"name":"snapshot_instance","description":"创建完整隔离实例快照，包含存档、Mod、配置和核心；默认锁定当前 MC/加载器。需游戏退出。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"lock_environment":{"type":"boolean"}},"required":["instance"]}}},{"type":"function","function":{"name":"restore_instance_snapshot","description":"校验并恢复指定快照；恢复前实例保留。必须用户确认并退出游戏。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"snapshot_id":{"type":"string"}},"required":["instance","snapshot_id"]}}},{"type":"function","function":{"name":"list_instance_snapshots","description":"列出此实例可恢复的快照 ID。","parameters":{"type":"object","properties":{"instance":{"type":"string"}},"required":["instance"]}}},{"type":"function","function":{"name":"inspect_mod_jar","description":"检查一个 Mod 文件的内部元数据、SHA256 和 ZIP CRC。文件名不是身份；CRC 正常也不证明没有缺文件。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"}},"required":["instance","filename"]}}},{"type":"function","function":{"name":"set_mod_enabled","description":"可回退启用或禁用一个 Mod。禁用不删除，用 .disabled 后缀；必须说明功能损失。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"},"enabled":{"type":"boolean"}},"required":["instance","filename","enabled"]}}},{"type":"function","function":{"name":"observe_game","description":"读取工具启动的本轮游戏进程状态、退出码和日志尾部。不把进程运行当作进入世界成功。","parameters":{"type":"object","properties":{"instance":{"type":"string"}},"required":["instance"]}}},{"type":"function","function":{"name":"find_compatible_mod_versions","description":"严格查询当前 MC/加载器下的 Modrinth 项目版本 ID、文件哈希及前置，不放宽条件。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"project":{"type":"string"}},"required":["instance","project"]}}},{"type":"function","function":{"name":"replace_mod_version","description":"以精确 Modrinth 版本 ID 替换一个旧 JAR，严格检查 MC/加载器并校验下载；旧文件保留，前置不自动装。需先查内部身份和兼容候选，说明功能变化。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"},"version_id":{"type":"string"}},"required":["instance","filename","version_id"]}}}])
+
+TOOLS.append(_tool('find_compatible_mod_replacement', '仅在证据已确认 Mod 游戏版本或加载器不匹配后调用一次。合并读取 JAR 内部身份、文件指纹反查和当前实例精确兼容版本查询；结果缓存，找到时返回可交给 replace_mod_version 的 version_id。', {'instance': {'type': 'string'}, 'filename': {'type': 'string'}}, ['instance', 'filename']))
+
+TOOLS.append(_tool('compare_instance_snapshot', '比较当前实例与快照的新增、删除、修改文件和数量；不把游戏自己的日志变化当成 AI 修改。', {'instance': {'type': 'string'}, 'snapshot_id': {'type': 'string'}}, ['instance', 'snapshot_id']))
+for _schema in TOOLS:
+    if _schema['function']['name'] == 'inspect_mod_jar':
+        _schema['function']['parameters']['properties']['view'] = {'type': 'string', 'enum': ['full', 'summary'], 'description': 'summary 返回完整结构化身份/依赖/冲突声明，适合预算紧张时复核；full 另附原始元数据（默认）'}
+        _schema['function']['parameters']['properties']['expected_sha1'] = {'type': 'string', 'description': '可选：可信版本 API 返回的原文件 SHA1，用于检测合法 ZIP 中的缺失文件'}
+    if _schema['function']['name'] == 'observe_game':
+        _schema['function']['parameters']['properties']['wait_seconds'] = {'type': 'integer', 'description': '等待最多 10 秒再观察，默认 3 秒'}
+    if _schema['function']['name'] == 'set_mod_enabled':
+        _schema['function']['parameters']['properties']['reason'] = {
+            'type': 'string',
+            'enum': ['wrong_game_version', 'wrong_loader', 'dependency_conflict', 'diagnostic_only'],
+            'description': '停用原因；有内部声明或发布清单证据后再选 wrong_game_version/wrong_loader。'}
+
 # 写操作工具:执行前必须过"工作区可写"权限检查
-WRITE_TOOLS = {"install_mod", "install_mods", "install_instance", "install_modpack",
+WRITE_TOOLS = {'repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "install_instance", "install_modpack",
                "launch_game", "backup_instance", "set_setting"}
 # 这些动作即使落在 AMCL/.minecraft 的默认工作范围内，也必须先让用户看见变更清单。
-CONFIRM_TOOLS = {"install_mod", "install_mods", "install_instance", "install_modpack",
+CONFIRM_TOOLS = {'repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "install_instance", "install_modpack",
                  "set_setting", "send_game_command", "create_plugin"}
+
+WRITE_TOOLS.update({'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'})
+CONFIRM_TOOLS.update({'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'})
 
 # ---- 插件注册的 AI 工具(plugin_manager.TOOLS)合并进 TOOLS --------
 def _merge_plugin_tools() -> list:
@@ -266,7 +290,7 @@ def _merge_plugin_tools() -> list:
 # 继续用全量 TOOLS——按需挂载只影响云端 body["tools"]。
 
 # 云端回复最大长度(限制长回复;多轮工具调用轮次同用)
-CLOUD_MAX_TOKENS = 1024
+CLOUD_MAX_TOKENS = 4096
 # 云端单请求工具数量上限(通用 + 相关组;防多组同时命中时工具集膨胀)
 CLOUD_MAX_TOOLS = 14
 
@@ -284,9 +308,15 @@ TOOL_GROUPS = {
     "recipe": ["get_recipe_path", "compare_items"],
     "command": ["send_game_command", "get_command_guide"],
     "log": ["read_instance_log", "read_crash_report", "resolve_mc_name"],
-    "crashrepair": ["install_mod", "install_mods", "set_setting", "backup_instance", "install_instance"],
+    "crashrepair": ['repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "set_setting", "backup_instance", "install_instance"],
     "keybind": ["get_key_bindings"],
 }
+
+TOOL_GROUPS['crashrepair'].extend(["snapshot_instance","restore_instance_snapshot","list_instance_snapshots","inspect_mod_jar","inspect_instance_core","set_mod_enabled","observe_game","find_compatible_mod_replacement","replace_mod_version","launch_game","read_instance_log","read_crash_report"])
+TOOL_GROUPS['instance'].extend(['snapshot_instance', 'list_instance_snapshots', 'restore_instance_snapshot', 'inspect_instance_core', 'observe_game'])
+TOOL_GROUPS['mod'].extend(['inspect_mod_jar', 'find_compatible_mod_replacement', 'replace_mod_version', 'set_mod_enabled'])
+TOOL_GROUPS['crashrepair'].append('compare_instance_snapshot')
+TOOL_GROUPS['instance'].append('compare_instance_snapshot')
 
 # 分组命中关键词(请求文本命中即挂该组;宁可多挂不可漏挂——漏挂会导致模型选不到工具)
 # 注:补了「玩/来玩/我要玩/装个/机械动力/航空/create」等玩&安装意图词,避免
@@ -311,7 +341,7 @@ TOOL_GROUP_KEYWORDS = {
     "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
     "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
     "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因", "wiki", "维基", "百科", "查一下", "叫什么", "物品", "生物", "实体", "名词", "名称", "名字", "配料"],
-    "crashrepair": ["崩溃", "崩了", "崩", "闪退", "报错", "诊断", "修", "修复", "解决", "重装", "装不上", "crash", "fix"],
+    "crashrepair": ["崩溃", "崩了", "崩", "闪退", "报错", "诊断", "修", "修复", "解决", "重装", "装不上", "crash", "fix", "地狱", "测试", "快照", "benchmark"],
     "keybind": ["按键", "绑定", "键位", "keybind", "空格"],
 }
 
@@ -359,6 +389,10 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
         rest = [t for t in mounted if t["function"]["name"] not in core]
         # 核心工具放前(保证在截断窗口内),再补能放的其余
         mounted = (keep + rest)[:CLOUD_MAX_TOOLS]
+    if any(k.lower() in tl for k in TOOL_GROUP_KEYWORDS['crashrepair']):
+        existing = {t['function']['name'] for t in mounted}
+        mounted.extend(by_name[n] for n in TOOL_GROUPS['crashrepair'] if n in by_name and n not in existing)
+        mounted = list({t['function']['name']: t for t in mounted}.values())
     if settings:
         mounted = mounted + mcp_tools_schemas(settings)
     # 插件注册的工具:追加在截断之后(始终让模型看得见、可调用)
@@ -375,7 +409,8 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
 
 
 def build_executor(settings: dict, progress_cb: Callable | None = None,
-                   confirm_action: Callable[[str, str], bool] | None = None) -> Callable[[str, dict], str]:
+                   confirm_action: Callable[[str, str], bool] | None = None,
+                   notice_cb: Callable[[str], None] | None = None) -> Callable[[str, dict], str]:
     """构造工具执行器:LLM 只能"提议",真正执行在这里,权限检查也在这里。
     多余参数会被过滤(模型幻觉传错参数不报错,只调它真需要的)。
     progress_cb(done, total) 若提供,把底层下载(装 Mod 等)进度传给界面(左下角圆环)。
@@ -389,10 +424,34 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
         _mcp_schemas, _mcp_callers = connect_mcp_clients(settings.get("mcp_clients") or [])
     except Exception:
         _mcp_callers = {}
+    # Continuous repair is a desktop-chat experience: it needs the confirmation channel
+    # for migration/high-impact decisions. Headless/CLI/game-chat callers keep per-action gates.
+    continuous = (settings.get("ai_confirmation_mode", "per_action") == "backup_continue" and
+                  confirm_action is not None)
+    auto_snapshots = set()
+    autonomy_notified = False
+    snapshot_before = {
+        'repair_instance_core', 'complete_instance_files', 'reset_instance',
+        'install_mod', 'install_mods', 'set_mod_enabled', 'replace_mod_version',
+    }
+
+    def notify_continuous(backup_note=""):
+        nonlocal autonomy_notified
+        if autonomy_notified:
+            return
+        autonomy_notified = True
+        if notice_cb:
+            saved = ("已保存当前实例的完整恢复点。" if backup_note else
+                     "这项修改可以通过操作记录回退。")
+            scope = ("启动器程序、设置和游戏实例" if settings.get("ai_permission") == "workspace_write"
+                     else "启动器设置和游戏实例")
+            notice_cb(saved + f"接下来 AI 可能在你已允许的{scope}中下载或调整文件、修改设置并启动验证；"
+                      "它会持续处理到可以交付、失败或达到本轮时间预算。")
 
     def executor(name: str, args: dict) -> str:
         action_preview = ""
         undo = {}
+        core_runtime_issue = False
         plugin_policy = {}
         try:
             import plugin_manager
@@ -405,19 +464,49 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
             if len(entry) >= 3 and isinstance(entry[2], dict):
                 mcp_annotations = entry[2]
         mcp_write = name in _mcp_callers and mcp_annotations.get("readOnlyHint") is not True
-        needs_confirm = (name in CONFIRM_TOOLS or plugin_policy.get("confirm") or mcp_write)
-        if needs_confirm:
+        if name == 'repair_instance_core':
+            try:
+                core = json.loads(agent_tools.inspect_instance_core(str(args.get('instance') or '')))
+            except Exception as exc:
+                return f'没有开始修补：核心核验未完成（{type(exc).__name__}: {exc}）。'
+            status = core.get('status')
+            if status == 'verified':
+                log_text = agent_tools.read_instance_log(str(args.get('instance') or ''), tail=1200)
+                lowered = log_text.lower()
+                missing_core = ("actual version: '[missing]'" in lowered and
+                                any(f"mod id: '{mod_id}'" in lowered for mod_id in
+                                    ('minecraft', 'neoforge', 'forge', 'fabricloader')))
+                if not missing_core:
+                    return '没有执行核心修补：文件和最近一次加载记录都没有显示核心故障，应继续检查 Mod 或配置。'
+                core_runtime_issue = True
+            if status != 'issues_found':
+                if not core_runtime_issue:
+                    return '没有执行核心修补：目前没有足够证据证明核心损坏。'
+        confirmation_candidate = (name in CONFIRM_TOOLS or plugin_policy.get("confirm") or mcp_write)
+        auto_continue = (continuous and name in CONFIRM_TOOLS and
+                         name not in ALWAYS_CONFIRM_ACTIONS and
+                         not plugin_policy.get("confirm") and not mcp_write)
+        needs_confirm = confirmation_candidate and not auto_continue
+        if confirmation_candidate:
             from ai_action_log import preview
-            action_preview = preview(name, args)
+            action_preview = preview(name, args, settings.get("ai_response_style", "plain"))
+            if core_runtime_issue and settings.get("ai_response_style", "plain") == "plain":
+                action_preview = ('重新建立这个实例的游戏与加载器关系。现有文件会先保留，'
+                                  '存档、Mod 和设置不会删除。')
             if name == "set_setting":
                 from settings import load_settings
                 key = str(args.get("key", ""))
                 undo = {"kind": "setting", "key": key, "value": load_settings().get(key)}
+        if needs_confirm:
+            if confirm_action is None:
+                return '这项操作需要你确认，请在启动器的 AI 对话界面中继续。'
             if confirm_action is not None and not confirm_action(name, action_preview):
                 result = "用户取消了这项操作，未做任何修改。"
                 from ai_action_log import record
                 record(name, args, result, approved=False, undo=undo)
                 return result
+            if notice_cb:
+                notice_cb('已同意，正在处理：' + action_preview)
 
         def finish(result) -> str:
             result = str(result)
@@ -471,6 +560,22 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
             return f"错误:未知工具 {name}"
         if name in WRITE_TOOLS:
             require_launcher_write(settings)  # 只读权限 → 直接拒绝
+        if auto_continue and name in snapshot_before:
+            instance = str(args.get("instance") or "").strip()
+            if instance and instance not in auto_snapshots:
+                if notice_cb:
+                    notice_cb('正在保存当前实例，完成后会自动继续。')
+                try:
+                    backup_result = agent_tools.snapshot_instance(instance)
+                except Exception as exc:
+                    return finish(f"未开始修改：无法为当前实例建立恢复点（{type(exc).__name__}: {exc}）。")
+                auto_snapshots.add(instance)
+                from ai_action_log import record
+                record('snapshot_instance', {'instance': instance, 'automatic': True},
+                       str(backup_result), approved=True)
+                notify_continuous(backup_result)
+        elif auto_continue and name != 'snapshot_instance':
+            notify_continuous()
         # 灵感 #6:写操作前先自动备份(装 Mod 前防坏档);批量安装只备份一次
         if name in ("install_mod", "install_mods"):
             try:
@@ -487,6 +592,15 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
                     out_args["progress_callback"] = progress_cb
             except (TypeError, ValueError):
                 pass
+        if notice_cb is not None and name in ('repair_instance_core', 'complete_instance_files',
+                                               'reset_instance'):
+            try:
+                sig = inspect.signature(fn)
+                if 'status_callback' in sig.parameters:
+                    out_args['status_callback'] = lambda message: notice_cb(
+                        '处理进度：' + str(message))
+            except (TypeError, ValueError):
+                pass
         if name in ("install_mod", "install_mods"):
             try:
                 result = fn(**out_args)
@@ -499,86 +613,27 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
             kwargs = {k: v for k, v in out_args.items() if k in sig.parameters}
         except (TypeError, ValueError):
             kwargs = out_args
-        return finish(fn(**kwargs))
+        result = fn(**kwargs)
+        if continuous and name == 'snapshot_instance':
+            instance = str(args.get('instance') or '').strip()
+            if instance:
+                auto_snapshots.add(instance)
+            notify_continuous(str(result))
+        return finish(result)
 
     return executor
 
 
 def chat_with_tools(messages: list, settings: dict, tools: list[dict] | None,
-                    executor: Callable[[str, dict], str], max_rounds: int = 10,
-                    on_tool: Callable | None = None,
-                    on_user_ask: Callable | None = None,
-                    return_messages: bool = False) -> str | tuple[str, list]:
-    """带工具调用的对话循环:LLM 提议 → 执行 → 结果回传 → 直到完成。
-
-    tools 为 None 时退化为普通对话。
-    on_tool(name, args, result) 每执行一个工具就回调一次(供界面显示过程)。
-    on_user_ask(question, options) 处理 ask_user 交互工具(主线程弹窗,返回用户选择文本)。
-    return_messages=True 时返回 (回复文本, 完整消息历史)——调用方保存历史
-    即可实现真正的多轮对话记忆(含工具调用过程)。默认返回回复文本。"""
-    url = settings["ai_base_url"].rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if settings.get("ai_api_key"):
-        headers["Authorization"] = f"Bearer {settings['ai_api_key']}"
-
-    working = list(messages)
-    audit_calls = []
-    for _round in range(max_rounds):
-        body = {"model": settings["ai_model"], "messages": working,
-                "max_tokens": CLOUD_MAX_TOKENS}   # t16:限制云端长回复
-        if tools:
-            body["tools"] = tools
-        resp = requests.post(url, headers=headers, json=body, timeout=(15, 180))
-        # t15 修复:超时拆分 (connect, read)——连接 15 秒快速失败(API 配置错误/网络不通不再干等
-        # 3 分钟),读取 180 秒(长回复/多工具轮用);resp.raise_for_status() 的 HTTPError
-        # 由调用方 worker 用 _friendly_cloud_error 翻译成业务化中文提示。
-        resp.raise_for_status()
-        msg = resp.json()["choices"][0]["message"]
-        working.append(msg)
-
-        tool_calls = msg.get("tool_calls")
-        if not tool_calls:
-            reply = msg.get("content") or ""
-            if audit_calls:
-                try:
-                    import ai_training_log
-                    ai_training_log.append(settings, messages, audit_calls, reply)
-                except Exception:
-                    pass
-            return (reply, working) if return_messages else reply
-        for call in tool_calls:
-            name = call["function"]["name"]
-            try:
-                args = json.loads(call["function"]["arguments"] or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            if name == "ask_user":
-                # 交互工具:不是静态执行,而是问用户(主线程弹选择框,结果回传)
-                if on_user_ask:
-                    result = on_user_ask(args.get("question", ""),
-                                         args.get("options") or [])
-                else:
-                    result = "(当前没有用户交互通道,请根据上下文自行判断或说明)"
-            else:
-                try:
-                    result = executor(name, args)
-                except PermissionDenied as e:
-                    result = f"权限拒绝:{e}"
-                except Exception as e:
-                    result = f"工具执行失败:{type(e).__name__}: {e}"
-            if on_tool:
-                on_tool(name, args, result)
-            audit_calls.append({"name": name, "arguments": args, "result": str(result)})
-            working.append({"role": "tool", "tool_call_id": call["id"], "content": result})
-        # Continue the model loop after adding every tool result.
-    reply = "(达到最大工具轮数,已停止。可以让我继续,或拆分任务。)"
-    if audit_calls:
-        try:
-            import ai_training_log
-            ai_training_log.append(settings, messages, audit_calls, reply)
-        except Exception:
-            pass
-    return (reply, working) if return_messages else reply
+                    executor: Callable[[str, dict], str], max_rounds=None,
+                    on_tool=None, on_user_ask=None, return_messages=False,
+                    cancel_event=None):
+    """Shared progress-bounded loop; max_rounds is a deprecated compatibility argument."""
+    from ai_run import run
+    return run(messages, settings, tools, executor, max_rounds=max_rounds,
+               on_tool=on_tool, on_user_ask=on_user_ask,
+               return_messages=return_messages, cancel_event=cancel_event,
+               max_tokens=CLOUD_MAX_TOKENS)
 
 
 def _cloud_available_settings(settings: dict) -> bool:
@@ -877,7 +932,7 @@ _CLOUD_PROVIDERS = [
     ("GroqCloud(免费额度 · 响应很快)", "groq"),
     ("Cerebras(免费试用额度 · 高速)", "cerebras"),
     ("硅基流动(国内速度快)", "siliconflow"),
-    ("智谱 GLM(国内)", "zhipu"),
+    ("智谱 BigModel（GLM-4.7-Flash）", "zhipu"),
     ("通义千问(国内)", "dashscope"),
     ("自定义(自己填接口)", "custom"),
 ]
@@ -913,6 +968,8 @@ class AISettingsForm(QWidget):
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self._settings = settings
+        self._provider_keys = dict(settings.get('ai_cloud_api_keys') or {})
+        self._key_provider = None
         self._build_ui()
         self._sync_from_settings()
         self._apply_source_visibility()
@@ -968,15 +1025,28 @@ class AISettingsForm(QWidget):
         self.cloud_base_url = QLineEdit()
         self.cloud_base_url.setPlaceholderText("如 https://api.deepseek.com/v1")
         self.cloud_api_key = QLineEdit()
+        self.cloud_api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.cloud_api_key.setPlaceholderText("在对应平台注册获取;本地服务留空")
         self.cloud_model = QLineEdit()
-        self.cloud_model.setPlaceholderText("如 deepseek-chat / glm-4-flash")
+        self.cloud_model.setPlaceholderText("如 deepseek-chat / glm-4.7-flash")
         cloud_content = QWidget()
         cl = QFormLayout(cloud_content)
         cl.addRow("服务商:", self.cloud_provider)
         cl.addRow("接口地址:", self.cloud_base_url)
         cl.addRow("API 密钥:", self.cloud_api_key)
-        cl.addRow("模型:", self.cloud_model)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.cloud_model, 1)
+        self.fetch_models_btn = QPushButton('获取模型')
+        self.fetch_models_btn.setToolTip('使用当前地址和密钥查询 /models，不发送推理请求')
+        self.fetch_models_btn.clicked.connect(self._fetch_cloud_models)
+        model_row.addWidget(self.fetch_models_btn)
+        cl.addRow("模型:", model_row)
+        self.remote_models = QComboBox()
+        self.remote_models.hide()
+        self.remote_models.activated.connect(self._choose_remote_model)
+        cl.addRow('', self.remote_models)
+        self.cloud_base_url.textChanged.connect(self.remote_models.hide)
+        self.cloud_api_key.textChanged.connect(self.remote_models.hide)
         cloud_box, self._cloud_toggle = self._collapsible_group("云端模型", cloud_content, True)
 
         # ---------- 本地块 ----------
@@ -1018,6 +1088,19 @@ class AISettingsForm(QWidget):
         self.permission = QComboBox()
         for label, value in PERMISSIONS:
             self.permission.addItem(label, value)
+        self.response_style = QComboBox()
+        self.response_style.addItem("普通用户语言（推荐）", "plain")
+        self.response_style.addItem("技术详情", "technical")
+        self.response_style.setToolTip(
+            "普通用户语言：重点告诉你能不能玩、改了什么、功能有什么影响。\n"
+            "技术详情：同时显示日志证据、版本、路径和内部处理信息。")
+        self.confirmation_mode = QComboBox()
+        self.confirmation_mode.addItem("每项都确认（稳妥）", "per_action")
+        self.confirmation_mode.addItem("备份后连续处理（少打断）", "backup_continue")
+        self.confirmation_mode.setToolTip(
+            "每项都确认：每次修改前都询问。\n"
+            "备份后连续处理：先保存可恢复副本，再持续修到可玩、失败或达到本轮时间预算；"
+            "改用新实例、恢复旧状态或改变世界时仍会询问。")
         self.context_window = QSpinBox()
         self.context_window.setRange(1000, 1000000)
         self.context_window.setSingleStep(1024)
@@ -1036,6 +1119,8 @@ class AISettingsForm(QWidget):
 
         common = QGroupBox("通用")
         cf = QFormLayout(common)
+        cf.addRow("回答方式:", self.response_style)
+        cf.addRow("操作确认:", self.confirmation_mode)
         cf.addRow("文件权限:", self.permission)
         cf.addRow("上下文窗口:", self.context_window)
         cf.addRow("图片输入:", self.vision_check)
@@ -1100,7 +1185,7 @@ class AISettingsForm(QWidget):
         layout.addWidget(ai_group)
 
         # 联动
-        self.cloud_provider.currentIndexChanged.connect(self._fill_cloud_defaults)
+        self.cloud_provider.currentIndexChanged.connect(self._switch_cloud_provider)
         self.cloud_provider.currentIndexChanged.connect(self._auto_vision)
         self.cloud_model.textChanged.connect(self._auto_vision)
         self.local_mode.currentIndexChanged.connect(self._on_local_mode_changed)
@@ -1113,6 +1198,7 @@ class AISettingsForm(QWidget):
     def _sync_from_settings(self):
         """从 settings 载入(组合/文本设置时屏蔽信号,避免 _fill_* 覆盖用户已存值)。"""
         s = self._settings
+        self._loading_provider = True
         self.blockSignals(True)
         # AI 策略:优先读 ai_strategy;旧配置没有时按 ai_source 推导
         strategy = s.get("ai_strategy", "") or ""
@@ -1128,6 +1214,10 @@ class AISettingsForm(QWidget):
         self.cloud_base_url.setText(s.get("ai_cloud_base_url", ""))
         self.cloud_api_key.setText(s.get("ai_cloud_api_key", ""))
         self.cloud_model.setText(s.get("ai_cloud_model", ""))
+        self._key_provider = self.cloud_provider.currentData()
+        self._provider_keys.setdefault(self._key_provider, s.get('ai_cloud_api_key', ''))
+        self.cloud_api_key.setText(self._provider_keys[self._key_provider])
+        self._loading_provider = False
         # 本地
         self.local_mode.setCurrentIndex(
             self.local_mode.findData(s.get("ai_local_mode", "builtin")) if self.local_mode.findData(
@@ -1139,6 +1229,10 @@ class AISettingsForm(QWidget):
         cur = s.get("ai_permission", "launcher_write")
         idx = self.permission.findData(cur)
         self.permission.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self.response_style.findData(s.get("ai_response_style", "plain"))
+        self.response_style.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self.confirmation_mode.findData(s.get("ai_confirmation_mode", "per_action"))
+        self.confirmation_mode.setCurrentIndex(idx if idx >= 0 else 0)
         # 权限下拉:从只读切到"工作区可写"弹二级确认+免责声明;取消则回只读
         self.permission.currentIndexChanged.connect(self._on_permission_combo_changed)
         self.context_window.setValue(int(s.get("context_window", 65536) or 65536))
@@ -1229,11 +1323,56 @@ class AISettingsForm(QWidget):
             self.cloud_model.setText("Qwen/Qwen2.5-7B-Instruct")
         elif idx == "zhipu":
             self.cloud_base_url.setText("https://open.bigmodel.cn/api/paas/v4")
-            self.cloud_model.setText("glm-4-flash")
+            self.cloud_model.setText("glm-4.7-flash")
         elif idx == "dashscope":
             self.cloud_base_url.setText("https://dashscope.aliyuncs.com/compatible-mode/v1")
             self.cloud_model.setText("qwen-plus")
         # custom:保留用户输入
+
+    def _switch_cloud_provider(self):
+        if getattr(self, '_loading_provider', False):
+            return
+        if self._key_provider is not None:
+            self._provider_keys[self._key_provider] = self.cloud_api_key.text().strip()
+        self._key_provider = self.cloud_provider.currentData()
+        self.cloud_api_key.setText(self._provider_keys.get(self._key_provider, ''))
+        self._fill_cloud_defaults()
+        self.remote_models.hide()
+
+    def _choose_remote_model(self, index):
+        if self.remote_models.itemData(index):
+            self.cloud_model.setText(self.remote_models.itemData(index))
+
+    def _fetch_cloud_models(self):
+        from background_tasks import BackgroundTask
+        from ai_model_list import fetch_models
+        if getattr(self, '_models_task', None) and self._models_task.is_running:
+            return
+        captured = (self.cloud_provider.currentData(), self.cloud_base_url.text().strip(), self.cloud_api_key.text().strip())
+        self.fetch_models_btn.setEnabled(False)
+        self.fetch_models_btn.setText('正在获取…')
+        task = BackgroundTask(lambda current: fetch_models(captured[1], captured[2]), self)
+        self._models_task = task
+        def still_current():
+            return captured == (self.cloud_provider.currentData(), self.cloud_base_url.text().strip(), self.cloud_api_key.text().strip())
+        def success(names):
+            if not still_current():
+                return
+            self.remote_models.clear()
+            self.remote_models.addItem('选择模型（列表不保证全部可调用）', None)
+            for name in names:
+                self.remote_models.addItem(name, name)
+            self.remote_models.show()
+        def failure(error):
+            if still_current():
+                QMessageBox.information(self, '获取模型', str(error))
+        def finished():
+            self.fetch_models_btn.setEnabled(True)
+            self.fetch_models_btn.setText('获取模型')
+        task.succeeded.connect(success)
+        task.failed.connect(failure)
+        task.finished.connect(finished)
+        task.start()
 
     def _refresh_local_status(self):
         """刷新内置本地模型的下载状态文字。"""
@@ -1267,14 +1406,13 @@ class AISettingsForm(QWidget):
         if data != "workspace_write":
             return
         from PySide6.QtWidgets import QMessageBox
-        cap = "🛡️ 确认给 AI「工作区可写」权限?"
-        disc = ("【免责声明】\n"
-                "一旦开启,AI 就能在【启动器工作区 + AMCL 私有数据 + 游戏目录】内\n"
-                "创建/修改/删除文件(如 装 Mod、改配置、写插件、动存档)。\n\n"
-                "· AI 是自动运行的,可能改到你不想动的东西;写操作前会先备份(装 Mod 等);\n"
-                "· 涉及游戏存档/私密数据请自行留意;\n"
-                "· 需要「稳妥」时随时切回「只读」。\n\n"
-                "确定要把 AI 权限改为「工作区可写」吗?")
+        plain = self.response_style.currentData() == "plain"
+        cap = "允许 AI 修改启动器程序？" if plain else "🛡️ 确认给 AI「工作区可写」权限?"
+        disc = (("修游戏、装 Mod 和改游戏设置不需要这个权限。\n\n"
+                 "开启后，AI 还可以修改启动器功能和插件。只有你打算让 AI 改启动器本身时才建议开启。\n\n"
+                 "是否允许？") if plain else
+                ("【免责声明】\n一旦开启，AI 就能在启动器程序、设置和游戏目录内创建、修改或删除文件。\n\n"
+                 "可能涉及插件、源码和存档；需要稳妥时可切回只读。\n\n确定要开启吗？"))
         ret = QMessageBox.question(self, cap, disc,
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                    QMessageBox.StandardButton.No)
@@ -1286,6 +1424,7 @@ class AISettingsForm(QWidget):
 
     def values(self) -> dict:
         """收集表单内容为设置字段,并据当前策略推导「生效」的一组 ai_provider/... 给后端。"""
+        self._provider_keys[self.cloud_provider.currentData()] = self.cloud_api_key.text().strip()
         if self._is_cloud():
             source = "cloud"
             provider = self.cloud_provider.currentData()
@@ -1306,6 +1445,7 @@ class AISettingsForm(QWidget):
             "ai_cloud_provider": self.cloud_provider.currentData(),
             "ai_cloud_base_url": self.cloud_base_url.text().strip(),
             "ai_cloud_api_key": self.cloud_api_key.text().strip(),
+            "ai_cloud_api_keys": dict(self._provider_keys),
             "ai_cloud_model": self.cloud_model.text().strip(),
             # 本地组
             "ai_local_mode": self.local_mode.currentData(),
@@ -1320,6 +1460,8 @@ class AISettingsForm(QWidget):
             "ai_model": model,
             # 通用
             "ai_permission": self.permission.currentData(),
+            "ai_response_style": self.response_style.currentData(),
+            "ai_confirmation_mode": self.confirmation_mode.currentData(),
             "context_window": self.context_window.value(),
             "ai_multimodal": self.vision_check.isChecked(),
             "ai_in_game": "on" if self.ai_in_game.isChecked() else "off",
@@ -1445,6 +1587,7 @@ class AIChatDock(QDockWidget):
             f" border-radius: 6px; padding: 3px 8px; }}"
             f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
         action_log_btn = QPushButton("操作记录")
+        action_log_btn.setToolTip("查看 AI 修改了什么，以及可用的回退信息。")
         action_log_btn.setToolTip("查看 AI 已确认、取消或失败的操作，以及是否可回退")
         action_log_btn.clicked.connect(self._show_action_history)
         action_log_btn.setStyleSheet(
@@ -1485,8 +1628,32 @@ class AIChatDock(QDockWidget):
         audit_row.addWidget(undo_btn)
         self._update_permission_label()
 
-        row = QHBoxLayout()
+        row = QVBoxLayout()
+        row.setSpacing(4)
         row.addWidget(self.input, 1)
+        stop_run = QPushButton('停止任务')
+        stop_run.setToolTip('在当前请求或工具结束后停止，不会强杀正在写文件的操作')
+        stop_run.clicked.connect(self._stop_agent_run)
+        run_records = QPushButton('任务记录')
+        run_records.setToolTip("打开整轮 AI 任务日志：模型回复、工具调用、结果与结束原因。")
+        run_records.setToolTip('打开本机逐轮记录；包含终止原因，模型结束不等于测试通过')
+        run_records.clicked.connect(self._open_run_records)
+        task_row = QHBoxLayout()
+        task_row.setContentsMargins(0, 0, 0, 0)
+        task_row.setSpacing(4)
+        task_row.addStretch()
+        task_row.addWidget(stop_run)
+        task_row.addWidget(run_records)
+        row.addLayout(task_row)
+        # 局部紧凑样式，不受主窗口大按钮的最小宽度和内边距影响。
+        for button in (skills_btn, undo_btn, action_log_btn, perm_btn, stop_run, run_records):
+            button.setStyleSheet(
+                f"QPushButton {{ background: transparent; color: {muted_color()};"
+                f" border: 1px solid {current_color('btn_border')}; border-radius: 5px;"
+                " padding: 1px 4px; min-width: 0px; min-height: 0px; font-size: 12px; }"
+                f"QPushButton:hover {{ border-color: {accent_color()}; }}")
+            button.setFixedHeight(24)
+        self.local_status_label.setWordWrap(True)
 
         # 图片行:输入框上方 —— 左侧待发图片缩略图(上下文环已移到发送按钮外圈)
         self.pending_images = []     # [{"path": ...}] 待发送的图片
@@ -1719,14 +1886,13 @@ class AIChatDock(QDockWidget):
         # 只读 → 可写:需二次确认 + 免责声明
         if nxt == "workspace_write":
             from PySide6.QtWidgets import QMessageBox
-            cap = "🛡️ 确认给 AI「工作区可写」权限?"
-            disc = ("【免责声明】\n"
-                    "一旦开启,AI 就能在【启动器工作区 + AMCL 私有数据 + 游戏目录】内\n"
-                    "创建/修改/删除文件(如 装 Mod、改配置、写插件、动存档)。\n\n"
-                    "· AI 是自动运行的,可能改到你不想动的东西;写操作前我会先备份(装 Mod 等);\n"
-                    "· 涉及游戏存档/私密数据请自行留意;\n"
-                    "· 需要「稳妥」时随时切回「只读」。\n\n"
-                    "确定要把 AI 权限改为「工作区可写」吗?")
+            plain = self.settings.get("ai_response_style", "plain") == "plain"
+            cap = "允许 AI 修改启动器程序？" if plain else "🛡️ 确认给 AI「工作区可写」权限?"
+            disc = (("修游戏、装 Mod 和改游戏设置不需要这个权限。\n\n"
+                     "开启后，AI 还可以修改启动器功能和插件。只有你打算让 AI 改启动器本身时才建议开启。\n\n"
+                     "是否允许？") if plain else
+                    ("【免责声明】\n一旦开启，AI 就能在启动器程序、设置和游戏目录内创建、修改或删除文件。\n\n"
+                     "可能涉及插件、源码和存档；需要稳妥时可切回只读。\n\n确定要开启吗？"))
             ret = QMessageBox.question(self, cap, disc,
                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                        QMessageBox.StandardButton.No)
@@ -2347,6 +2513,8 @@ class AIChatDock(QDockWidget):
 
     def shutdown(self):
         """窗口关闭时调用:卸载本地模型,确保无残留进程。"""
+        if getattr(self, '_agent_cancel', None) is not None:
+            self._agent_cancel.set()
         self._infer_monitor_stop.set()   # 停 CPU 采样监控线程(§5)
         self.stop_local_engine()
 
@@ -2478,6 +2646,9 @@ class AIChatDock(QDockWidget):
         self.send()
 
     def send(self):
+        if getattr(self, '_agent_running', False):
+            self._append_system('任务仍在执行，请先停止，等待结束后再发送。')
+            return
         # 未选择模型 → 提示去设置里选,不发(按钮虽已隐藏,这里兜底)
         if not ((self.settings.get("ai_model") or "").strip()
                 or (self.settings.get("ai_local_model") or "").strip()):
@@ -2538,7 +2709,8 @@ class AIChatDock(QDockWidget):
         s = self.settings
         # AI 发起的下载(装 Mod/创建实例等)进度 → 左下角圆环 + 下载详情
         executor = build_executor(s, progress_cb=self._download_progress_cb("Mod / 实例"),
-                                  confirm_action=self._confirm_ai_action)
+                                  confirm_action=self._confirm_ai_action,
+                                  notice_cb=self._notify_ai_autonomy)
         tools_called = []
         is_local = self._local_enabled()
 
@@ -2640,7 +2812,7 @@ class AIChatDock(QDockWidget):
                     return
                 result = chat_with_tools(messages, self._cloud_settings(), mount_tools_for(text, self._cloud_settings()), executor,
                                          on_tool=on_tool, on_user_ask=self.on_user_ask,
-                                         return_messages=True)
+                                         return_messages=True, cancel_event=self._agent_cancel)
                 if isinstance(result, tuple):
                     reply, working = result
                     # 存回完整历史(去掉 system,下次重新生成)
@@ -2657,7 +2829,28 @@ class AIChatDock(QDockWidget):
                 # 不再把技术栈原样冒泡给用户
                 self.signals.error.emit(_friendly_cloud_error(e))
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._agent_cancel = threading.Event()
+        self._agent_running = True
+        def tracked_worker():
+            try:
+                worker()
+            finally:
+                self._agent_running = False
+        threading.Thread(target=tracked_worker, daemon=True).start()
+
+    def _stop_agent_run(self):
+        event = getattr(self, '_agent_cancel', None)
+        if event is not None:
+            event.set()
+            self._append_system('已请求停止；等待当前请求或工具安全结束。')
+
+    def _open_run_records(self):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from paths import data_dir
+        folder = data_dir('ai_runs')
+        os.makedirs(folder, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     def _est_message(self, m: dict) -> int:
         """估算一条消息的 token 数(支持多模态 content list)"""
@@ -2707,7 +2900,9 @@ class AIChatDock(QDockWidget):
         result_box = []
         ev = threading.Event()
         self.signals.user_ask.emit(question, options, result_box, ev)
-        ev.wait()   # 等主线程弹窗完成
+        while not ev.wait(0.2):
+            if getattr(self, '_agent_cancel', threading.Event()).is_set():
+                return '用户已停止任务'
         picked = result_box[0] if result_box else []
         if not picked:
             return "用户取消了选择(未给答案)。请根据上下文自行处理,或向用户说明你需要的选择。"
@@ -2715,16 +2910,23 @@ class AIChatDock(QDockWidget):
 
     def _confirm_ai_action(self, name: str, preview: str) -> bool:
         """worker 线程等待主线程完成“预览—确认”；同类动作可在本次会话中放行。"""
-        if name in getattr(self, "_session_action_allow", set()):
+        if name not in {'restore_instance_snapshot', 'replace_mod_version', 'reset_instance'} and name in getattr(self, "_session_action_allow", set()):
             return True
         result_box = []
         ev = threading.Event()
+        self.signals.system_msg.emit("需要你确认一个处理方案；确认窗口已经打开。")
         self.signals.action_confirm.emit(name, preview, result_box, ev)
-        ev.wait()
+        while not ev.wait(0.2):
+            if getattr(self, '_agent_cancel', threading.Event()).is_set():
+                return False
         approved, remember = result_box[0] if result_box else (False, False)
         if approved and remember:
             self._session_action_allow = getattr(self, "_session_action_allow", set()) | {name}
         return bool(approved)
+
+    def _notify_ai_autonomy(self, message: str):
+        """Worker-safe notice shown once when backup-and-continue starts."""
+        self.signals.system_msg.emit("🛟 " + message)
 
     def _on_action_confirm_ui(self, name, preview, result_box, ev):
         """主线程显示变更清单；默认范围内不另要系统权限，但仍由用户确认动作本身。"""
@@ -2732,14 +2934,20 @@ class AIChatDock(QDockWidget):
             from PySide6.QtWidgets import QCheckBox
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Icon.Question)
-            box.setWindowTitle("确认 AI 操作")
-            box.setText("AI 准备执行以下操作：")
+            box.setWindowModality(Qt.WindowModality.ApplicationModal)
+            box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            plain = self.settings.get("ai_response_style", "plain") == "plain"
+            box.setWindowTitle("确认处理方案" if plain else "确认 AI 操作")
+            box.setText("为了继续解决问题，AI 打算这样处理：" if plain else "AI 准备执行以下操作：")
             box.setInformativeText(preview)
             box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            box.button(QMessageBox.StandardButton.Yes).setText("确认执行")
-            box.button(QMessageBox.StandardButton.No).setText("取消")
-            remember = QCheckBox("本次对话中，同类操作不再询问")
+            box.button(QMessageBox.StandardButton.Yes).setText("同意这个方案" if plain else "确认执行")
+            box.button(QMessageBox.StandardButton.No).setText("先不要" if plain else "取消")
+            remember = QCheckBox("这次处理里相同操作直接继续" if plain else "本次对话中，同类操作不再询问")
             box.setCheckBox(remember)
+            box.show()
+            box.raise_()
+            box.activateWindow()
             approved = box.exec() == QMessageBox.StandardButton.Yes
             result_box.append((approved, remember.isChecked()))
         finally:
@@ -2823,11 +3031,20 @@ class AIChatDock(QDockWidget):
             self._append_system("技能管理需要在主窗口打开")
 
     # ---- 设置 ----
+    def apply_settings(self, settings: dict):
+        """同步已保存配置及所有依赖配置的面板显示。"""
+        self.settings = settings
+        self._rebuild_strategy_menu()
+        self._update_permission_label()
+        self.update_vision_ui()
+        self.update_local_status()
+        self.maybe_preload_local()
+
     def open_settings(self):
         dlg = AISettingsDialog(self.settings, self)
         if dlg.exec():
             self.settings = dlg.settings
             self.main.settings = dlg.settings
             save_settings(dlg.settings)
-            self.update_vision_ui()   # 多模态开关变化 → 立即显示/隐藏图片按钮
+            self.apply_settings(dlg.settings)
             self._append_system("AI 设置已保存")

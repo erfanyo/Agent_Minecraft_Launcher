@@ -1,0 +1,2 @@
+# Optional web-window host. Windows uses shared WebView2, not bundled Chromium.
+pywebview>=6.0,<7

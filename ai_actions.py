@@ -18,6 +18,40 @@ PERMISSIONS = [
     ("工作区可写（可生成插件/改源码）", "workspace_write"),
 ]
 
+# “备份后连续处理”也不会越过这些会改变用户目标、写外部系统或扩大代码能力的动作。
+ALWAYS_CONFIRM_ACTIONS = {
+    "install_instance", "install_modpack", "restore_instance_snapshot",
+    "send_game_command", "create_plugin",
+}
+
+
+def plain_language_instructions(settings: dict) -> str:
+    """Return the response style and decision policy injected into the model."""
+    if settings.get("ai_response_style", "plain") == "technical":
+        style = (
+            "回答方式：技术详情。可以展示日志证据、版本号、路径和工具结果，但先给结论，"
+            "并说明改动、验证结果和剩余风险。")
+    else:
+        style = (
+            "回答方式：普通用户语言。用户的目标是得到一个能玩的实例。先说现在能不能玩、"
+            "你做了什么和功能上有什么影响；不要主动堆叠原始日志、异常类名、哈希、内部工具名或路径。"
+            "需要用户选择时最多给两个容易判断的结果选项，每个选项说明会得到什么。"
+            "有证据确认 Mod 属于另一个游戏版本或加载器时，先调用一次 find_compatible_mod_replacement；"
+            "有精确候选就替换，没有安全候选才用 set_mod_enabled 并填写对应 reason，然后告诉用户："
+            "这个 Mod 当前不能用，所以已从本次启动中移出；原文件仍在恢复点中。"
+            "只有工具确实删除了文件才能说‘删除’，不要把停用说成删除。"
+            "若当前实例问题严重，直说打算保留旧实例并创建一个新的可玩实例，然后调用相应创建工具；"
+            "工具的确认窗口就是这次方案询问，不要先用 ask_user 重复问一遍。不要让用户选择加载器内部方案。"
+            "用户追问时再提供技术细节。")
+    if settings.get("ai_confirmation_mode", "per_action") == "backup_continue":
+        confirmation = (
+            "操作确认方式：备份后连续处理。对已有授权范围内、可由完整快照回退的日常修复，"
+            "建立恢复点后继续做到实例可玩、失败或达到本轮预算，不要逐项追问。"
+            "创建替代实例或整合包、恢复旧快照、改变游戏世界、生成插件、写外部服务仍须询问。")
+    else:
+        confirmation = "操作确认方式：逐项确认。每个需要确认的写操作都先给用户看清影响。"
+    return style + "\n" + confirmation
+
 
 class PermissionDenied(PermissionError):
     """AI action exceeded its allowed scope."""
@@ -74,6 +108,9 @@ def safe_write_path(settings: dict, path: str) -> str:
 def preview(name: str, args: dict) -> str:
     """Return a concise, user-facing change set before an action runs."""
     args = dict(args or {})
+    if name in {'repair_instance_core', 'complete_instance_files', 'reset_instance'}:
+        from instance_maintenance import maintenance_preview
+        return maintenance_preview(name, args)
     if name == "install_mod":
         return (f"安装 Mod\n实例：{args.get('instance', '未指定')}\nMod：{args.get('slug', '未指定')}\n"
                 f"版本：{args.get('version') or '自动选择兼容最新版'}\n位置：该实例的 mods 目录\n"

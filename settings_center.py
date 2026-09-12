@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-设置中心(顶部标签卡版):左菜单(游戏/界面/系统/AI助手/镜像源)+ 右侧面板,复用 CenterShell,
+设置中心(顶部标签卡版):左菜单(游戏/Java/语言/个性化/系统/软件信息/AI助手/镜像源)+ 右侧面板,复用 CenterShell,
 和「下载新资源」同一套布局/操作逻辑。解决原「设置弹窗(模态)」挡住引导遮罩的问题。
 
 保存:颜色/壁纸/动画与 Java 管理自动保存；其余设置由底部按钮统一应用。
@@ -131,8 +131,10 @@ class SettingsCenter(QWidget):
         self.shell = CenterShell(self, menu_width=150)
         self.shell.add_section(t("GAME"), self._build_game)
         self.shell.add_section("Java", self._build_java)
-        self.shell.add_section(t("UI"), self._build_ui)
+        self.shell.add_section("语言", self._build_language)
+        self.shell.add_section("个性化", self._build_ui)
         self.shell.add_section(t("SYSTEM"), self._build_system)
+        self.shell.add_section("软件信息", self._build_software_info)
         self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
         self.shell.add_section(t("MIRROR"), self._build_mirror)
         self.shell.add_section(t("PLUGINS"), self._build_plugins)
@@ -182,10 +184,16 @@ class SettingsCenter(QWidget):
 
     # ================= 游戏 =================
     def _build_game(self) -> QWidget:
+        saved_memory = int(self.settings.get('memory_gb', 0) or 0)
+        self.memory_auto_check = QCheckBox('自动分配内存（按实例历史和 Mod 数量）')
+        self.memory_auto_check.setChecked(saved_memory <= 0)
+        self.memory_auto_check.setToolTip('自动：每次启动时根据当前可用内存、该实例历史峰值或 Mod 数量估算。\n手动：使用下方指定的 Java 堆上限。')
         self.memory_spin = QSpinBox()
-        self.memory_spin.setRange(1, 16)
+        self.memory_spin.setRange(1, 64)
         self.memory_spin.setSuffix(" GB")
-        self.memory_spin.setValue(self.settings.get("memory_gb", 2))
+        self.memory_spin.setValue(saved_memory if saved_memory > 0 else 4)
+        self.memory_spin.setEnabled(not self.memory_auto_check.isChecked())
+        self.memory_auto_check.toggled.connect(self._on_memory_policy_changed)
         self.isolation_check = QCheckBox("每个版本用独立游戏目录(存档/配置/Mod 互不干扰)")
         self.isolation_check.setChecked(self.settings.get("version_isolation", True))
         self.game_dir_edit = QLineEdit(self.settings.get("game_dir") or DEFAULT_GAME_DIR)
@@ -196,7 +204,16 @@ class SettingsCenter(QWidget):
         dir_row.addWidget(browse_btn); dir_row.addWidget(default_btn)
 
         form = QFormLayout()
-        form.addRow("内存:", self.memory_spin)
+        form.addRow("内存策略:", self.memory_auto_check)
+        form.addRow("手动内存:", self.memory_spin)
+        from memory_meter import MemoryMeter
+        self.memory_meter = MemoryMeter(lambda: 0 if self.memory_auto_check.isChecked() else self.memory_spin.value())
+        self.memory_spin.valueChanged.connect(self.memory_meter.refresh)
+        self.memory_auto_check.toggled.connect(self.memory_meter.refresh)
+        form.addRow('', self.memory_meter)
+        from advanced_launch import editor
+        self.jvm_editor = editor(self.settings.get('jvm_args', ''))
+        form.addRow('', self.jvm_editor)
         form.addRow("版本隔离:", self.isolation_check)
         form.addRow("游戏目录:", dir_row)
         hint = QLabel("可以是任意位置,包括 PCL2 / 官方启动器创建的 .minecraft(自动读取里面的实例)")
@@ -208,11 +225,15 @@ class SettingsCenter(QWidget):
     def _browse_game_dir(self):
         from PySide6.QtWidgets import QFileDialog
         start = self.game_dir_edit.text().strip() or DEFAULT_GAME_DIR
-        d = QFileDialog.getExistingDirectory(self, "选择 Minecraft 游戏目录", start)
+        d = QFileDialog.getExistingDirectory(self, "选择 Minecraft 游戏目录", start,
+                                            QFileDialog.Option.DontUseNativeDialog)
         if d:
             self.game_dir_edit.setText(d)
 
-    # ================= 界面 =================
+    def _on_memory_policy_changed(self, automatic: bool):
+        self.memory_spin.setEnabled(not automatic)
+
+    # ================= 语言 / 个性化 =================
     @staticmethod
     def _wrap_scroll(w) -> QScrollArea:
         """把页面内容包进滚动区(纵向内容多时可用滚动条,不拥挤)。"""
@@ -225,7 +246,7 @@ class SettingsCenter(QWidget):
         scroll.setWidget(w)
         return scroll
 
-    def _build_ui(self) -> QWidget:
+    def _build_language(self) -> QWidget:
         self.language_combo = QComboBox()
         for label, value in (("自动(跟随系统)", "auto"), ("中文", "zh"), ("English", "en")):
             self.language_combo.addItem(label, value)
@@ -241,6 +262,26 @@ class SettingsCenter(QWidget):
             idx = self.language_combo.findData("auto")
         self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
+        self.sync_minecraft_language_check = QCheckBox("启动游戏时同步 Minecraft 语言（跟随启动器/系统）")
+        self.sync_minecraft_language_check.setChecked(
+            bool(self.settings.get("sync_minecraft_language", True)))
+        self.sync_minecraft_language_check.setToolTip(
+            "开启：每次启动前把实例 options.txt 的语言设为当前启动器语言；关闭后可在游戏内独立选择。")
+
+        form = QFormLayout()
+        form.addRow("启动器语言:", self.language_combo)
+        hint = QLabel("切换启动器语言后需要重启。语言同步可让新启动的实例跟随这里的选择。")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
+        l.addLayout(form)
+        l.addWidget(self.sync_minecraft_language_check)
+        l.addWidget(hint)
+        l.addStretch()
+        return w
+
+    # ================= 个性化 =================
+    def _build_ui(self) -> QWidget:
+
         self.ui_mode_combo = QComboBox()
         for label, value in ((t("FULL_MORE_TIPS_GUIDES"), "beginner"),
                              (t("SUMMARY_CONCISE"), "expert")):
@@ -251,19 +292,11 @@ class SettingsCenter(QWidget):
         mode_hint.setWordWrap(True); mode_hint.setStyleSheet(f"color: {muted_color()};")
 
         form = QFormLayout()
-        form.addRow("界面语言:", self.language_combo)
         form.addRow("界面模式:", self.ui_mode_combo)
         form.addRow("", mode_hint)
 
-        self.sync_minecraft_language_check = QCheckBox("启动游戏时同步 Minecraft 语言（跟随启动器/系统）")
-        self.sync_minecraft_language_check.setChecked(
-            bool(self.settings.get("sync_minecraft_language", True)))
-        self.sync_minecraft_language_check.setToolTip(
-            "开启：每次启动前把实例 options.txt 的语言设为当前启动器语言；关闭后可在游戏内独立选择。")
-
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
         l.addLayout(form)
-        l.addWidget(self.sync_minecraft_language_check)
         self.animations_check = QCheckBox("启用界面动画(淡入/标签切换等)")
         self.animations_check.setChecked(bool(self.settings.get("ui_animations_enabled", True)))
         l.addWidget(self.animations_check)
@@ -322,16 +355,21 @@ class SettingsCenter(QWidget):
         l.addWidget(bg_title)
         self.wallpaper_source_combo = QComboBox()
         for _lab, _val in (("关闭", "none"), ("预设渐变", "preset"),
-                           ("官方壁纸", "official"), ("本地图片", "user")):
+                           ("本机图片", "user")):
             self.wallpaper_source_combo.addItem(_lab, _val)
         self.wallpaper_source_combo.setCurrentIndex(
             max(0, self.wallpaper_source_combo.findData(
-                self.settings.get("ui_wallpaper_source", "none"))))
+                'preset' if self.settings.get('ui_wallpaper_source') == 'official'
+                else self.settings.get("ui_wallpaper_source", "none"))))
         self.wallpaper_source_combo.currentIndexChanged.connect(
             lambda *_: self._on_wallpaper_source_changed(True))
         src_row = QHBoxLayout(); src_row.addWidget(QLabel("壁纸:"))
         src_row.addWidget(self.wallpaper_source_combo, 1)
         l.addLayout(src_row)
+        official_link = QLabel('<a href="https://www.minecraft.net/zh-hans/collectibles">官方壁纸 ↗</a>')
+        official_link.setOpenExternalLinks(True)
+        official_link.setToolTip('在浏览器中打开 Minecraft 官方素材页面；下载后可作为本机图片选择')
+        l.addWidget(official_link)
 
         from ui_background import PRESETS
         self.wallpaper_preset_combo = QComboBox()
@@ -346,16 +384,29 @@ class SettingsCenter(QWidget):
         l.addLayout(preset_row)
 
         self._wallpaper_user_path = self.settings.get("ui_wallpaper_user_path", "") or ""
-        self.wallpaper_user_btn = QPushButton("选择本地图片…")
+        from wallpaper_picker import WallpaperDropButton
+        self.wallpaper_user_btn = WallpaperDropButton()
         set_style(self.wallpaper_user_btn, card_btn_style)
-        self.wallpaper_user_btn.setMinimumHeight(32)
         self.wallpaper_user_btn.clicked.connect(self._pick_wallpaper_image)
+        self.wallpaper_user_btn.fileDropped.connect(self._import_wallpaper_image)
         self.wallpaper_user_label = QLabel(self._wallpaper_user_path or "未选择")
         self.wallpaper_user_label.setWordWrap(True)
         self.wallpaper_user_label.setStyleSheet(f"color: {muted_color()};")
-        user_row = QHBoxLayout(); user_row.addWidget(self.wallpaper_user_btn)
-        user_row.addWidget(self.wallpaper_user_label, 1)
-        l.addLayout(user_row)
+        l.addWidget(self.wallpaper_user_btn)
+        l.addWidget(self.wallpaper_user_label)
+        from ui_background import blur_strength
+        self.wallpaper_blur_slider = QSlider(Qt.Orientation.Horizontal)
+        self.wallpaper_blur_slider.setRange(0, 80)
+        self.wallpaper_blur_slider.setValue(blur_strength(self.settings))
+        self.wallpaper_blur_slider.setToolTip('0 = 关闭；数值越大越模糊。调整后缓存结果，不修改原图。')
+        self.wallpaper_blur_label = QLabel()
+        self.wallpaper_blur_slider.valueChanged.connect(self._on_wallpaper_blur_changed)
+        self.wallpaper_blur_label.setText(f'模糊强度: {self.wallpaper_blur_slider.value()}' +
+                                          ('（关闭）' if self.wallpaper_blur_slider.value() == 0 else ''))
+        blur_row = QHBoxLayout(); blur_row.addWidget(QLabel('模糊:'))
+        blur_row.addWidget(self.wallpaper_blur_slider, 1)
+        blur_row.addWidget(self.wallpaper_blur_label)
+        l.addLayout(blur_row)
 
         self.wallpaper_mask_slider = QSlider(Qt.Orientation.Horizontal)
         self.wallpaper_mask_slider.setRange(0, 80)
@@ -370,7 +421,7 @@ class SettingsCenter(QWidget):
         mask_row.addWidget(self.wallpaper_mask_slider, 1)
         mask_row.addWidget(self.wallpaper_mask_label)
         l.addLayout(mask_row)
-        bg_hint = QLabel("壁纸垫在内容区背景,遮罩保证文字清晰;官方壁纸首次用到时后台下载(离线自动回退预设)。")
+        bg_hint = QLabel("遮罩让壁纸上的文字更容易看清。图片会复制到启动器缓存，原图不会被修改。")
         bg_hint.setWordWrap(True); bg_hint.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(bg_hint)
         self.animations_check.toggled.connect(self._queue_visual_autosave)
@@ -403,11 +454,18 @@ class SettingsCenter(QWidget):
         src = self.wallpaper_source_combo.currentData()
         self.wallpaper_preset_combo.setEnabled(src == "preset")
         self.wallpaper_user_btn.setEnabled(src == "user")
+        self.wallpaper_user_btn.setVisible(src == 'user')
+        self.wallpaper_user_label.setVisible(src == 'user')
+        self.wallpaper_blur_slider.setEnabled(src != 'none')
         if save:
             self._queue_visual_autosave()
 
     def _on_wallpaper_mask_changed(self, value: int):
         self.wallpaper_mask_label.setText(f"遮罩强度: {value}%")
+        self._queue_visual_autosave()
+
+    def _on_wallpaper_blur_changed(self, value: int):
+        self.wallpaper_blur_label.setText(f'模糊强度: {value}' + ('（关闭）' if value == 0 else ''))
         self._queue_visual_autosave()
 
     def _queue_visual_autosave(self, *_):
@@ -418,6 +476,7 @@ class SettingsCenter(QWidget):
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
         self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
+        self.settings['ui_wallpaper_blur'] = self.wallpaper_blur_slider.value()
         self.settings["ui_wallpaper_user_path"] = getattr(self, "_wallpaper_user_path", "")
         self.settings["ui_animations_enabled"] = self.animations_check.isChecked()
         save_settings(self.settings)
@@ -436,18 +495,30 @@ class SettingsCenter(QWidget):
     def _pick_wallpaper_image(self):
         """选本地图片 → 复制进 AMCL/cache/wallpapers/(遵循文件放置约定),记录相对路径。"""
         from PySide6.QtWidgets import QFileDialog
-        import os
-        import shutil
-        import time
-        from paths import cache_dir
         path, _ = QFileDialog.getOpenFileName(
             self, "选择壁纸图片", "", "图片 (*.png *.jpg *.jpeg *.bmp *.webp)")
         if not path:
             return
+        self._import_wallpaper_image(path)
+
+    def _import_wallpaper_image(self, path):
+        import os
+        import shutil
+        from PySide6.QtGui import QImageReader
+        from paths import cache_dir
+        # Validate contents, not just the extension; reject corrupt/non-image files.
+        reader = QImageReader(path)
+        size = reader.size()
+        if not size.isValid() or size.width() * size.height() > 40_000_000:
+            QMessageBox.warning(self, '选择壁纸', '图片无法读取或太大，请选择不超过 4000 万像素的图片。')
+            return
+        if reader.read().isNull():
+            QMessageBox.warning(self, '选择壁纸', '这张图片没能打开，换一张试试？')
+            return
         try:
             wall_dir = cache_dir("wallpapers")
             ext = os.path.splitext(path)[1].lower() or ".png"
-            name = f"user_{int(time.time())}{ext}"
+            name = f"user_{uuid.uuid4().hex}{ext}"
             shutil.copy2(path, os.path.join(wall_dir, name))
             self._wallpaper_user_path = os.path.join("wallpapers", name)
             self.wallpaper_user_label.setText(os.path.basename(path))
@@ -581,7 +652,7 @@ class SettingsCenter(QWidget):
 
     # ================= 系统 =================
     def _build_system(self) -> QWidget:
-        """与视觉外观无关的维护项集中在这里，避免“界面”页变成杂物间。"""
+        """与视觉外观无关的维护项集中在这里，避免“个性化”页变成杂物间。"""
         w = QWidget()
         l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
 
@@ -626,6 +697,35 @@ class SettingsCenter(QWidget):
         self.curseforge_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.curseforge_key_edit.setPlaceholderText("仅限获批的 Third-Party API Key；不要把密钥发到聊天或提交到 Git")
         l.addWidget(cf_title); l.addWidget(cf_hint); l.addWidget(self.curseforge_key_edit); l.addStretch()
+        return self._wrap_scroll(w)
+
+    # ================= 软件信息 =================
+    def _build_software_info(self) -> QWidget:
+        from updater import VERSION
+        w = QWidget()
+        l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
+
+        title = QLabel("Agent Minecraft Launcher")
+        title.setStyleSheet(f"font-size:18px; font-weight:bold; color:{text_color()};")
+        version = QLabel(f"当前版本：{VERSION}")
+        version.setStyleSheet(f"color:{muted_color()};")
+        description = QLabel("Minecraft 实例、资源、联机与 AI 辅助管理工具。")
+        description.setWordWrap(True)
+        l.addWidget(title); l.addWidget(version); l.addWidget(description)
+
+        thanks_title = QLabel("鸣谢")
+        thanks_title.setStyleSheet(f"font-size:16px; font-weight:bold; color:{text_color()};")
+        easytier = QLabel(
+            "<b>EasyTier</b><br>"
+            "为可选的虚拟局域网联机功能提供底层组网能力。EasyTier 是独立的开源项目，"
+            "启动器只在用户选择使用时下载或连接其程序。<br>"
+            "<a href=\"https://github.com/EasyTier/EasyTier\">项目主页</a>　·　"
+            "<a href=\"https://github.com/EasyTier/EasyTier/blob/main/LICENSE\">LGPL-3.0 许可证</a>")
+        easytier.setTextFormat(Qt.TextFormat.RichText)
+        easytier.setOpenExternalLinks(True)
+        easytier.setWordWrap(True)
+        easytier.setStyleSheet(f"color:{muted_color()};")
+        l.addSpacing(12); l.addWidget(thanks_title); l.addWidget(easytier); l.addStretch()
         return self._wrap_scroll(w)
 
     def _build_java(self) -> QWidget:
@@ -1160,7 +1260,12 @@ class SettingsCenter(QWidget):
 
     # ================= 保存 =================
     def apply(self):
-        self.settings["memory_gb"] = self.memory_spin.value()
+        try:
+            self.settings['jvm_args'] = self.jvm_editor.values()
+        except ValueError as error:
+            QMessageBox.warning(self, 'JVM 参数', str(error))
+            return
+        self.settings["memory_gb"] = 0 if self.memory_auto_check.isChecked() else self.memory_spin.value()
         self.settings["version_isolation"] = self.isolation_check.isChecked()
         self.settings["game_dir"] = self.game_dir_edit.text().strip()
         self.settings["language"] = self.language_combo.currentData()
@@ -1175,6 +1280,7 @@ class SettingsCenter(QWidget):
         self.settings["custom_mirrors"] = self._custom_mirrors
         self.settings["curseforge_api_key"] = self.curseforge_key_edit.text().strip()
         # 自定义背景(阶段 2)
+        self.settings['ui_wallpaper_blur'] = self.wallpaper_blur_slider.value()
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
         self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()

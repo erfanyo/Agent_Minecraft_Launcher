@@ -46,6 +46,7 @@ MAIN_TABS = []        # [(label, build_fn)]                    (主标签页,与
 
 # 最近一次装载的可读报告。过去插件异常会被静默吞掉，开发者只能猜“为什么没出现”。
 LOAD_REPORTS = {}     # plugin_id -> {"state": loaded/skipped/error, "message": str}
+CENTER_PAGES = {}     # center -> [(plugin_id, page_id, label, builder)]
 
 # ---- 插件元数据(从插件模块读取):默认启禁 / 独立设置页 ----
 # discover_plugins 返回 [(name, path, meta)];meta 含 default_enabled / has_settings / settings_page
@@ -164,6 +165,29 @@ class PluginAPI:
         if any(old_label == label for old_label, _ in MAIN_TABS):
             raise ValueError(f"主标签页重名:{label}")
         MAIN_TABS.append((label, build_fn))
+
+    def register_center_page(self, center: str, page_id: str, label: str, build_fn):
+        """Register a lazy sidebar page. Currently supported center: online."""
+        if center != 'online':
+            raise ValueError('当前支持的中心为 online')
+        if not all(isinstance(s, str) and s.strip() for s in (page_id, label)) or not callable(build_fn):
+            raise ValueError('页面需要 ID、标题和构建函数')
+        pages = CENTER_PAGES.setdefault(center, [])
+        if any((pid == self.plugin_id and key == page_id) or title == label
+               for pid, key, title, _ in pages):
+            raise ValueError('插件页面 ID 或标题重复')
+        pages.append((self.plugin_id, page_id, label, build_fn))
+
+    def open_web_window(self, title: str, html: str, *, handlers=None,
+                        width=1100, height=760, on_error=None):
+        """GUI-thread only. Trusted inline HTML; explicit JSON RPC handlers only.
+
+        Returns a handle with close(). Keep handlers short (they run on GUI thread).
+        Requires optional pywebview; Windows uses shared WebView2, never QtWebEngine.
+        """
+        from plugin_web_window import open_web_window
+        return open_web_window(title, html, handlers=handlers, width=width,
+                               height=height, on_error=on_error)
 
 
 def build_api(plugin_id: str, settings: dict | None = None) -> PluginAPI:
@@ -580,6 +604,8 @@ def load_plugin(name: str, path: str, disabled: set, settings: dict | None = Non
         return True
     except Exception as e:
         LOAD_REPORTS[name] = {"state": "error", "message": f"注册失败:{type(e).__name__}: {e}"}
+        for center, pages in CENTER_PAGES.items():
+            CENTER_PAGES[center] = [row for row in pages if row[0] != name]
         return False
 
 
@@ -587,7 +613,8 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
     """启动时装载所有插件。disabled = 被禁用的插件 id 集合(显式禁用)。
     额外考虑"默认关闭"插件:PLUGIN_DEFAULT_ENABLED=False 且未被显式启用(settings['plugins_enabled'])
     的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
-    global TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS
+    global TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS, CENTER_PAGES
+    CENTER_PAGES = {}
     TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, {}, [], {}, [], {}
     LOAD_REPORTS = {}
     # 禁用集合 = 显式传入 disabled 并上 settings["plugins_disabled"](传 settings 时生效)

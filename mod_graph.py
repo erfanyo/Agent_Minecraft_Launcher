@@ -19,7 +19,8 @@ import mod_deps as md
 
 
 # 节点/边配色
-_NODE_COL = {"normal": QColor("#4A90D9"), "disabled": QColor("#9AA0A6"), "missing": QColor("#E05B5B")}
+_NODE_COL = {"normal": QColor("#4A90D9"), "disabled": QColor("#9AA0A6"),
+             "optional": QColor("#737B86"), "missing": QColor("#E05B5B")}
 _EDGE_COL = {
     md.REQUIRED: (QColor("#6E8FBF"), Qt.PenStyle.SolidLine),
     md.OPTIONAL: (QColor("#9AA0A6"), Qt.PenStyle.DashLine),
@@ -201,8 +202,9 @@ class _NodeItem(QGraphicsItem):
         self._w, self._h = _node_size(node, font)
         self.setPos(x - self._w / 2, y - self._h / 2)
         self.setAcceptedMouseButtons(Qt.MouseButton.LeftButton)
+        absent = "(缺少必需前置)" if node.missing else "(可选，未安装)"
         self.setToolTip(f"{node.name}  ({node.mod_id})\n"
-                        f"文件:{node.file or '(缺失,未安装)'}\n"
+                        f"文件:{node.file or absent}\n"
                         f"加载器:{node.loader or '-'}  版本:{node.version or '-'}\n"
                         f"{'已禁用' if not node.enabled else '已启用'}"
                         f"{'  ·  ⚠ 缺失' if node.missing else ''}\n"
@@ -221,7 +223,8 @@ class _NodeItem(QGraphicsItem):
         return QRectF(0, 0, self._w, self._h)
 
     def paint(self, p: QPainter, *_):
-        state = "missing" if self.node.missing else ("disabled" if not self.node.enabled else "normal")
+        state = ("missing" if self.node.missing else "optional" if self.node.placeholder else
+                 "disabled" if not self.node.enabled else "normal")
         color = _NODE_COL[state]
         p.setPen(QPen(QColor("#20262e"), 1))
         p.setBrush(QBrush(color))
@@ -303,7 +306,7 @@ class _ZoomView(QGraphicsView):
 
 
 class ModDependencyGraphDialog(QDialog):
-    """Mod 依赖网络对话框:蓝色=已装,灰=已禁用,红=缺失(被依赖但没装);
+    """Mod 依赖网络对话框:蓝色=已装,灰=已禁用,红=缺少必需前置;
     实线=必须依赖,虚线=可选依赖 / 不兼容(红色虚线)。拖拽平移,滚轮缩放。
 
     大型整合包(几百个 mod)自动把画布按节点数放大 → 打开时整体 fit 缩小到一屏
@@ -346,7 +349,7 @@ class ModDependencyGraphDialog(QDialog):
         self.scene = QGraphicsScene(self)
         self.scene.setSceneRect(0, 0, canvas_w, canvas_h)
         # 先画边,再画节点(节点盖住线端)
-        self._edge_items = []   # (source, target, item)
+        self._edge_items = []   # (source, target, dependency_type, item)
         self._items = {}        # mod_id -> _NodeItem
         for e in graph.edges:
             if e.source not in self._pos or e.target not in self._pos or e.source == e.target:
@@ -355,7 +358,7 @@ class ModDependencyGraphDialog(QDialog):
             x2, y2 = self._pos[e.target]
             item = _EdgeItem(x1, y1, x2, y2, e.type)
             self.scene.addItem(item)
-            self._edge_items.append((e.source, e.target, item))
+            self._edge_items.append((e.source, e.target, e.type, item))
         for nid, node in graph.nodes.items():
             if nid not in self._pos:
                 continue
@@ -392,6 +395,11 @@ class ModDependencyGraphDialog(QDialog):
         self.focus_only = QCheckBox("专注模式")
         self.focus_only.setToolTip("选中节点后隐藏无关节点和连线，适合大型整合包逐块排查")
         self.focus_only.toggled.connect(lambda _checked: self._apply_highlight(self._focused_id))
+        optional_count = sum(1 for edge in graph.edges if edge.type == md.OPTIONAL)
+        self.show_optional = QCheckBox(f"显示可选依赖（{optional_count}）")
+        self.show_optional.setChecked(False)
+        self.show_optional.setToolTip("默认隐藏选装关系和仅由选装关系产生的未安装节点")
+        self.show_optional.toggled.connect(self._apply_dependency_filter)
 
         top = QHBoxLayout()
         top.addWidget(self.search_edit, 1)
@@ -399,46 +407,85 @@ class ModDependencyGraphDialog(QDialog):
         top.addWidget(fit_btn)
         top.addWidget(zin)
         top.addWidget(zout)
+        top.addWidget(self.show_optional)
         top.addWidget(self.focus_only)
         top.addWidget(clear_btn)
 
         # ---- 概览 ----
         st = graph.stats()
-        overview = QLabel(
-            f"共 {st['mods']} 个 Mod," 
+        self.overview = QLabel(
+            f"共 {st['mods']} 个 Mod，{st.get('embedded', 0)} 个内嵌组件，"
             f"{st['edges']} 条依赖关系," 
             f"{st['missing']} 个缺失依赖"
             f"   ·   实例: {inst_id}")
-        overview.setStyleSheet("color: #e8ecf2; font-weight: bold; background: transparent;")
+        self.overview.setStyleSheet("color: #e8ecf2; font-weight: bold; background: transparent;")
 
         legend = QLabel(
-            "● 蓝=已装  ·  ● 灰=已禁用  ·  ● 红=缺失(被依赖但没装)\n"
-            "实线=必须依赖  ·  虚线=可选依赖  ·  红色虚线=不兼容冲突\n"
+            "● 蓝=已装  ·  ● 灰=已禁用  ·  ● 红=缺少必需前置\n"
+            "实线=必须依赖  ·  可选依赖可在上方显示  ·  红色虚线=不兼容冲突\n"
             "这是独立分析窗口：可保留打开并继续管理实例。拖拽平移、滚轮缩放；点节点高亮它和它依赖/被依赖的对象，"
             "大型整合包可开启「专注模式」隐藏无关节点。\n"
-            "⚠ 注意:红色「缺失」也可能是整合包**主动去掉的选装/需自行编译资源**(如 voxy 为选装、需跑编译脚本),"
-            "未必真缺——结合整合包说明判断,别盲目补装。")
+            "未安装的可选项默认隐藏；未安装的冲突对象属于正常状态，不显示为缺失。")
 
         layout = QVBoxLayout(self)
-        layout.addWidget(overview)
+        layout.addWidget(self.overview)
         layout.addLayout(top)
         layout.addWidget(self.view, 1)
         layout.addWidget(legend)
+        self._apply_dependency_filter()
+
+    def _apply_dependency_filter(self, _checked=None):
+        """Hide optional edges and optional-only missing placeholders by default."""
+        show_optional = self.show_optional.isChecked()
+        visible_edges = []
+        visible_placeholders = set()
+        visible_missing = set()
+        for source, target, edge_type, item in self._edge_items:
+            visible = show_optional or edge_type != md.OPTIONAL
+            item.setVisible(visible)
+            if visible:
+                visible_edges.append((source, target, edge_type, item))
+                target_node = self._graph.nodes.get(target)
+                if target_node and target_node.placeholder:
+                    visible_placeholders.add(target)
+                    if target_node.missing:
+                        visible_missing.add(target)
+        for mod_id, item in self._items.items():
+            node = self._graph.nodes[mod_id]
+            item.setVisible(not node.placeholder or mod_id in visible_placeholders)
+        focused_item = self._items.get(self._focused_id) if self._focused_id else None
+        if self._focused_id and (focused_item is None or not focused_item.isVisible()):
+            self._focused_id = None
+            self._search_status.clear()
+        installed = sum(1 for node in self._graph.nodes.values()
+                        if not node.placeholder and '!' not in node.file)
+        embedded = sum(1 for node in self._graph.nodes.values()
+                       if not node.placeholder and '!' in node.file)
+        self.overview.setText(
+            f"当前显示 {installed} 个 Mod，{embedded} 个内嵌组件，{len(visible_edges)} 条依赖关系，"
+            f"{len(visible_missing)} 个缺失依赖   ·   实例：{self.windowTitle().split('—', 1)[-1].strip()}")
+        self._apply_highlight(self._focused_id)
 
     # ---- 高亮:点节点 → 它 + 直接相连的节点全亮,其余变淡 ----
     def _apply_highlight(self, focus: str | None):
         self._focused_id = focus
         nb = set()
         if focus:
-            for s, t, _i in self._edge_items:
+            for s, t, _type, item in self._edge_items:
+                if not item.isVisible():
+                    continue
                 if s == focus:
                     nb.add(t)
                 if t == focus:
                     nb.add(s)
         for mid, item in self._items.items():
+            if not item.isVisible():
+                continue
             on = focus is None or mid == focus or mid in nb
             item.setOpacity(1.0 if on else (0.0 if self.focus_only.isChecked() else 0.18))
-        for s, t, item in self._edge_items:
+        for s, t, _type, item in self._edge_items:
+            if not item.isVisible():
+                continue
             on = focus is None or focus in (s, t)
             item.setOpacity(1.0 if on else (0.0 if self.focus_only.isChecked() else 0.10))
 
@@ -458,6 +505,8 @@ class ModDependencyGraphDialog(QDialog):
         if not q:
             return
         for mid, item in self._items.items():
+            if not item.isVisible():
+                continue
             node = self._graph.nodes[mid]
             if q in mid.lower() or q in (node.name or "").lower():
                 self.search_edit.setText(mid)

@@ -39,6 +39,14 @@ def _open_url(url: str):
 def _open_lan_bridge_settings(owner: QWidget):
     """从联机中心直达 CLI 桥接配置；默认关闭时带用户去插件开关，而非留下死按钮。"""
     root = owner.window()
+    online = getattr(root, "online_center", None)
+    tabs = getattr(root, "main_tabs", None)
+    if online is not None and online.shell.switch_by_label("EasyTier 设置"):
+        if tabs is not None:
+            index = tabs.indexOf(online)
+            if index >= 0:
+                tabs.setCurrentIndex(index)
+        return
     settings_center = getattr(root, "settings_center", None)
     main_tabs = getattr(root, "main_tabs", None)
     if settings_center is None or main_tabs is None:
@@ -591,6 +599,8 @@ class OnlineCenter(QWidget):
         # 帮我推荐(第二步最常用,方便拿不准的玩家)
         self.shell.add_section(t("RECOMMEND"),
                                lambda: RecommendWizard(self._view_tutorial), lazy=True)
+        # Only expose settings registered by a loaded plugin; do not import or
+        # enable a disabled plugin merely by opening the online center.
         # 各方案分类(左菜单一列)
         for title, items in SCHEMES:
             self.shell.add_section(title.split("(")[0].strip(),
@@ -598,11 +608,26 @@ class OnlineCenter(QWidget):
                                    lazy=True)
         # 教程与资料
         self.shell.add_section(t("TUTORIALS"), build_tutorials_tab, lazy=True)
+        from plugin_manager import CENTER_PAGES
+        for plugin_id, page_id, label, builder in CENTER_PAGES.get('online', []):
+            # Avoid shadowing built-in navigation labels.
+            title = label if label not in self.shell.menu.items() else f'{label} ({plugin_id})'
+            self.shell.add_section(title, lambda b=builder: self._build_plugin_page(b), lazy=True)
         self.shell.switch_to(0)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.shell, 1)
+
+    def _build_plugin_page(self, builder) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }"
+                            "QScrollArea > QWidget > QWidget { background: transparent; }")
+        scroll.viewport().setAutoFillBackground(False)
+        scroll.setWidget(builder())
+        return scroll
 
     def _build_home(self) -> QWidget:
         """联机首页:场景总览(纠正"虚拟局域网 ≠ 同一 WiFi"的说法)+ 开始推荐入口。"""

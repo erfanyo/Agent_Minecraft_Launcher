@@ -4,7 +4,8 @@ import tempfile
 import unittest
 import zipfile
 
-from installed_resource_cards import read_card, warning, incompatible_version
+from installed_resource_cards import (read_card, warning, incompatible_version,
+                                      loaded_mod_evidence)
 
 
 class CardTests(unittest.TestCase):
@@ -30,6 +31,8 @@ class CardTests(unittest.TestCase):
         self.assertFalse(incompatible_version('1.20.1', '[1.20,1.21)'))
         self.assertFalse(incompatible_version('1.20.1', '>=1.20'))
         self.assertTrue(incompatible_version('1.21', '[1.20,1.21)'))
+        self.assertFalse(warning({'formats': ['neoforge'], 'mc': '[1.21,1.21.1)'},
+                                 'neoforge', '1.21.1', loaded_successfully=True))
 
     def test_loader(self):
         self.assertTrue(warning({'formats': ['fabric']}, 'forge', '1.20.1'))
@@ -46,6 +49,19 @@ class CardTests(unittest.TestCase):
             self.assertEqual(data['name'], '测试 Mod')
             self.assertEqual(data['image'], b'example')
             self.assertEqual(data['formats'], ['fabric'])
+            self.assertEqual(data['id'], 'test')
+
+    def test_latest_log_provides_loaded_mod_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            mods = os.path.join(folder, 'mods')
+            logs = os.path.join(folder, 'logs')
+            os.makedirs(mods)
+            os.makedirs(logs)
+            with open(os.path.join(logs, 'latest.log'), 'w', encoding='utf-8') as file:
+                file.write('Reloading ResourceManager: vanilla, mod/iris, mod/jei\n')
+            ids, timestamp = loaded_mod_evidence(mods)
+        self.assertEqual(ids, {'iris', 'jei'})
+        self.assertGreater(timestamp, 0)
 
 
 if __name__ == '__main__':

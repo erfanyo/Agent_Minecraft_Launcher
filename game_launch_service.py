@@ -49,10 +49,16 @@ class GameLaunchService:
         return fetch_version_detail(version["url"])
 
     def prepare(self, version: dict, status_cb=None, progress_cb=None) -> LaunchPlan:
+        from instance_maintenance import assert_not_maintaining
+        assert_not_maintaining()
         status = status_cb or (lambda _message: None)
         progress = progress_cb or (lambda _done, _total: None)
         settings = self._settings()
         instance_id = version["id"]
+        import paths
+        if os.path.realpath(self._game_root()) == os.path.realpath(paths.GAME_DIR):
+            from diagnostic_tools import check_constraint
+            check_constraint(instance_id)
 
         if version.get("local"):
             heal_instance_json(instance_id, self._game_root())
@@ -99,7 +105,14 @@ class GameLaunchService:
             raise LoginRequiredError("本机还没有正版账号，请先完成微软正版登录。")
 
         instance_memory = int(launch_options.get("memory_gb") or 0)
-        memory_gb = instance_memory if instance_memory > 0 else settings.get("memory_gb", 4)
+        memory_gb = instance_memory if instance_memory > 0 else int(settings.get("memory_gb", 0) or 0)
+        if memory_gb <= 0:
+            from memory_policy import automatic_budget, history_peak, enabled_mod_count
+            budget = automatic_budget(history_peak_bytes=history_peak(
+                os.path.join(self._game_root(), 'versions', instance_id)),
+                mods=enabled_mod_count(game_dir))
+            memory_gb = budget['gb']
+            status(f"自动内存：{memory_gb} GB（{budget['basis']}）")
         command = build_launch_command(
             detail, game_dir, java_exe,
             username=username,
@@ -108,6 +121,8 @@ class GameLaunchService:
             install_dir=self._game_root(),
             auth=auth,
         )
+        from advanced_launch import apply_jvm
+        command = apply_jvm(command, launch_options.get('jvm_args', settings.get('jvm_args', '')))
         return LaunchPlan(
             instance_id=instance_id,
             detail=detail,

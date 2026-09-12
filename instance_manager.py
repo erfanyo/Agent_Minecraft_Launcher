@@ -103,11 +103,11 @@ class InstanceManagerDialog(QWidget):
         if instance is not None:
             self.set_instance(instance, game_dir)
 
-    def set_instance(self, instance: dict, game_dir: str):
+    def set_instance(self, instance: dict, game_dir: str, force=False):
         """(重新)填充某实例的详情:清掉旧 shell,重建左菜单 + 右面板。"""
         # 从实例详情里的菜单打开某个功能时，主窗口也会再次把同一实例传进来。
         # 不要因此销毁 CenterShell，否则它会按默认值回到「概览」。
-        if (self.shell is not None and self.inst_id == instance.get("id")
+        if (not force and self.shell is not None and self.inst_id == instance.get("id")
                 and self.game_dir == game_dir):
             return
         # 清旧内容
@@ -126,6 +126,8 @@ class InstanceManagerDialog(QWidget):
         self.shell.add_section("概览", self._build_overview_tab)
         # 设置:单个实例的启动选项(分配内存等;完全体以后完善)
         self.shell.add_section("设置", self._build_instance_settings_tab)
+        from maintenance_ui import modify_page
+        self.shell.add_section('修改', lambda: modify_page(self))
         # 导出:整合包导出(按目录选文件,类似 Windows 选安装路径)
         self.shell.add_section("导出", self._build_export_tab)
         self.shell.add_section("Mod", self._build_mods_tab)
@@ -176,6 +178,8 @@ class InstanceManagerDialog(QWidget):
         layout.addWidget(info)
         layout.addLayout(row)
         layout.addWidget(tip)
+        from maintenance_ui import overview_controls
+        layout.addWidget(overview_controls(self))
         layout.addStretch()
         return tab
 
@@ -203,9 +207,10 @@ class InstanceManagerDialog(QWidget):
 
         self.inst_memory_spin = QSpinBox()
         self.inst_memory_spin.setRange(0, 64)      # 0 = 跟随全局
+        self.inst_memory_spin.setSpecialValueText('跟随全局')
         # 本实例覆盖全局内存:0 = 用全局设置(默认);>0 = 本实例专用
         self.inst_memory_spin.setValue(int(opts.get("memory_gb") or 0))
-        mem_hint = QLabel("0 = 跟随全局设置(设置→游戏→内存);>0 = 本实例专用内存(整合包/光影建议 ≥6G)")
+        mem_hint = QLabel("跟随全局：使用全局的自动或手动策略；正数：本实例专用堆上限。")
         mem_hint.setWordWrap(True); mem_hint.setStyleSheet(hint_style())
 
         self.inst_java_path = QLineEdit(str(opts.get("java_path") or ""))
@@ -256,6 +261,16 @@ class InstanceManagerDialog(QWidget):
         form = QFormLayout()
         form.addRow("本实例内存(GB):", self.inst_memory_spin)
         form.addRow("", mem_hint)
+        from memory_meter import MemoryMeter
+        def allocation():
+            from settings import load_settings
+            return self.inst_memory_spin.value() or int(load_settings().get('memory_gb', 0))
+        self.memory_meter = MemoryMeter(allocation, self.inst_dir)
+        self.inst_memory_spin.valueChanged.connect(self.memory_meter.refresh)
+        form.addRow('', self.memory_meter)
+        from advanced_launch import editor
+        self.jvm_editor = editor(opts.get('jvm_args'), instance=True)
+        form.addRow('', self.jvm_editor)
         form.addRow("Java 方案:", self.inst_java_choice)
         form.addRow("本实例 Java:", java_row)
         form.addRow("", self.inst_java_hint)
@@ -269,6 +284,15 @@ class InstanceManagerDialog(QWidget):
 
     def _save_instance_settings(self):
         opts = self._load_launch_options()
+        try:
+            custom_jvm = self.jvm_editor.values()
+        except ValueError as error:
+            QMessageBox.warning(self, 'JVM 参数', str(error))
+            return
+        if custom_jvm is None:
+            opts.pop('jvm_args', None)
+        else:
+            opts['jvm_args'] = custom_jvm
         mem = self.inst_memory_spin.value()
         opts["memory_gb"] = mem
         java_path = self.inst_java_path.text().strip()
@@ -400,8 +424,9 @@ class InstanceManagerDialog(QWidget):
         # 兜底:读版本 json 里的 "id"/"inheritsFrom" 或 libraries 里的加载器
         try:
             import json as _json
-            vjson = os.path.join(self.inst_dir, self.inst_id + ".json")
-            if os.path.isfile(vjson):
+            from instances import find_instance_version_json
+            vjson = find_instance_version_json(self.inst_dir, self.inst_id)
+            if vjson and os.path.isfile(vjson):
                 with open(vjson, encoding="utf-8") as f:
                     jd = _json.load(f)
                 for lib in jd.get("libraries", []) or []:

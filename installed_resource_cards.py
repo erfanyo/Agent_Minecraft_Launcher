@@ -41,9 +41,33 @@ def incompatible_version(current, rule):
                 or (hi is not None and (value > hi or (value == hi and right == ')'))))
 
 
+@lru_cache(maxsize=64)
+def _loaded_mod_ids(log_path, mtime, size):
+    """Return Mod IDs confirmed in the latest completed resource reload."""
+    try:
+        with open(log_path, 'rb') as file:
+            file.seek(max(0, size - 4 * 1024 * 1024))
+            text = file.read().decode('utf-8', errors='replace').lower()
+    except OSError:
+        return frozenset()
+    ids = set(re.findall(r'\bmod/([a-z0-9_.-]+)', text))
+    # NeoForge's loaded-Mod list uses: Display Name version (mod_id)
+    ids.update(re.findall(r'^\s+.+\s\(([a-z0-9_.-]+)\)\s*$', text, re.MULTILINE))
+    return frozenset(ids)
+
+
+def loaded_mod_evidence(mods_directory):
+    log_path = os.path.join(os.path.dirname(mods_directory), 'logs', 'latest.log')
+    try:
+        stat = os.stat(log_path)
+    except OSError:
+        return frozenset(), 0
+    return _loaded_mod_ids(log_path, stat.st_mtime_ns, stat.st_size), stat.st_mtime_ns
+
+
 @lru_cache(maxsize=512)
 def read_card(path, mtime, size):
-    result = {"name": os.path.basename(path), "description": "", "image": b"", "formats": [], "mc": ""}
+    result = {"id": "", "name": os.path.basename(path), "description": "", "image": b"", "formats": [], "mc": ""}
     try:
         with zipfile.ZipFile(path) as archive:
             def read(name, limit=512_000):
@@ -55,7 +79,8 @@ def read_card(path, mtime, size):
             icon = 'pack.png'
             if 'fabric.mod.json' in names:
                 data = json.loads(read('fabric.mod.json'))
-                result.update(name=str(data.get('name') or data.get('id') or result['name']),
+                result.update(id=str(data.get('id') or ''),
+                              name=str(data.get('name') or data.get('id') or result['name']),
                               description=str(data.get('description') or ''),
                               mc=str(data.get('depends', {}).get('minecraft', '')))
                 result['formats'].append('fabric')
@@ -70,7 +95,8 @@ def read_card(path, mtime, size):
                 result['formats'].append(loader)
                 mods = data.get('mods') or [{}]
                 mod = mods[0]
-                result.update(name=str(mod.get('displayName') or result['name']),
+                result.update(id=str(mod.get('modId') or result['id']),
+                              name=str(mod.get('displayName') or result['name']),
                               description=str(mod.get('description') or ''))
                 icon = mod.get('logoFile') or data.get('logoFile') or icon
                 for dep in data.get('dependencies', {}).get(mod.get('modId'), []):
@@ -81,7 +107,9 @@ def read_card(path, mtime, size):
                 mods = data if isinstance(data, list) else data.get('modList', [])
                 if mods:
                     mod = mods[0]
-                    result.update(name=str(mod.get('name') or result['name']), description=str(mod.get('description') or ''))
+                    result.update(id=str(mod.get('modid') or mod.get('modId') or ''),
+                                  name=str(mod.get('name') or result['name']),
+                                  description=str(mod.get('description') or ''))
                     icon = mod.get('logoFile') or icon
                     result['formats'].append('forge')
             if isinstance(icon, str) and icon.lstrip('/') in names:
@@ -91,7 +119,9 @@ def read_card(path, mtime, size):
     return result
 
 
-def warning(data, loader, minecraft):
+def warning(data, loader, minecraft, loaded_successfully=False):
+    if loaded_successfully:
+        return ''
     formats = data.get('formats', [])
     loader = str(loader or 'vanilla').lower()
     # Forge/NeoForge cross-loading and Quilt compatibility are not inferred here.
@@ -100,7 +130,7 @@ def warning(data, loader, minecraft):
     if loader == 'vanilla' and formats:
         return '当前是原版实例：需要 Mod 加载器'
     if len(formats) == 1 and incompatible_version(str(minecraft), data.get('mc', '')):
-        return '与当前 MC 版本不兼容：需要 ' + data['mc']
+        return 'Mod 内部声明的版本范围不含当前版本：' + data['mc']
     return ''
 
 
@@ -166,6 +196,7 @@ class CardLoader(QObject):
         files = [str(self.widget.item(i).data(Qt.ItemDataRole.UserRole) or self.widget.item(i).text()) for i in range(self.widget.count())]
         def work():
             rows = []
+            loaded_ids, log_mtime = loaded_mod_evidence(directory)
             for filename in files:
                 if generation != self.generation:
                     return
@@ -173,7 +204,11 @@ class CardLoader(QObject):
                 try:
                     stat = os.stat(path)
                     data = dict(read_card(path, stat.st_mtime_ns, stat.st_size))
-                    data['warning'] = warning(data, loader, minecraft)
+                    enabled = not filename.lower().endswith('.disabled')
+                    loaded = bool(enabled and data.get('id') in loaded_ids and
+                                  log_mtime >= stat.st_mtime_ns)
+                    data['warning'] = warning(data, loader, minecraft, loaded)
+                    data['loaded_evidence'] = loaded
                     rows.append((filename, data))
                 except OSError:
                     pass

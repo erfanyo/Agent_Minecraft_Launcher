@@ -176,7 +176,7 @@ def list_mod_versions(slug: str, game_version: str | None, loader: str | None) -
 
 def _find_version(slug: str, game_version: str | None, loader: str | None,
                   version_number: str | None = None) -> dict | None:
-    """按 (版本, 加载器) 查文件信息;game_version/loader 为 None 表示不过滤。"""
+    """按 (版本, 加载器) 查文件信息；未指定版本时优先最新稳定版。"""
     params = {"game_versions": json.dumps([game_version] if game_version else []),
               "loaders": json.dumps([loader] if loader else [])}
     resp = requests.get(BASE + f"/project/{slug}/version", params=params, timeout=20)
@@ -186,7 +186,12 @@ def _find_version(slug: str, game_version: str | None, loader: str | None,
         versions = [v for v in versions if v.get("version_number") == version_number]
     if not versions:
         return None
-    v = versions[0]
+    # Modrinth returns newest first, including alpha/beta builds. Automatic installs should
+    # prefer the newest release: a newer beta can carry incomplete dependency metadata and
+    # still fail at runtime with an otherwise compatible pack. Explicit version selection
+    # continues to allow prereleases, and prerelease-only projects still have a fallback.
+    v = versions[0] if version_number else next(
+        (row for row in versions if row.get("version_type") == "release"), versions[0])
     primary = next((f for f in v.get("files", []) if f.get("primary")), None)
     f = primary or (v.get("files") or [{}])[0]
     return {
@@ -202,7 +207,7 @@ def _find_version(slug: str, game_version: str | None, loader: str | None,
 def get_mod_version(slug: str, game_version: str, loader: str | None,
                     version_number: str | None = None) -> dict | None:
     """找某个 Mod 在"指定游戏版本 + 加载器"下的文件信息。
-    默认最新;version_number 指定时只在该版本里找。
+    默认最新稳定版（没有稳定版时取最新预发布版）；version_number 指定时只在该版本里找。
     loader 传 None = 不按加载器过滤(数据包/光影包等无加载器的项目)。
     精确找不到时逐级放宽(不限版本 → 不限加载器),提高老版本/标记不全项目的成功率。
     返回 {version_number, filename, url, size, dependencies};没有匹配返回 None。"""
@@ -260,10 +265,11 @@ def resolve_dependencies(slug: str, game_version: str, loader: str | None,
 
 def download_mod(slug: str, game_version: str, loader: str, mods_dir: str,
                  version_number: str | None = None,
-                 progress_callback=None) -> str | None:
+                 progress_callback=None, strict=False) -> str | None:
     """下载某 Mod 到 mods 目录,返回保存的文件名;失败返回 None。
-    version_number 不传 → 最新;传了 → 指定版本(高级选项)。"""
-    info = get_mod_version(slug, game_version, loader, version_number)
+    version_number 不传 → 最新稳定版（无稳定版时取最新预发布版）；传了 → 指定版本。"""
+    info = (_find_version(slug, game_version, loader, version_number) if strict else
+            get_mod_version(slug, game_version, loader, version_number))
     if info is None or not info["url"]:
         return None
     os.makedirs(mods_dir, exist_ok=True)

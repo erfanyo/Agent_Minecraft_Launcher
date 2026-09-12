@@ -17,6 +17,48 @@ import paths
 from instance_metadata import read_metadata
 
 
+def find_instance_version_json(folder: str, instance_id: str) -> str | None:
+    """Find the launch JSON in a manually copied instance folder.
+
+    Standard instances use <folder>/<folder>.json. Third-party launchers often keep
+    the loader profile name after the user renames the containing folder. Accept a
+    single unambiguous launch JSON without treating metadata JSON as a version.
+    """
+    exact = os.path.join(folder, instance_id + '.json')
+    if os.path.isfile(exact):
+        return exact
+    candidates = []
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return None
+    ignored = {'amcl_instance.json', 'launch_options.json', 'modrinth.index.json',
+               'manifest.json', 'mmc-pack.json'}
+    for filename in names:
+        if not filename.lower().endswith('.json') or filename.lower() in ignored:
+            continue
+        path = os.path.join(folder, filename)
+        try:
+            with open(path, encoding='utf-8') as file:
+                data = json.load(file)
+            if isinstance(data, dict) and any(key in data for key in
+                                              ('mainClass', 'libraries', 'inheritsFrom', 'downloads')):
+                candidates.append(path)
+        except (OSError, ValueError, TypeError):
+            continue
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _base_from_launch_arguments(data: dict) -> str:
+    args = (data.get('arguments') or {}).get('game') or []
+    flat = [str(value) for value in args if isinstance(value, (str, int, float))]
+    for flag in ('--fml.mcVersion', '--fml.mcversion'):
+        for index, value in enumerate(flat[:-1]):
+            if value.lower() == flag.lower():
+                return flat[index + 1]
+    return ''
+
+
 def _detect_loader(name: str, data: dict) -> str | None:
     """综合判断加载器,返回 fabric/neoforge/forge/None(认不出)"""
     # 1) 名称关键词(注意 neoforge 含子串 forge,必须先匹配长的)
@@ -46,7 +88,7 @@ def _detect_loader(name: str, data: dict) -> str | None:
 
 
 def scan_instances(game_dir: str = None) -> list:
-    """扫描已安装的实例:versions/<id>/<id>.json。
+    """扫描已安装的实例及手动复制进 versions 的单入口实例。
     返回 [{id, base, loader, label}],loader 为 fabric/forge/neoforge/'modded'/None(原版)
     game_dir 缺省时用当前生效的游戏目录(paths.GAME_DIR,设置里可改)。"""
     if game_dir is None:
@@ -60,18 +102,20 @@ def scan_instances(game_dir: str = None) -> list:
             continue   # 版本仓库(_versions/ 等),不是实例
         if os.path.isfile(os.path.join(versions_dir, '_imports', name + '.json')):
             continue  # 尚未完成的导入不能作为可启动实例。
-        vjson = os.path.join(versions_dir, name, name + ".json")
-        if not os.path.exists(vjson):
+        folder = os.path.join(versions_dir, name)
+        vjson = find_instance_version_json(folder, name)
+        if not vjson:
             continue
         try:
             with open(vjson, encoding="utf-8") as f:
                 data = json.load(f)
         except Exception:
             continue
-        metadata = read_metadata(os.path.join(versions_dir, name))
-        base = metadata.get('minecraft_version') or data.get("inheritsFrom") or data.get('clientVersion')
+        metadata = read_metadata(folder)
+        base = (metadata.get('minecraft_version') or data.get("inheritsFrom") or
+                data.get('clientVersion') or _base_from_launch_arguments(data))
         has_base = bool(data.get('inheritsFrom'))
-        loader = _detect_loader(name, data)
+        loader = metadata['loader'] if 'loader' in metadata else _detect_loader(name, data)
         if not base:
             base = name
         if loader is None:

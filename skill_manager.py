@@ -162,7 +162,8 @@ class TaskSplit(Skill):
         return ("【任务拆分已启用】长任务先拆成小步,一步一个工具,逐步完成。"
                 "每步执行后检查返回结果(成功/失败/列表)再决定下一步:"
                 "实例是否装好 → 用 list_instances 确认;Mod 是否装好 → 用 list_mods 确认;"
-                "某步失败就停下来向用户说明原因,不要硬继续。"
+                "某步失败先检查原因，在已有授权内换证据或替代方案继续；"
+                "只有缺必要输入、权限或外部条件时暂停，并说明下一步。"
                 "拿不准用户想要什么时,调用 ask_user 工具让用户勾选/补充。")
 
 
@@ -194,35 +195,22 @@ class BridgeModGuide(Skill):
 
 
 class CrossLoaderModGuide(Skill):
-    """非主流/跨加载器 Mod 检查:AI 判断兼容性/缺失依赖时不要想当然
-    (例: voxy 本是 Fabric mod,却有 GitHub 上的非官方 NeoForge 版)"""
+    """按实际声明和发布证据检查兼容性，避免来源猜测。"""
     id = "cross_loader_mod_guide"
-    name = "非主流 Mod 兼容性检查"
-    description = ("提醒 AI:存在「同名但跨加载器」的非主流 Mod(如 Fabric 专属 mod 有非官方的 "
-                   "NeoForge/Forge 移植版,常见于 GitHub/CurseForge),以及「Fabric Mod 被转译到 "
-                   "Forge/NeoForge、把 fabric-api 换成 Forge 等价物」的可能。"
-                   "判断某个 Mod 在指定加载器上有没有时,先检查是否有社区移植版,别过早说'没有'。")
+    name = "Mod 兼容性 · 证据核对"
+    description = "依据内部声明核对加载器和依赖；来源、选装与兼容层结论需要额外证据。"
     category = "AI 助手"
     default_enabled = True
 
     def ai_hint(self) -> str:
-        return ("【非主流/跨加载器 Mod 检查已启用】给用户判断 Mod 兼容性、缺失依赖、'某加载器上有没有这个 Mod'时,"
-                "先别下结论,注意三种可能:\n"
-                "- **同名跨加载器的非官方版**:很多 Mod 本是某一加载器专属,但有人在社区出过另一加载器的移植版"
-                "(常见于 GitHub / CurseForge,文件名常带 `-forge`、`-neoforge` 后缀,大概率**非官方**)。"
-                "例:`voxy` 本是 **Fabric** 优化 Mod,却存在 GitHub 发布的 **NeoForge** 版(非官方版,不稳定)。\n"
-                "- **存在'转译/迁移'的可能**:有些 Fabric Mod 被迁移(transpiled)到 Forge/NeoForge,"
-                "会把 `fabric-api` 依赖换成 Forge 等价物,或直接内嵌进移植版。"
-                "所以**'缺 fabric-api' 不一定真缺**——可能是被移植版内嵌或等价替代,别急着报'装了 A 缺 B'。\n"
-                "- **选装/需自行编译的资源**:有的 Mod 是整合包的**选装(optional)资源**,甚至要**跑编译脚本**"
-                "才能装(如 `voxy`:本是 Fabric 优化 Mod,本整合包版本为**选装**,想装还得先编译)。"
-                "这类 Mod 缺失时**不是装漏了**,而是作者故意没带 / 需要用户自行编译;"
-                "别当'缺失依赖'报错,应说明'这是选装资源,想装需先编译/手动添加'。\n"
-                "- **提示策略**:当某 Mod 在当前加载器上'找不到/没适配'时,应向用户说明"
-                "'可能只有 Fabric 原版,但有非官方 NeoForge/Forge 移植版(会更易出 bug、不随原版更新)'"
-                "让用户自己决定是否装非官方版;若用户想装,提醒其风险。\n"
-                "判断前可先用 search_mods / translate_mod_desc / 读实例 mods 核对该 Mod 的真实加载器与依赖,"
-                "不要凭印象断定。")
+        return ("【Mod 兼容性证据核对】排查时以当前 JAR 内部 ID、加载器声明、依赖区间、冲突、"
+                "内嵌 JAR 和实例实际环境为依据；文件名变化本身不是故障。\n"
+                "元数据是文件自身声明，不是来源认证。没有发布页/可信版本 API 的证据，"
+                "不讨论它是否官方、社区移植或更不稳定，也不凭记忆断言项目只支持某加载器。\n"
+                "只有工具或清单确认存在兼容层、内嵌前置、选装说明时才按这些条件分析；"
+                "不能用可能性否定明确的 required 依赖。版本区间未知时标记待验证，不能总结为依赖全部满足。\n"
+                "摘要未覆盖的字段不等于原文不存在；需要时用 inspect_mod_jar(view='summary'/'full')"
+                "复核。哈希只能与可信参考比对完整性，不单独证明官方来源。")
 
 
 class CrashDiagnosisGuide(Skill):
@@ -242,8 +230,8 @@ class CrashDiagnosisGuide(Skill):
                 "   〔动作〕改什么(如 换/升/降 Java 版本、删冲突 Mod、关掉含中文/特殊字符的路径、加内存、"
                 "更新/移除某 Mod 或光影、重装整合包、清空配置)\n"
                 "   　说明:为什么(对应哪个错误特征)/ 具体怎么做(去哪改)。\n"
-                "③ 若不能确定具体原因,给 1~2 条「先试」的兜底步骤(如 单独重启 1 次、干净重装该整合包、"
-                "换回上一版);不要硬说成确定结论。\n"
+                "③ 若不能确定具体原因,列明待验证假设并用可用工具补证据；"
+                "不要把重装、删 Mod、改游戏版本当作默认兜底，也不要把猜测说成确定结论。\n"
                 "④ 用中文;专业术语(完整异常类名、Mod 名、文件路径、版本号)保留原样,方便定位。")
 
 
@@ -265,7 +253,7 @@ class CrashRepairLoop(Skill):
                 "· 内存不够(OutOfMemoryError)→ set_setting(memory_gb=更大值),让用户重启游戏生效;\n"
                 "· Java 版本不适配/缺失 → 用启动器换/装对应 Java(可配合设置),或明确让用户来;\n"
                 "· 某 Mod 与当前版本/加载器冲突或损坏 → 先 backup_instance 备份,再 install_mod(slug) "
-                "重装一个兼容版本;若装不上就明确说,别反复试;\n"
+                "重装一个兼容版本;若装不上先查版本、依赖和下载错误，再选择有证据的替代方案;\n"
                 "· 实例损坏/配置乱 → 先备份,再说明「干净重装该实例」需要几步(创建新实例+重装 Mod),\n"
                 "  可主动帮用户创建新实例,但**绝不覆盖/删除用户原有实例或存档**;\n"
                 "· 启动配置错误 → set_setting / 走启动器设置改。\n"
@@ -280,8 +268,50 @@ class CrashRepairLoop(Skill):
                 "③ 动手前**先备份**(backup_instance),绝不先删后补;\n"
                 "④ **绝不删除/覆盖用户的存档、世界、配置**;只做可逆改动;\n"
                 "⑤ 改完**验证**:重读日志/重看是否还报同样错/确认设置生效;没解决就如实说,并回到修改意见清单;\n"
-                "⑥ 同一修复项最多试 1~2 次,失败就停,交给用户/升级到云端深度诊断。")
+                "⑥ 不重复无效操作；失败后有新证据或可验证的替代方案就继续，"
+                "确实缺权限、必要输入或外部资源时才暂停并给出续接步骤。")
 
+
+
+class RepairMethodology(Skill):
+    """多故障诊断的方法论；不授予写入权限。"""
+    id = "repair_methodology"
+    name = "攻坚修理 · 证据与续接"
+    description = ("用于崩溃排查、debug 压力测试和多故障修复：维护证据、逐项验证、"
+                   "减少重复查询并保存续接进度。遵循现有修复授权和工具权限。")
+    category = "AI 助手"
+    default_enabled = True
+
+    def ai_hint(self) -> str:
+        return """【攻坚修理方法论】仅在崩溃排查、debug 压力测试或修复任务中使用。
+目标：完成用户要求的诊断或修复验证；诊断请求不自动授权修改。遵循已有授权与工具权限。
+1. 先确认实例 ID、实际目录、MC/加载器、用户必须保留的 Mod/功能和验收条件。
+   压力测试不能靠换游戏版本、换加载器、大量删 Mod 或重建空实例规避故障。
+2. 维护简短进度账本：已确认事实（工具证据）、待验证假设、已做修改/恢复位置、
+   下一项验证。日志需核对路径与时间；复制来的旧日志不能当成本轮启动证据。
+3. 先读日志/崩溃报告，再针对异常检查 inspect_mod_jar 的内部 ID、版本、依赖和哈希。
+   文件名只是线索；ZIP/CRC 正常不能证明文件完整。对照可信版本哈希，区分错版本、
+   错加载器、重复 ID、缺前置、损坏核心、Java/启动配置问题。工具不存在时说明证据缺口。
+   发现字节相同的重复文件只算风险线索；必须结合本轮启动日志或隔离复现，才能断言它导致故障。
+   日志里出现 minecraft/neoforge/forge/fabric 缺失或加载器矛盾时，先用 inspect_instance_core
+   只读核验实例 JSON、客户端 JAR 和依赖库。仅当其返回 issues_found 时才建议 repair_instance_core；
+   verified 时排除核心损坏，present_but_unverifiable 时保留证据缺口，不能靠猜测反复建议修补核心。
+4. 获准修复后先 snapshot_instance（或可用备份）。若证据已确认 Mod 的 MC 版本或加载器不匹配，
+   只调用一次 find_compatible_mod_replacement；它会合并内部身份读取、文件指纹反查和严格兼容查询。
+   返回 replace 时用 recommended.version_id 调用 replace_mod_version。文件或实例环境未变化时复用结果，
+   不要再重复 list_mods、inspect_mod_jar、项目搜索或版本查询。一次改一个因果组并记录恢复方式。
+   仅用于定位时，set_mod_enabled 最终须恢复或列为未解决项。内部声明或发布清单已经证明不兼容，
+   且工具确实找不到安全兼容版本时，才用 set_mod_enabled 并填写 wrong_game_version/wrong_loader，允许保持移出状态；
+   普通用户语言说明“这个 Mod 当前不能用，所以已从本次启动中移出，原文件仍保留”。
+5. 用 launch_game / observe_game 验证本轮进程和日志。出现新错误则更新假设继续；
+   同一错误仍在，检查改动是否生效与依赖链，别机械重试相同操作。
+   进程创建、短暂存活、退出码 0、模型停止都不等于修复成功；进入世界和功能保留须有证据。
+6. 每次查询要解决一个具体未知项。避免反复列全量 Mod、读取相同日志或高频轮询。
+   一条路线失败不是整项任务失败：有新证据就换路线；无新证据则陈述阻塞条件。
+7. 接近预算或看到旧工具输出被节选时，先用简短正文更新账本，再处理最有价值的下一步。
+   不重放已完成的写操作；省略的输出不算验证通过。暂停时交代目标/约束、证据、
+   修改与备份、尚未验证事项、下一条工具及参数。续接时先核实当前状态，接着未完成项做。
+最终答复区分已修复且验证、已修改未验证、仍阻塞，并列出实际修改和验证证据。"""
 
 
 class McNameNormalize(Skill):
@@ -374,7 +404,7 @@ class CloudAIConfigGuide(Skill):
 
 BUILTIN_SKILLS = [AutoRestart, BackupReminder, CommandGuide, TaskSplit,
                   BridgeModGuide, CloudAIConfigGuide, CrossLoaderModGuide, CrashDiagnosisGuide,
-                  CrashRepairLoop, McNameNormalize, PluginCreationGuide]
+                  CrashRepairLoop, RepairMethodology, McNameNormalize, PluginCreationGuide]
 
 
 # ================= 管理器 =================

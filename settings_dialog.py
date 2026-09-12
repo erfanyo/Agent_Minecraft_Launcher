@@ -92,10 +92,15 @@ class SettingsDialog(QDialog):
     def _build_game_tab(self) -> QWidget:
         from PySide6.QtWidgets import QWidget
 
+        saved_memory = int(self.settings.get('memory_gb', 0) or 0)
+        self.memory_auto_check = QCheckBox('自动分配内存（按实例历史和 Mod 数量）')
+        self.memory_auto_check.setChecked(saved_memory <= 0)
         self.memory_spin = QSpinBox()
-        self.memory_spin.setRange(1, 16)
+        self.memory_spin.setRange(1, 64)
         self.memory_spin.setSuffix(" GB")
-        self.memory_spin.setValue(self.settings.get("memory_gb", 2))
+        self.memory_spin.setValue(saved_memory if saved_memory > 0 else 4)
+        self.memory_spin.setEnabled(not self.memory_auto_check.isChecked())
+        self.memory_auto_check.toggled.connect(lambda automatic: self.memory_spin.setEnabled(not automatic))
 
         self.isolation_check = QCheckBox("每个版本用独立游戏目录(存档/配置/Mod 互不干扰)")
         self.isolation_check.setChecked(self.settings.get("version_isolation", True))
@@ -112,7 +117,11 @@ class SettingsDialog(QDialog):
         dir_row.addWidget(default_btn)
 
         form = QFormLayout()
-        form.addRow("内存:", self.memory_spin)
+        form.addRow("内存策略:", self.memory_auto_check)
+        form.addRow("手动内存:", self.memory_spin)
+        from advanced_launch import editor
+        self.jvm_editor = editor(self.settings.get('jvm_args', ''))
+        form.addRow('', self.jvm_editor)
         form.addRow("版本隔离:", self.isolation_check)
         form.addRow("游戏目录:", dir_row)
         dir_hint = QLabel("可以是任意位置,包括 PCL2 / 官方启动器创建的 .minecraft(自动读取里面的实例)")
@@ -128,7 +137,8 @@ class SettingsDialog(QDialog):
 
     def _browse_game_dir(self):
         start = self.game_dir_edit.text().strip() or paths.DEFAULT_GAME_DIR
-        d = QFileDialog.getExistingDirectory(self, "选择 Minecraft 游戏目录", start)
+        d = QFileDialog.getExistingDirectory(self, "选择 Minecraft 游戏目录", start,
+                                            QFileDialog.Option.DontUseNativeDialog)
         if d:
             self.game_dir_edit.setText(d)
 
@@ -392,7 +402,12 @@ class SettingsDialog(QDialog):
     # ================= 确定 =================
     def accept(self):
         """点确定:把各标签页内容收集进 self.settings 并保存"""
-        self.settings["memory_gb"] = self.memory_spin.value()
+        try:
+            self.settings['jvm_args'] = self.jvm_editor.values()
+        except ValueError as exc:
+            QMessageBox.warning(self, 'JVM 参数', str(exc))
+            return
+        self.settings["memory_gb"] = 0 if self.memory_auto_check.isChecked() else self.memory_spin.value()
         self.settings["version_isolation"] = self.isolation_check.isChecked()
         self.settings["game_dir"] = self.game_dir_edit.text().strip()
         self.settings["language"] = self.language_combo.currentData()

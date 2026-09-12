@@ -11,6 +11,7 @@ Mod 依赖网络解析(离线,读 jar 元数据)——「谁依赖谁」一张�
 
 无 GUI 依赖,CLI / 测试 / GUI 共用。
 """
+import io
 import os
 import zipfile
 
@@ -29,17 +30,18 @@ _PLATFORM_IDS = {
 
 
 class ModNode:
-    __slots__ = ("mod_id", "file", "name", "loader", "version", "enabled", "missing")
+    __slots__ = ("mod_id", "file", "name", "loader", "version", "enabled", "missing", "placeholder")
 
     def __init__(self, mod_id, file="", name="", loader="", version="",
-                 enabled=True, missing=False):
+                 enabled=True, missing=False, placeholder=False):
         self.mod_id = mod_id
         self.file = file                      # jar 文件名(缺失依赖时为 "")
         self.name = name or mod_id            # 显示名
         self.loader = loader
         self.version = version
         self.enabled = enabled                # True / 禁用(.jar.disabled)
-        self.missing = missing                # 被引用但未安装的节点
+        self.missing = missing                # 缺少必需前置；可选/冲突不使用此状态
+        self.placeholder = placeholder        # 元数据引用但实例中未安装
 
     def __repr__(self):
         return f"<ModNode {self.mod_id} enabled={self.enabled} missing={self.missing}>"
@@ -71,19 +73,28 @@ class ModGraph:
             self.nodes[node.mod_id] = node
             return
         # 缺失占位节点 -> 被真正安装的 mod 覆盖(以真实信息为准)
-        if cur.missing and not node.missing:
+        if cur.placeholder and not node.placeholder:
             self.nodes[node.mod_id] = node
             return
         # 同名已有节点:优先保留已启用、信息更全的那个
         if node.enabled and not cur.enabled:
+            self.nodes[node.mod_id] = node
+        elif cur.file and '!' in cur.file and node.file and '!' not in node.file:
             self.nodes[node.mod_id] = node
 
     def add_edge(self, source, target, type, version_range=""):
         self.edges.append(ModEdge(source, target, type, version_range))
 
     def ensure_missing(self, mod_id, source_loader=""):
+        current = self.nodes.get(mod_id)
+        if current is None:
+            self.add_node(ModNode(mod_id, missing=True, placeholder=True, loader=source_loader))
+        elif current.placeholder:
+            current.missing = True
+
+    def ensure_optional(self, mod_id, source_loader=""):
         if mod_id not in self.nodes:
-            self.add_node(ModNode(mod_id, missing=True, loader=source_loader))
+            self.add_node(ModNode(mod_id, placeholder=True, loader=source_loader))
 
     # ---- 查询 ----
     def dependencies(self, mod_id) -> list:
@@ -96,10 +107,13 @@ class ModGraph:
 
     def missing_deps(self) -> list:
         """指向「未安装」节点的依赖边(= 装了 A 但缺 B 的警告)"""
-        return [e for e in self.edges if e.target in self.nodes and self.nodes[e.target].missing]
+        return [e for e in self.edges if e.type == REQUIRED and
+                e.target in self.nodes and self.nodes[e.target].missing]
 
     def stats(self) -> dict:
-        return {"mods": len([n for n in self.nodes.values() if not n.missing]),
+        present = [n for n in self.nodes.values() if not n.placeholder]
+        return {"mods": len([n for n in present if '!' not in n.file]),
+                "embedded": len([n for n in present if '!' in n.file]),
                 "missing": len([n for n in self.nodes.values() if n.missing]),
                 "edges": len(self.edges)}
 
@@ -128,10 +142,13 @@ def _read_fabric_mod(zf):
     deps = []
     for modid, rng in (data.get("depends") or {}).items():
         deps.append((modid, REQUIRED, str(rng or "*")))
-    for modid, rng in (data.get("suggests") or {}).items():
-        deps.append((modid, OPTIONAL, str(rng or "*")))
-    for modid, rng in (data.get("breaks") or {}).items():
-        deps.append((modid, INCOMPATIBLE, str(rng or "*")))
+    seen = {(modid, typ) for modid, typ, _rng in deps}
+    for field, dep_type in (("recommends", OPTIONAL), ("suggests", OPTIONAL),
+                            ("conflicts", INCOMPATIBLE), ("breaks", INCOMPATIBLE)):
+        for modid, rng in (data.get(field) or {}).items():
+            if (modid, dep_type) not in seen:
+                deps.append((modid, dep_type, str(rng or "*")))
+                seen.add((modid, dep_type))
     return {"loader": "fabric", "id": str(data["id"]), "name": str(data.get("name") or data["id"]),
             "version": str(data.get("version") or ""), "deps": deps}
 
@@ -159,7 +176,8 @@ def _read_mods_toml(zf, name):
         for g in groups:
             if not isinstance(g, dict) or not g.get("modId"):
                 continue
-            t = str(g.get("type") or "required").lower()
+            raw_type = g.get("type")
+            t = str(raw_type or ("optional" if g.get("mandatory") is False else "required")).lower()
             if "incompat" in t:
                 t = INCOMPATIBLE
             elif "optional" in t or "soft" in t:
@@ -189,6 +207,36 @@ def read_mod_metadata(jar_path: str) -> dict | None:
     return None
 
 
+def read_embedded_mod_metadata(jar_path: str) -> list[dict]:
+    """Read Mod metadata from bounded NeoForge nested JARs."""
+    result = []
+    try:
+        with zipfile.ZipFile(jar_path) as outer:
+            candidates = [info for info in outer.infolist()
+                          if info.filename.startswith('META-INF/jarjar/') and
+                          info.filename.lower().endswith('.jar')]
+            total = 0
+            for entry in candidates[:256]:
+                if entry.file_size > 64 * 1024 * 1024:
+                    continue
+                total += entry.file_size
+                if total > 256 * 1024 * 1024:
+                    break
+                with zipfile.ZipFile(io.BytesIO(outer.read(entry))) as nested:
+                    meta = _read_fabric_mod(nested)
+                    if meta is None:
+                        for name in ('META-INF/neoforge.mods.toml', 'META-INF/mods.toml'):
+                            meta = _read_mods_toml(nested, name)
+                            if meta:
+                                break
+                    if meta:
+                        meta['embedded_path'] = entry.filename
+                        result.append(meta)
+    except Exception:
+        pass
+    return result
+
+
 def _is_platform(modid: str) -> bool:
     return modid.lower() in _PLATFORM_IDS
 
@@ -214,11 +262,30 @@ def build_graph(mods_dir: str, progress_cb=None) -> ModGraph:
         node = ModNode(meta["id"], file=fname, name=meta["name"], loader=meta["loader"],
                        version=meta["version"], enabled=enabled)
         graph.add_node(node)
-        for tgt, typ, rng in meta["deps"]:
-            if _is_platform(tgt):
-                continue   # minecraft/fabricloader 等平台依赖,不画进图
-            graph.add_edge(meta["id"], tgt, typ, rng)
-            graph.ensure_missing(tgt, source_loader=meta["loader"])
+        if not enabled:
+            # Keep disabled Mods in inventory as gray nodes, but their loader will
+            # not evaluate dependencies, so they must not create active warnings.
+            if progress_cb:
+                progress_cb(i, total)
+            continue
+        declarations = [meta]
+        for embedded in read_embedded_mod_metadata(os.path.join(mods_dir, fname)):
+            graph.add_node(ModNode(
+                embedded['id'], file=f"{fname}!{embedded['embedded_path']}",
+                name=embedded['name'], loader=embedded['loader'],
+                version=embedded['version'], enabled=True))
+            declarations.append(embedded)
+        for declared in declarations:
+            for tgt, typ, rng in declared["deps"]:
+                if _is_platform(tgt):
+                    continue   # minecraft/fabricloader 等平台依赖,不画进图
+                graph.add_edge(declared["id"], tgt, typ, rng)
+                if typ == REQUIRED:
+                    graph.ensure_missing(tgt, source_loader=declared["loader"])
+                elif typ == OPTIONAL:
+                    graph.ensure_optional(tgt, source_loader=declared["loader"])
+                # An absent incompatible target is healthy. If it is installed,
+                # its real node will be present after the complete directory scan.
         if progress_cb:
             progress_cb(i, total)
     return graph
