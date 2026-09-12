@@ -372,8 +372,11 @@ class MainWindow(QMainWindow):
         self.download_tasks.cancelled.connect(self._on_download_cancelled)
         self.version_manifest = VersionManifestController(fetch_version_manifest, self)
         self.version_manifest.loaded.connect(self._apply_version_manifest)
-        self.version_manifest.failed.connect(
-            lambda error: self.statusBar().showMessage(f"获取失败: {error}"))
+        self.version_manifest.failed.connect(self._on_version_manifest_failed)
+        self._manifest_retry_delay_ms = 3000
+        self._manifest_retry_timer = QTimer(self)
+        self._manifest_retry_timer.setSingleShot(True)
+        self._manifest_retry_timer.timeout.connect(self.load_versions)
 
         # 应用视图模式(图标/列表,来自设置)
         self.set_view_mode(self.instance_list,
@@ -1228,11 +1231,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("正在获取版本列表...")
         self.version_manifest.refresh()
 
+    def _on_version_manifest_failed(self, error: str):
+        """离线启动后持续低频重试，网络恢复时自动补上版本列表。"""
+        delay = self._manifest_retry_delay_ms
+        self.statusBar().showMessage(
+            f"暂时无法联网，恢复网络后会自动刷新版本列表（{delay // 1000} 秒后重试）")
+        if not self._manifest_retry_timer.isActive():
+            self._manifest_retry_timer.start(delay)
+        self._manifest_retry_delay_ms = min(delay * 2, 30000)
+
     def _apply_version_manifest(self, manifest: dict):
         """只在 GUI 线程更新版本相关控件。"""
         if not isinstance(manifest, dict) or not manifest.get("latest"):
             self.statusBar().showMessage("版本列表格式无效")
             return
+
+        self._manifest_retry_timer.stop()
+        self._manifest_retry_delay_ms = 3000
 
         self.resource_center.set_latest_versions(manifest['latest']['release'],
                                                  manifest['latest']['snapshot'])
@@ -2113,6 +2128,8 @@ class MainWindow(QMainWindow):
         w = self.main_tabs.widget(idx) if 0 <= idx < self.main_tabs.count() else None
         if w is not None:
             fade_in(w, DURATION.get("tab", 250))
+        if w is self.resource_center and self.download_tab.version_tree.topLevelItemCount() == 0:
+            self.load_versions()
 
     def _home_open_instance_manager(self, inst):
         """「我的版本」首页 → 实例设置/版本设置 需要打开实例管理时调用。

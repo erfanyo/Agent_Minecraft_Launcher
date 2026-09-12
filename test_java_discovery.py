@@ -3,7 +3,9 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from java_manager import _java_candidates, list_java_installations, java_major
+from java_manager import (_java_candidates, java_download_urls,
+                          list_java_installations, java_major)
+from loaders import loader_processor_java_major
 
 
 class JavaDiscoveryTests(unittest.TestCase):
@@ -44,6 +46,17 @@ class JavaDiscoveryTests(unittest.TestCase):
             self.assertEqual(java_major('second'), 21)
         self.assertIsNot(captures[0], captures[1])
         self.assertTrue(all(file.closed for file in captures))
+
+    def test_loader_processors_follow_minecraft_java_requirement(self):
+        base = {"javaVersion": {"majorVersion": 21}}
+        self.assertEqual(loader_processor_java_major(base, "1.21.1"), 21)
+        self.assertEqual(loader_processor_java_major({}, "1.20.1"), 17)
+
+    def test_java_download_has_independent_windows_fallback(self):
+        sources = java_download_urls(21, "windows", "x64")
+        self.assertEqual([name for name, _url in sources],
+                         ["Eclipse Temurin", "Amazon Corretto"])
+        self.assertTrue(all("21" in url for _name, url in sources))
 
 
 if __name__ == '__main__':

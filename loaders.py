@@ -33,6 +33,19 @@ NEOFORGE_META = "https://maven.neoforged.net/releases/net/neoforged/neoforge/mav
 NEOFORGE_INSTALLER = "https://maven.neoforged.net/releases/net/neoforged/neoforge/{ver}/neoforge-{ver}-installer.jar"
 
 
+def loader_processor_java_major(base_version: dict, mc_version: str) -> int:
+    """Return the Java major required while running Forge/NeoForge processors."""
+    declared = (base_version.get("javaVersion") or {}).get("majorVersion")
+    try:
+        declared = int(declared)
+    except (TypeError, ValueError):
+        declared = 0
+    if declared > 0:
+        return declared
+    from java_manager import minecraft_java_range
+    return minecraft_java_range(mc_version)[0]
+
+
 def list_fabric_loaders(mc: str) -> list:
     """Fabric 可用的加载器版本列表(新的在前)"""
     resp = requests.get(FABRIC_META.format(mc=mc), timeout=20)
@@ -423,7 +436,8 @@ def install_loader(loader: str, mc: str, game_dir: str,
             java_exe = os.environ.get("FORGE_PROCESSOR_JAVA")
             if not java_exe:
                 from java_manager import ensure_java
-                java_exe = ensure_java(os.path.join(game_dir, "runtime"), 17,
+                required_java = loader_processor_java_major(base, parent_id)
+                java_exe = ensure_java(os.path.join(game_dir, "runtime"), required_java,
                                        progress_callback=progress_callback,
                                        status_callback=status_callback)
             _forge_run_processors(installer_profile, forge_installer, game_dir, java_exe,

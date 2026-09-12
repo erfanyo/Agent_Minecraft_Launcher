@@ -27,6 +27,18 @@ ADOPTIUM_API = ("https://api.adoptium.net/v3/binary/latest/{major}/ga/"
 MAX_DOWNLOAD_ATTEMPTS = 3  # 下载/解压失败重试次数(网络不稳时自动重下)
 
 
+def java_download_urls(major: int, os_name: str, arch: str) -> list[tuple[str, str]]:
+    """下载候选源：轻量 Temurin JRE 优先，Windows x64 用 Corretto JDK 兜底。"""
+    urls = [("Eclipse Temurin", ADOPTIUM_API.format(
+        major=major, os_name=os_name, arch=arch))]
+    if os_name == "windows" and arch == "x64":
+        urls.append((
+            "Amazon Corretto",
+            f"https://corretto.aws/downloads/latest/amazon-corretto-{major}-x64-windows-jdk.zip",
+        ))
+    return urls
+
+
 def parse_java_major(output: str) -> int:
     """从 java -version 的输出里解析出大版本号。
     'java version "1.8.0_491"'  → 8
@@ -273,12 +285,13 @@ def ensure_java(runtime_dir: str, required_major: int,
 
     os.makedirs(runtime_dir, exist_ok=True)
     arch = "x64" if platform.machine().lower() in ("amd64", "x86_64") else "aarch64"
-    url = ADOPTIUM_API.format(major=required_major, os_name="windows", arch=arch)
+    sources = java_download_urls(required_major, "windows", arch)
 
     zip_path = os.path.join(runtime_dir, f"jre-{required_major}.zip")
     dest_dir = os.path.join(runtime_dir, f"jre-{required_major}")
 
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+        source_name, url = sources[(attempt - 1) % len(sources)]
         # 1) 下载:残留的损坏 zip 先删掉,别让它骗过"已存在"检查
         if os.path.exists(zip_path) and not valid_zip(zip_path):
             if status_callback:
@@ -286,7 +299,8 @@ def ensure_java(runtime_dir: str, required_major: int,
             os.remove(zip_path)
         if not os.path.exists(zip_path):
             if status_callback:
-                status_callback(f"下载 Java {required_major}(约 50MB,第 {attempt} 次)...")
+                status_callback(
+                    f"从 {source_name} 下载 Java {required_major}(第 {attempt} 次)...")
             try:
                 download_file(url, zip_path, progress_callback=progress_callback)
             except Exception as e:

@@ -34,6 +34,8 @@
 - **bridge-mod Forge 1.12.2**(`bridge-mod/forge-1.12.2/`):新独立平台入口 + AiChatCommand/FileCommandBridge/BridgeForge1122。
 
 ### 🐛 修复 / 完善
+- 离线启动时版本清单失败后自动退避重试；恢复网络或进入下载页后会自动补全列表。
+- Forge/NeoForge 安装器按游戏版本清单选择 Java（1.21.1 使用 Java 21），Java 自动下载增加 Amazon Corretto 备用源。
 - 实例管理、运行配置、下载圆环(`download_indicator.py`)、依赖导入、Mod 依赖网络、
   启动命令(`launcher.py`/`game_files.py`/`loaders.py`)等多项修正。
 - 日志隐私:AI 操作记录、云端工具调用日志统一脱敏;旧值不写撤销记录。
