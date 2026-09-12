@@ -12,6 +12,14 @@ import json
 import os
 import shutil
 import sys
+import tempfile
+_CI_STARTUP_SMOKE = __name__ == '__main__' and '--amcl-ci-smoke' in sys.argv
+if _CI_STARTUP_SMOKE:
+    sys.argv.remove('--amcl-ci-smoke')
+    # Windows 单文件包只携带实际使用的 qwindows 平台插件；源码 CI 才用 offscreen。
+    if not (getattr(sys, 'frozen', False) and sys.platform == 'win32'):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    os.environ.setdefault('AML_DATA_DIR', os.path.join(tempfile.gettempdir(), 'amcl-ci-smoke'))
 if __name__ == '__main__' and '--amcl-memory-relief' in sys.argv:
     from memory_relief import main as memory_relief_main
     raise SystemExit(memory_relief_main(sys.argv[sys.argv.index('--amcl-memory-relief') + 1]))
@@ -19,7 +27,6 @@ if __name__ == '__main__' and '--amcl-memory-relief' in sys.argv:
 if __name__ == '__main__' and '--amcl-plugin-web-window' in sys.argv:
     from plugin_web_worker import main as web_window_main
     raise SystemExit(web_window_main())
-import tempfile
 import time
 from datetime import datetime
 
@@ -2230,7 +2237,7 @@ if __name__ == "__main__":
     app.processEvents()
 
     # 首次启动:还没配置过游戏目录 → 弹引导界面(选路径 + 首次配置 AI + 新手/老手)
-    first = not (load_settings().get("game_dir") or "").strip()
+    first = not _CI_STARTUP_SMOKE and not (load_settings().get("game_dir") or "").strip()
     _auto_tutorial = False
     if first:
         splash.hide()
@@ -2254,10 +2261,24 @@ if __name__ == "__main__":
     splash.showMessage("正在扫描已有实例…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                        QColor("#c9d6e2"))
     app.processEvents()
-    window.load_versions()  # 启动时先加载一次
+    if not _CI_STARTUP_SMOKE:
+        window.load_versions()  # 启动时先加载一次
     window.show()
     splash.finish(window)
+    _startup_smoke_status = 0
+    if _CI_STARTUP_SMOKE:
+        from ci_smoke import _report, packaged_file_errors
+        _startup_errors = packaged_file_errors()
+        if _startup_errors:
+            _startup_smoke_status = 1
+            for _error in _startup_errors:
+                _report("SMOKE FAIL: " + _error, error=True)
+        else:
+            app.processEvents()
+            _report("SMOKE OK: packaged launcher reached its first usable window")
+        QTimer.singleShot(250, app.quit)
     # 首次启动选了「新手」→ 自动走一遍引导式新手教程(用 QTimer 延迟到首帧后,保证控件就绪)
     if _auto_tutorial:
         QTimer.singleShot(400, lambda: _open_auto_tutorial_safe(window))
-    sys.exit(app.exec())
+    _app_exit_code = app.exec()
+    sys.exit(_startup_smoke_status if _CI_STARTUP_SMOKE else _app_exit_code)

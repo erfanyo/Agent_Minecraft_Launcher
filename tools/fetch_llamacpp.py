@@ -14,8 +14,10 @@ macOS/Linux 用 tar.gz 且可执行无 .exe 后缀)。之前 fetch 脚本硬编�
 注意:llama.cpp 官方 release 资产命名:llama-<ver>-bin-<os>-<variant>-<arch>.zip|tar.gz
 """
 import argparse
-import io
+import hashlib
 import os
+import stat
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -35,6 +37,17 @@ from os_platform.system import current_arch, current_os_name  # noqa: E402
 from paths import runtime_llama_dir  # noqa: E402
 
 DEFAULT_VERSION = "b10590"
+
+# GitHub release API 提供的官方 SHA256。固定版本和摘要，避免同名资产被替换后
+# 悄悄进入正式发行包。
+ASSET_SHA256 = {
+    "llama-b10590-bin-macos-arm64.tar.gz": "6bd011f97a27eb27e296fa17867948d97988857ddde98159fca925e2d73a1362",
+    "llama-b10590-bin-macos-x64.tar.gz": "ba08608c77cd28f81cd27a98c4829b2513eaf053b1168bf32ca63ffc991f88a3",
+    "llama-b10590-bin-ubuntu-arm64.tar.gz": "12999190e14133086dd4a6be57ab23484edb29b79e1d15677b3fb09d78cf3e2f",
+    "llama-b10590-bin-ubuntu-x64.tar.gz": "4efbac3e8a647c49cc4856248fa295937b94921e31cdb2c964bf8c5772473559",
+    "llama-b10590-bin-win-cpu-arm64.zip": "a88a3b3d6e89569c7b1c8e97212e9f56d1895e92f2cf8b7e4b075a1a6fffab8a",
+    "llama-b10590-bin-win-cpu-x64.zip": "98d942240a61a5c628c16d7951c041095e63a741916c74110e785129e10c2eaa",
+}
 
 
 def _asset_name(version: str, os_name: str, arch: str) -> str | None:
@@ -68,17 +81,35 @@ def _download(url: str, dest: str) -> None:
                 f.write(chunk)
 
 
-def _extract(archive: str, dest_dir: str) -> list[str]:
-    """解压 zip/tar.gz,返回解出的可执行文件名(只保留 llama-server/llama-cli)。"""
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_server_runtime_file(name: str, os_name: str) -> bool:
+    """只挑出 llama-server 及其动态库，避免把所有命令行工具打进 exe。"""
+    base = os.path.basename(name)
+    low = base.lower()
+    if low in ("llama-server", "llama-server.exe"):
+        return True
+    if os_name == "windows":
+        return low.endswith(".dll")
+    return low.endswith(".dylib") or ".so" in low
+
+
+def _extract(archive: str, dest_dir: str, os_name: str) -> list[str]:
+    """扁平解压 server 与其动态库；返回写入的文件名。"""
     print(f"解压 {os.path.basename(archive)} -> {dest_dir}")
-    wanted = {"llama-server", "llama-server.exe", "llama-cli", "llama-cli.exe", "llama-gguf"}
     got = []
     os.makedirs(dest_dir, exist_ok=True)
     if archive.endswith(".zip"):
         with zipfile.ZipFile(archive) as z:
             for name in z.namelist():
                 base = os.path.basename(name)
-                if base in wanted:
+                if base and _is_server_runtime_file(base, os_name):
                     data = z.read(name)
                     target = os.path.join(dest_dir, base)
                     with open(target, "wb") as f:
@@ -90,20 +121,48 @@ def _extract(archive: str, dest_dir: str) -> list[str]:
             for m in tf.getmembers():
                 if m.isfile():
                     base = os.path.basename(m.name)
-                    if base in wanted:
+                    if base and _is_server_runtime_file(base, os_name):
                         data = tf.extractfile(m).read()
                         target = os.path.join(dest_dir, base)
                         with open(target, "wb") as f:
                             f.write(data)
+                        if base == "llama-server":
+                            os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
                         got.append(base)
                         print("  解出:", base)
     return got
+
+
+def verify_runtime(dest_dir: str, os_name: str, *, execute: bool = False) -> list[str]:
+    """验证 server 和关键依赖存在；可选实际运行一次 ``--version``。"""
+    suffix = ".exe" if os_name == "windows" else ""
+    server = os.path.join(dest_dir, "llama-server" + suffix)
+    missing = []
+    if not os.path.isfile(server) or os.path.getsize(server) == 0:
+        missing.append(os.path.basename(server))
+    names = {name.lower() for name in os.listdir(dest_dir)} if os.path.isdir(dest_dir) else set()
+    if os_name == "windows":
+        for required in ("llama-server-impl.dll", "llama.dll", "ggml.dll"):
+            if required not in names:
+                missing.append(required)
+    elif not any(name.endswith(".dylib") or ".so" in name for name in names):
+        missing.append("llama/ggml 动态库")
+    if missing:
+        raise RuntimeError("llama.cpp 运行时不完整，缺少：" + "、".join(missing))
+    if execute:
+        result = subprocess.run([server, "--version"], capture_output=True, text=True,
+                                timeout=30, check=False)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "无输出").strip()
+            raise RuntimeError(f"llama-server --version 失败({result.returncode})：{detail}")
+    return sorted(names)
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default=DEFAULT_VERSION)
     ap.add_argument("--force", action="store_true", help="已有也强制重下")
+    ap.add_argument("--verify-only", action="store_true", help="不下载，只验证现有运行时")
     args = ap.parse_args()
 
     os_name = current_os_name()
@@ -116,15 +175,30 @@ def main() -> int:
 
     dest_dir = runtime_llama_dir()
     exe = os.path.join(dest_dir, "llama-server" + (".exe" if os_name == "windows" else ""))
-    if os.path.exists(exe) and not args.force:
-        print("llama-server 已存在,跳过(--force 可重下)")
+    if args.verify_only:
+        verify_runtime(dest_dir, os_name, execute=True)
+        print("llama.cpp 运行时验证通过")
         return 0
+    if os.path.exists(exe) and not args.force:
+        try:
+            verify_runtime(dest_dir, os_name, execute=True)
+            print("llama-server 及依赖已存在并可运行，跳过(--force 可重下)")
+            return 0
+        except RuntimeError as exc:
+            print(f"现有运行时不完整，将重新下载：{exc}")
 
     url = f"https://github.com/ggml-org/llama.cpp/releases/download/{args.version}/{asset}"
     archive = os.path.join(dest_dir, asset)
     try:
         _download(url, archive)
-        _extract(archive, dest_dir)
+        expected = ASSET_SHA256.get(asset)
+        if not expected:
+            raise RuntimeError(f"没有登记 {asset} 的 SHA256，拒绝用于打包")
+        actual = _sha256(archive)
+        if actual != expected:
+            raise RuntimeError(f"SHA256 不匹配：期望 {expected}，实际 {actual}")
+        _extract(archive, dest_dir, os_name)
+        verify_runtime(dest_dir, os_name, execute=True)
     finally:
         try:
             os.remove(archive)

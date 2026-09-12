@@ -13,9 +13,17 @@ if importlib.util.find_spec('webview'):
     WEB_IMPORTS = [name for name in WEB_IMPORTS
                    if name not in ('webview.platforms.qt', 'webview.platforms.cef')]
 
-# PySide6 的 QtCore 依赖同目录中的 MSVC/Qt 运行库；仅靠自动分析时，某些
-# 机器会漏收它们并在启动期报“DLL load failed”。显式收集保证单文件 exe
-# 解压后具备完整 Qt 运行环境。
+# ci_smoke 通过模块名逐个导入；PyInstaller 无法从字符串推断这些依赖。
+# 显式保留也能覆盖插件/平台代码按需加载但主窗口启动路径未直接 import 的模块。
+SMOKE_IMPORTS = [
+    'paths', 'settings',
+    'os_platform.system', 'os_platform.openpath', 'os_platform.temperature', 'os_platform.notify',
+    'game_command', 'lan_tools', 'instance_manager', 'version_home', 'online_center',
+    'assistant_ui', 'local_ai', 'ci_smoke',
+]
+
+# PySide6 的 QtCore 依赖同目录中的 MSVC/Qt 运行库；显式补齐运行库。
+# 成品仍必须通过 build_release.ps1 的真实启动检查后才能发布。
 PYSIDE6_DIR = Path(PySide6.__file__).parent
 PYSIDE6_BINARIES = [
     (str(PYSIDE6_DIR / name), 'PySide6')
@@ -28,7 +36,6 @@ PYSIDE6_BINARIES = [
         'vcruntime140_1.dll',
     )
 ]
-
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -38,9 +45,12 @@ a = Analysis(
         ('bridge-mod/dist/*.jar', 'bridge-mod'),
         ('icons/*.svg', 'icons'),
         ('icons/grass_block.png', 'icons'),
+        ('LICENSE', '.'),
+        ('THIRD_PARTY.md', '.'),
+        ('THIRD_PARTY_NOTICES.md', '.'),
         (str(PYSIDE6_DIR / 'resources' / 'icudtl.dat'), 'PySide6/resources'),
     ] + WEB_DATA,
-    hiddenimports=WEB_IMPORTS,
+    hiddenimports=WEB_IMPORTS + SMOKE_IMPORTS,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

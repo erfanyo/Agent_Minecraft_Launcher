@@ -10,7 +10,7 @@ import uuid
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
     QToolButton, QVBoxLayout, QWidget,
 )
@@ -700,32 +700,126 @@ class SettingsCenter(QWidget):
         return self._wrap_scroll(w)
 
     # ================= 软件信息 =================
+    def _software_info_card(self, name: str, role: str, license_name: str,
+                            description: str, project_url: str,
+                            license_url: str = "") -> QWidget:
+        """创建软件信息页使用的统一鸣谢卡片。"""
+        card = QWidget()
+        card.setObjectName("software_component_card")
+        card.setStyleSheet(
+            f"QWidget#software_component_card {{ {panel_style()} }}"
+            "QWidget#software_component_card QLabel { border: none; background: transparent; }"
+        )
+        card.setMinimumHeight(126)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(5)
+
+        title = QLabel(f"<b>{name}</b>")
+        title.setTextFormat(Qt.TextFormat.RichText)
+        title.setStyleSheet(f"font-size:15px; color:{text_color()};")
+        meta = QLabel(f"{role}　·　{license_name}")
+        meta.setObjectName("software_component_meta")
+        meta.setStyleSheet(f"color:{accent_color()}; font-size:11px; font-weight:bold;")
+        body = QLabel(description)
+        body.setWordWrap(True)
+        body.setStyleSheet(f"color:{muted_color()};")
+        links = f'<a href="{project_url}">项目主页</a>'
+        if license_url:
+            links += f'　·　<a href="{license_url}">许可证</a>'
+        link_label = QLabel(links)
+        link_label.setTextFormat(Qt.TextFormat.RichText)
+        link_label.setOpenExternalLinks(True)
+        link_label.setStyleSheet(f"color:{accent_color()};")
+
+        layout.addWidget(title)
+        layout.addWidget(meta)
+        layout.addWidget(body, 1)
+        layout.addWidget(link_label)
+        return card
+
     def _build_software_info(self) -> QWidget:
         from updater import VERSION
         w = QWidget()
-        l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
+        l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(12)
 
+        product_card = QWidget()
+        product_card.setObjectName("software_product_card")
+        product_card.setStyleSheet(
+            f"QWidget#software_product_card {{ {panel_style()} }}"
+            "QWidget#software_product_card QLabel { border: none; background: transparent; }"
+        )
+        product_layout = QVBoxLayout(product_card)
+        product_layout.setContentsMargins(16, 14, 16, 14)
+        product_layout.setSpacing(5)
         title = QLabel("Agent Minecraft Launcher")
         title.setStyleSheet(f"font-size:18px; font-weight:bold; color:{text_color()};")
         version = QLabel(f"当前版本：{VERSION}")
         version.setStyleSheet(f"color:{muted_color()};")
         description = QLabel("Minecraft 实例、资源、联机与 AI 辅助管理工具。")
         description.setWordWrap(True)
-        l.addWidget(title); l.addWidget(version); l.addWidget(description)
+        project_links = QLabel(
+            '<a href="https://github.com/erfanyo/Agent_Minecraft_Launcher">源代码</a>　·　'
+            '<a href="https://github.com/erfanyo/Agent_Minecraft_Launcher/blob/main/LICENSE">AGPL-3.0 许可证</a>')
+        project_links.setTextFormat(Qt.TextFormat.RichText)
+        project_links.setOpenExternalLinks(True)
+        project_links.setStyleSheet(f"color:{accent_color()};")
+        product_layout.addWidget(title); product_layout.addWidget(version)
+        product_layout.addWidget(description); product_layout.addWidget(project_links)
+        l.addWidget(product_card)
 
         thanks_title = QLabel("鸣谢")
         thanks_title.setStyleSheet(f"font-size:16px; font-weight:bold; color:{text_color()};")
-        easytier = QLabel(
-            "<b>EasyTier</b><br>"
-            "为可选的虚拟局域网联机功能提供底层组网能力。EasyTier 是独立的开源项目，"
-            "启动器只在用户选择使用时下载或连接其程序。<br>"
-            "<a href=\"https://github.com/EasyTier/EasyTier\">项目主页</a>　·　"
-            "<a href=\"https://github.com/EasyTier/EasyTier/blob/main/LICENSE\">LGPL-3.0 许可证</a>")
-        easytier.setTextFormat(Qt.TextFormat.RichText)
-        easytier.setOpenExternalLinks(True)
-        easytier.setWordWrap(True)
-        easytier.setStyleSheet(f"color:{muted_color()};")
-        l.addSpacing(12); l.addWidget(thanks_title); l.addWidget(easytier); l.addStretch()
+        thanks_hint = QLabel("感谢这些项目为启动器的界面、下载、诊断、AI 和联机功能提供基础能力。")
+        thanks_hint.setWordWrap(True); thanks_hint.setStyleSheet(f"color:{muted_color()};")
+        l.addWidget(thanks_title); l.addWidget(thanks_hint)
+
+        components = [
+            ("Qt for Python / PySide6", "随程序运行", "LGPL-3.0 / GPL-3.0 / 商业许可",
+             "构建启动器的桌面界面。", "https://doc.qt.io/qtforpython-6/",
+             "https://doc.qt.io/qtforpython-6/licenses.html"),
+            ("Requests", "随程序运行", "Apache-2.0",
+             "处理版本清单、资源、登录和模型下载等网络请求。", "https://github.com/psf/requests",
+             "https://github.com/psf/requests/blob/main/LICENSE"),
+            ("psutil", "随程序运行", "BSD-3-Clause",
+             "检测可用内存并记录游戏进程的资源占用。", "https://github.com/giampaolo/psutil",
+             "https://github.com/giampaolo/psutil/blob/master/LICENSE"),
+            ("cryptography", "可选功能", "Apache-2.0 或 BSD",
+             "用于验证第三方插件的 Ed25519 签名。", "https://github.com/pyca/cryptography",
+             "https://github.com/pyca/cryptography/blob/main/LICENSE"),
+            ("pywebview", "可选界面", "BSD-3-Clause",
+             "使用系统 WebView 承载网页界面，不随程序打包 Chromium。", "https://github.com/r0x0r/pywebview",
+             "https://github.com/r0x0r/pywebview/blob/master/LICENSE"),
+            ("llama.cpp", "本地 AI 运行时", "MIT",
+             "在本机运行可选的小型语言模型。", "https://github.com/ggml-org/llama.cpp",
+             "https://github.com/ggml-org/llama.cpp/blob/master/LICENSE"),
+            ("Qwen3.5-0.8B", "按需下载模型", "Apache-2.0",
+             "为本地 AI 提供基础模型；只在用户选择本地模型时下载。", "https://huggingface.co/Qwen/Qwen3.5-0.8B",
+             "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/LICENSE"),
+            ("EasyTier", "按需下载联机组件", "LGPL-3.0",
+             "为虚拟局域网联机提供底层组网能力。它是独立项目，仅在用户选择使用时下载或连接。",
+             "https://github.com/EasyTier/EasyTier",
+             "https://github.com/EasyTier/EasyTier/blob/main/LICENSE"),
+            ("PyInstaller", "仅用于构建", "GPL-2.0-or-later（含启动器例外）",
+             "把开发版本构建为可分发的 Windows 程序。", "https://pyinstaller.org/",
+             "https://pyinstaller.org/en/stable/license.html"),
+        ]
+        grid = QGridLayout(); grid.setContentsMargins(0, 0, 0, 0); grid.setSpacing(10)
+        for index, component in enumerate(components):
+            grid.addWidget(self._software_info_card(*component), index // 2, index % 2)
+        grid.setColumnStretch(0, 1); grid.setColumnStretch(1, 1)
+        l.addLayout(grid)
+
+        service_title = QLabel("服务与社区")
+        service_title.setStyleSheet(f"font-size:16px; font-weight:bold; color:{text_color()};")
+        service_hint = QLabel(
+            "资源搜索与兼容版本查找使用 <a href=\"https://modrinth.com\">Modrinth</a>；"
+            "Minecraft 文件的国内镜像加速由 <a href=\"https://bmclapidoc.bangbang93.com\">BMCLAPI</a> 提供。"
+            "这些是独立的外部服务，是否使用由下载策略和用户操作决定。")
+        service_hint.setTextFormat(Qt.TextFormat.RichText)
+        service_hint.setOpenExternalLinks(True); service_hint.setWordWrap(True)
+        service_hint.setStyleSheet(f"color:{muted_color()};")
+        l.addWidget(service_title); l.addWidget(service_hint); l.addStretch()
         return self._wrap_scroll(w)
 
     def _build_java(self) -> QWidget:

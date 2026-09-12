@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from settings_center import SettingsCenter
 
@@ -29,15 +29,22 @@ class SettingsLayoutTests(unittest.TestCase):
         self.assertTrue(personalization_page.isAncestorOf(self.center.ui_mode_combo))
         self.assertFalse(personalization_page.isAncestorOf(self.center.language_combo))
 
-    def test_software_info_credits_easytier(self):
+    def test_software_info_has_component_credit_cards(self):
         labels = self.center.shell.menu.items()
         self.assertIn('软件信息', labels)
         page = self.center.shell.stack.widget(labels.index('软件信息'))
         text = '\n'.join(label.text() for label in page.findChildren(QLabel))
         self.assertIn('鸣谢', text)
-        self.assertIn('EasyTier', text)
-        self.assertIn('LGPL-3.0', text)
-        self.assertIn('github.com/EasyTier/EasyTier', text)
+        for component in ('PySide6', 'Requests', 'psutil', 'cryptography', 'pywebview',
+                          'llama.cpp', 'Qwen3.5-0.8B', 'EasyTier', 'PyInstaller'):
+            self.assertIn(component, text)
+        for license_name in ('LGPL-3.0', 'Apache-2.0', 'BSD-3-Clause', 'MIT'):
+            self.assertIn(license_name, text)
+        cards = [widget for widget in page.findChildren(QWidget)
+                 if widget.objectName() == 'software_component_card']
+        self.assertEqual(9, len(cards))
+        self.assertIn('Modrinth', text)
+        self.assertIn('BMCLAPI', text)
 
 
 if __name__ == '__main__':
