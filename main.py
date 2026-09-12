@@ -2265,6 +2265,15 @@ if __name__ == "__main__":
         window.load_versions()  # 启动时先加载一次
     window.show()
     splash.finish(window)
+    # 更新脚本只有收到这个“主窗口已显示”标记才会删除旧版备份；否则自动回退。
+    updater.confirm_pending_update(paths.BASE_DIR)
+    _rollback_notice = updater.consume_rollback_notice(paths.BASE_DIR)
+    if _rollback_notice:
+        QTimer.singleShot(
+            500,
+            lambda message=_rollback_notice: QMessageBox.information(
+                window, "已恢复旧版本", message),
+        )
     _startup_smoke_status = 0
     if _CI_STARTUP_SMOKE:
         from ci_smoke import _report, packaged_file_errors

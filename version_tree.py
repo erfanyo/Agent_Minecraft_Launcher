@@ -4,12 +4,96 @@
 主窗口和"下载新实例"选项卡共用,所以独立成模块,避免循环导入。
 """
 from datetime import datetime
+import re
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import (
+    QHeaderView,
+    QStyledItemDelegate,
+    QStyle,
+    QStyleOptionViewItem,
+    QTreeWidget,
+    QTreeWidgetItem,
+)
 
-from ui_style import muted_color
+from ui_style import current_color, muted_color, set_style
+
+
+def _qt_color(value: str, fallback: str) -> QColor:
+    """把设计 token 的 #RRGGBB / rgba(...) 转成 QColor。"""
+    text = (value or "").strip()
+    match = re.fullmatch(
+        r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)",
+        text,
+    )
+    if match:
+        r, g, b = (int(match.group(i)) for i in range(1, 4))
+        alpha = max(0.0, min(1.0, float(match.group(4))))
+        return QColor(r, g, b, round(alpha * 255))
+    color = QColor(text)
+    return color if color.isValid() else QColor(fallback)
+
+
+class VersionTreeDelegate(QStyledItemDelegate):
+    """让大版本分组像卡片，具体版本仍保持适合长列表的紧凑行。"""
+
+    def paint(self, painter, option, index):
+        is_group = not index.parent().isValid()
+        opt = QStyleOptionViewItem(option)
+        if is_group:
+            selected = bool(option.state & QStyle.StateFlag.State_Selected)
+            hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+            background = _qt_color(
+                current_color("sel_bg") if selected else
+                current_color("list_hover") if hovered else current_color("panel_bg"),
+                "#2b2f3a",
+            )
+            border = _qt_color(
+                current_color("accent") if selected else current_color("panel_border"),
+                "#3a4150",
+            )
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setBrush(background)
+            painter.setPen(border)
+            painter.drawRoundedRect(option.rect.adjusted(4, 3, -5, -3), 9, 9)
+            painter.restore()
+
+            # 已自行绘制选择/悬停背景，避免系统样式再盖上一层直角矩形。
+            opt.state &= ~QStyle.StateFlag.State_Selected
+            opt.state &= ~QStyle.StateFlag.State_MouseOver
+            opt.font.setBold(True)
+            opt.font.setPointSize(max(opt.font.pointSize() + 2, 14))
+        super().paint(painter, opt, index)
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        minimum = 42 if not index.parent().isValid() else 34
+        return QSize(hint.width(), max(hint.height(), minimum))
+
+
+def version_tree_style() -> str:
+    return (
+        "QTreeWidget { background: transparent; border: none; outline: none; }"
+        "QTreeWidget::item { padding: 4px 8px; border: none; }"
+        "QTreeWidget::item:selected { background: transparent; }"
+        "QTreeWidget::item:hover { background: transparent; }"
+        f"QHeaderView::section {{ background: {current_color('panel_bg')};"
+        f" color: {muted_color()}; border: none; border-bottom: 1px solid"
+        f" {current_color('panel_border')}; padding: 8px 10px; font-weight: 600; }}"
+    )
+
+
+def style_version_tree(tree: QTreeWidget) -> None:
+    """应用版本树的统一现代样式；颜色在绘制时读取，可跟随主题变化。"""
+    tree.setItemDelegate(VersionTreeDelegate(tree))
+    tree.setIndentation(24)
+    tree.setAnimated(True)
+    tree.setRootIsDecorated(True)
+    tree.setUniformRowHeights(False)
+    tree.setMouseTracking(True)
+    set_style(tree, version_tree_style)
 
 # 黄金版本:模组生态最活跃的经典版本(灵感 #1,静态列表版)。
 # 经典版本几乎不再变动,没必要实时统计;以后想加版本直接往这里添一行。
@@ -63,6 +147,7 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
     header = tree.header()
     header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
     header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+    style_version_tree(tree)
 
     # 愚人节版本:4 月 1 日发布且不是正式版(如 20w14infinite、23w13a_or_b)
     april_fools = [v for v in manifest["versions"]
@@ -117,11 +202,13 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
                 _leaf(snap_node, v)
             root.addChild(snap_node)
         tree.addTopLevelItem(root)
+        root.setFirstColumnSpanned(True)
 
     ancients_root = make_tree_node(f"远古版本(alpha/beta, {len(ancients)} 个)")
     for v in ancients:
         _leaf(ancients_root, v)
     tree.addTopLevelItem(ancients_root)
+    ancients_root.setFirstColumnSpanned(True)
 
     # 愚人节版本:单独折叠分类
     if april_fools:
@@ -129,11 +216,12 @@ def fill_version_tree(tree: QTreeWidget, manifest: dict) -> tuple:
         for v in april_fools:
             _leaf(april_root, v)
         tree.addTopLevelItem(april_root)
+        april_root.setFirstColumnSpanned(True)
 
     # 展开/折叠:必须等节点全部挂到树之后再设置,否则不生效(Qt 的坑)
     for i in range(tree.topLevelItemCount()):
         top = tree.topLevelItem(i)
-        top.setExpanded(i == 0)  # 只展开最新的大版本
+        top.setExpanded(False)
         for j in range(top.childCount()):
             child = top.child(j)
             if child.text(0) in ("预览版",):
@@ -181,6 +269,7 @@ class GameVersionTree(QTreeWidget):
         self.setVerticalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)   # 逐像素滚动,触控板更顺
         self.setHorizontalScrollMode(QTreeWidget.ScrollMode.ScrollPerPixel)
         self.header().setStretchLastSection(True)
+        style_version_tree(self)
         self.currentItemChanged.connect(self._on_current_changed)
         self._none_item = None
 
@@ -193,9 +282,10 @@ class GameVersionTree(QTreeWidget):
         grouped = releases_grouped_by_major(manifest)
         for major, releases in grouped.items():   # 新→旧
             rec = recommended_version(major, releases)
-            root = QTreeWidgetItem([f"{major}.xx(推荐 {rec})"])
+            root = QTreeWidgetItem([f"{major}.xx  ·  推荐 {rec}"])
             root.setData(0, Qt.ItemDataRole.UserRole, major)
             self.addTopLevelItem(root)
+            root.setFirstColumnSpanned(True)
             for v in releases:
                 leaf = QTreeWidgetItem([v["id"]])
                 leaf.setData(0, Qt.ItemDataRole.UserRole, v["id"])
@@ -224,7 +314,7 @@ class GameVersionTree(QTreeWidget):
     def _recommended_of(root) -> str:
         # 解析 root 文本里的 "(推荐 x)" 或直接算
         import re
-        m = re.search(r"推荐 ([^\s)]+)", root.text(0))
+        m = re.search(r"推荐\s+([^\s)]+)", root.text(0))
         if m:
             return m.group(1)
         return ""

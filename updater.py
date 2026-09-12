@@ -10,8 +10,10 @@
 - bridge-mod:单独 tag(如 v0.1.0),附 agentmc-bridge-fabric/neoforge-*.jar 资产
 """
 import os
+import json
 import re
 import subprocess
+import uuid
 
 import requests
 
@@ -77,7 +79,7 @@ def check_bridge_mod_update() -> dict | None:
     return None
 
 
-def download_to(url: str, dest: str, progress_callback=None) -> str:
+def download_to(url: str, dest: str, progress_callback=None, expected_size: int = 0) -> str:
     """下载 url 到 dest,返回 dest;失败抛异常。"""
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     resp = requests.get(url, stream=True, headers=_HEADERS, timeout=30)
@@ -91,6 +93,12 @@ def download_to(url: str, dest: str, progress_callback=None) -> str:
                 done += len(chunk)
                 if progress_callback:
                     progress_callback(done, total)
+        if expected_size and done != expected_size:
+            raise ValueError(f"下载文件大小不完整（应为 {expected_size} 字节，实际 {done} 字节）")
+        # 更新资产必须至少像一个 Windows 可执行文件，避免错误页被当成新版覆盖旧版。
+        with open(dest, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise ValueError("下载到的文件不是有效的 Windows 程序")
     except Exception:
         if os.path.exists(dest):
             try:
@@ -101,8 +109,20 @@ def download_to(url: str, dest: str, progress_callback=None) -> str:
     return dest
 
 
-def make_update_bat(exe_path: str, new_exe: str, bat_path: str) -> str:
-    """生成替换脚本:等旧 exe 退出 → 用新 exe 覆盖 → 重启 → 删脚本。
+def _update_paths(update_dir: str) -> dict:
+    return {
+        "pending": os.path.join(update_dir, "pending-update.json"),
+        "staged_pending": os.path.join(update_dir, "pending-update.staged.json"),
+        "notice": os.path.join(update_dir, "rollback.notice"),
+    }
+
+
+def make_update_bat(exe_path: str, new_exe: str, bat_path: str,
+                    current_pid: int | None = None) -> str:
+    """生成带启动确认的事务式替换脚本。
+
+    旧版先备份；新版显示主窗口后会写确认标记。限定时间内没有确认，脚本自动
+    结束失败的新版本、恢复旧 EXE 并重新打开。用户数据始终不在替换范围内。
     返回 bat_path(Windows 运行中的 exe 无法覆盖自己,必须经脚本中转)。
 
     重启方式说明(PyInstaller 6.22+ 父进程安全校验):
@@ -113,20 +133,100 @@ def make_update_bat(exe_path: str, new_exe: str, bat_path: str) -> str:
     这里改用常驻的 **explorer.exe(shell)** 拉起新 exe:父进程是 explorer(常驻、可解析),
     父进程链绝不落在死进程上,校验必通过。
     (注:曾试过 schtasks 任务计划拉起,但部分环境需管理员权限/沙箱受限,故用 explorer。)"""
+    update_dir = os.path.dirname(os.path.abspath(bat_path))
+    os.makedirs(update_dir, exist_ok=True)
+    paths = _update_paths(update_dir)
+    marker_name = f"startup-ok-{uuid.uuid4().hex}.marker"
+    marker_path = os.path.join(update_dir, marker_name)
+    backup_path = exe_path + ".update-backup"
+    with open(paths["staged_pending"], "w", encoding="utf-8") as f:
+        json.dump({"marker": marker_name}, f)
+
+    pid = int(current_pid if current_pid is not None else os.getpid())
     lines = [
         "@echo off",
+        "chcp 65001 >nul",
+        "setlocal",
         "timeout /t 2 /nobreak >nul",
-        f'taskkill /f /im {os.path.basename(exe_path)} >nul 2>&1',
+        f'taskkill /f /pid {pid} >nul 2>&1',
         'ping 127.0.0.1 -n 2 >nul',
+        f'copy /y "{exe_path}" "{backup_path}" >nul',
+        "if errorlevel 1 goto backup_failed",
         f'copy /y "{new_exe}" "{exe_path}" >nul',
-        f'del "{new_exe}" >nul',
+        "if errorlevel 1 goto replace_failed",
+        f'move /y "{paths["staged_pending"]}" "{paths["pending"]}" >nul',
+        "if errorlevel 1 goto replace_failed",
         # 用常驻 shell 拉起新 exe(父进程稳定可解析),避免瞬态 cmd 触发 PyInstaller 父进程校验失败
         f'start "" explorer.exe "{exe_path}"',
+        "for /l %%i in (1,1,90) do (",
+        "  timeout /t 1 /nobreak >nul",
+        f'  if exist "{marker_path}" goto update_ok',
+        ")",
+        # 新版没有确认可用：结束它，恢复旧版，再由 explorer 启动。
+        f'taskkill /f /im "{os.path.basename(exe_path)}" >nul 2>&1',
+        'ping 127.0.0.1 -n 2 >nul',
+        f'copy /y "{backup_path}" "{exe_path}" >nul',
+        "if errorlevel 1 goto restore_failed",
+        f'>"{paths["notice"]}" echo startup_timeout',
+        f'del /q "{paths["pending"]}" "{marker_path}" "{new_exe}" "{backup_path}" >nul 2>&1',
+        f'start "" explorer.exe "{exe_path}"',
+        "goto clean_script",
+        ":replace_failed",
+        f'copy /y "{backup_path}" "{exe_path}" >nul',
+        "if errorlevel 1 goto restore_failed",
+        f'>"{paths["notice"]}" echo replace_failed',
+        f'del /q "{paths["pending"]}" "{paths["staged_pending"]}" "{marker_path}" "{new_exe}" "{backup_path}" >nul 2>&1',
+        f'start "" explorer.exe "{exe_path}"',
+        "goto clean_script",
+        ":backup_failed",
+        f'>"{paths["notice"]}" echo backup_failed',
+        f'del /q "{paths["staged_pending"]}" "{new_exe}" >nul 2>&1',
+        f'start "" explorer.exe "{exe_path}"',
+        "goto clean_script",
+        ":restore_failed",
+        f'>"{paths["notice"]}" echo restore_failed',
+        "goto clean_script",
+        ":update_ok",
+        f'del /q "{paths["pending"]}" "{marker_path}" "{new_exe}" "{backup_path}" "{paths["notice"]}" >nul 2>&1',
+        ":clean_script",
+        "endlocal",
         'del "%~f0"',
     ]
-    with open(bat_path, "w", encoding="ascii", errors="replace") as f:
+    # 第一行先切换 cmd 到 UTF-8，避免中文用户名或安装目录被写坏。
+    with open(bat_path, "w", encoding="utf-8", errors="strict") as f:
         f.write("\r\n".join(lines))
     return bat_path
+
+
+def confirm_pending_update(base_dir: str) -> bool:
+    """主窗口可用后确认更新成功；只允许在固定更新目录创建随机标记。"""
+    update_dir = os.path.join(os.path.abspath(base_dir), "AMCL", "update")
+    pending = _update_paths(update_dir)["pending"]
+    try:
+        with open(pending, encoding="utf-8") as f:
+            marker = json.load(f).get("marker", "")
+        if not re.fullmatch(r"startup-ok-[0-9a-f]{32}\.marker", marker):
+            return False
+        marker_path = os.path.join(update_dir, marker)
+        with open(marker_path, "x", encoding="ascii") as f:
+            f.write("ok")
+        return True
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def consume_rollback_notice(base_dir: str) -> str:
+    """读取并清除一次性回退结果，返回适合界面展示的用户语言。"""
+    notice = _update_paths(os.path.join(os.path.abspath(base_dir), "AMCL", "update"))["notice"]
+    try:
+        with open(notice, encoding="ascii", errors="replace") as f:
+            code = f.read().strip()
+        os.remove(notice)
+    except OSError:
+        return ""
+    if code == "restore_failed":
+        return "更新没有完成，而且旧版本未能自动恢复。请从发布页重新下载启动器；游戏和设置数据没有被删除。"
+    return "新版本未能正常启动，已自动恢复到更新前的版本。你的游戏、存档和设置没有变化。"
 
 
 def run_update_bat(bat_path: str):

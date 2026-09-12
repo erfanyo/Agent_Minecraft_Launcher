@@ -1,10 +1,10 @@
 # Agent Minecraft Launcher 🤖⛏️
 
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
 **AI 助手型 Minecraft 启动器**——不只下载、启动游戏，还能跟 AI 聊天，让 AI 帮你装 Mod、查合成配方、发游戏指令、诊断崩溃日志。
 
-> 📜 **许可**:本项目采用 **GNU AGPL-3.0** 开源许可(详见仓库根 [LICENSE](LICENSE))。
+> 📜 **许可**:本项目采用 **GNU GPL-3.0-only** 开源许可(详见仓库根 [LICENSE](LICENSE))。
 
 > ⚠️ **测试阶段声明**:本启动器目前处于**测试阶段**,功能迭代频繁、可能有 bug,
 > 建议开发者/尝鲜者使用。微软正版登录与离线模式均已实现；正式发布前仍需继续验证登录续期、打包与旧版本兼容。

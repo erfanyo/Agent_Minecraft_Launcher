@@ -760,7 +760,7 @@ class SettingsCenter(QWidget):
         description.setWordWrap(True)
         project_links = QLabel(
             '<a href="https://github.com/erfanyo/Agent_Minecraft_Launcher">源代码</a>　·　'
-            '<a href="https://github.com/erfanyo/Agent_Minecraft_Launcher/blob/main/LICENSE">AGPL-3.0 许可证</a>')
+            '<a href="https://github.com/erfanyo/Agent_Minecraft_Launcher/blob/main/LICENSE">GPL-3.0-only 许可证</a>')
         project_links.setTextFormat(Qt.TextFormat.RichText)
         project_links.setOpenExternalLinks(True)
         project_links.setStyleSheet(f"color:{accent_color()};")

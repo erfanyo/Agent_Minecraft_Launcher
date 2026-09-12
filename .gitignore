@@ -6,6 +6,7 @@ __pycache__/
 # 虚拟环境(每个开发者的本地环境,不提交)
 .venv/
 venv/
+.tools/
 
 # 构建产物
 dist/
@@ -62,6 +63,7 @@ dist_061/
 
 
 dist_070/
+dist_*/
 
 # 本地发布压缩包、调试报告和渲染预览
 dist_*.zip

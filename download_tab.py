@@ -34,7 +34,9 @@ from instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from i18n import t
 from loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions
 from modrinth import list_mod_versions
-from ui_style import arrow_style, card_style, hint_style, inner_style, primary_btn_style, set_style, danger_color
+from ui_style import (arrow_style, card_style, hint_style, inner_style,
+                      list_style, primary_btn_style, set_style, danger_color,
+                      text_color)
 from version_tree import fill_version_tree
 
 
@@ -61,7 +63,8 @@ class DownloadTab(QWidget):
 
         # ---- 左侧:同级别菜单 ----
         self.menu = QListWidget()
-        self.menu.setFixedWidth(140)
+        self.menu.setFixedWidth(168)
+        set_style(self.menu, list_style)
         for title in ("游戏版本", "加载器", "光影 Mod", "优化 Mod"):
             item = QListWidgetItem(title, self.menu)
             item.setData(Qt.ItemDataRole.UserRole, title)
@@ -100,12 +103,12 @@ class DownloadTab(QWidget):
 
         # 左侧菜单与右侧面板之间用 QSplitter:分隔线可拖到任意位置
         center = QSplitter(Qt.Orientation.Horizontal)
-        self.menu.setFixedWidth(140)
+        self.menu.setFixedWidth(168)
         center.addWidget(self.menu)
         center.addWidget(self.stack)
         center.setStretchFactor(0, 0)
         center.setStretchFactor(1, 1)
-        center.setSizes([140, 860])   # 版本面板默认更宽
+        center.setSizes([168, 832])   # 步骤名称更舒展，版本面板仍占主要空间
 
         layout = QVBoxLayout(self)
         layout.addWidget(center)
@@ -156,16 +159,23 @@ class DownloadTab(QWidget):
 
     def _build_version_panel(self):
         panel = QWidget()
+        title = QLabel("选择游戏版本")
+        title.setStyleSheet(f"color: {text_color()}; font-size: 20px; font-weight: 700;")
+        subtitle = QLabel("选择一个系列会采用推荐版本；展开后可以指定具体版本")
+        subtitle.setStyleSheet(hint_style())
         self.version_tree = QTreeWidget()
         self.version_tree.ai_pin_provider = self._pin_version
         self.version_tree.setObjectName("version_tree")
-        self.version_tree.setHeaderLabel("版本")
+        self.version_tree.setHeaderHidden(True)
         self.version_tree.currentItemChanged.connect(self._on_version_selected)
         if self._auto_load_versions:
             self._load_tree()
         layout = QVBoxLayout(panel)
         # 面板整体往右移一点,避免和左侧菜单/"下载新实例"区贴太近
-        layout.setContentsMargins(16, 0, 0, 0)
+        layout.setContentsMargins(20, 6, 8, 4)
+        layout.setSpacing(10)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
         layout.addWidget(self.version_tree)
         return panel
 

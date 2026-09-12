@@ -1,18 +1,22 @@
 # 构建与发布
 
-Windows 是当前正式发布平台。发布环境使用 **Python 3.12.x** 和
-`requirements-release.txt` 中锁定的依赖版本。Python 3.14 虽能完成 PyInstaller 打包，
-但不能据此判断 exe 可以启动。
+Windows 是当前正式发布平台。发布环境固定使用 **Python 3.14.7** 和
+`requirements-release.txt` 中锁定的依赖版本。`v0.7.0` 已用这套组合生成可启动的
+单文件程序；正式发布仍必须通过本文件中的成品启动检查，不能只判断进程是否仍存在。
 
-当前 PySide6 6.11.2 与 PyInstaller 6.22.2 在本机生成的冻结包会在加载 QtCore 时失败，
-最小目录包也能复现。2026-09-02 的 DSH 构建只检查进程是否仍存在，错误弹窗也会让该
-检查通过，所以旧记录不能作为可运行证明。正式发布前需由 DSH 调整构建工具版本，并以
-本文件中的真实启动检查为准。
+重装系统后，旧 `.venv` 可能仍在，但它引用的基础 Python 已被删除。这时运行
+`.venv\Scripts\python.exe --version` 就会失败，应重新安装 Python 3.14.7 并重建环境，
+不要把残留的 `.venv` 当作完整环境。
+
+发布脚本会隔离构建时的外部动态库搜索路径；打包规则也会拒绝从 Poppler 等开发工具
+目录误收的同名 ICU 库。否则这些库可能覆盖 Windows 自带组件，造成成品导入 QtCore
+失败，但源码运行仍然正常的假象。
 
 ## 首次准备
 
 ```powershell
-py -3.12 -m venv .venv-release
+py install 3.14.7
+py -V:3.14 -m venv .venv-release
 .\.venv-release\Scripts\python.exe -m pip install -r requirements-release.txt
 ```
 
@@ -38,7 +42,7 @@ py -3.12 -m venv .venv-release
 
 - Windows、macOS、Linux：源码导入检查。
 - Windows：完整自动测试和 Python 文件编译检查。
-- Windows 手动任务：使用 Python 3.12 构建单文件 exe，并实际启动成品验证内置资源。
+- Windows 手动任务：使用 Python 3.14.7 构建单文件 exe，并实际启动成品验证内置资源。
 
 打包任务只在手动触发 CI 时运行；日常提交仍运行三平台加载检查和完整自动测试。这样既不
 隐藏现有打包问题，也不会让尚未解决的第三方冻结问题阻塞普通开发。
@@ -46,3 +50,5 @@ py -3.12 -m venv .venv-release
 目前 CI 下载并校验的是已发布的四个 bridge-mod 包。本地 `bridge-mod/dist` 中尚未发布的
 其他版本不会自动进入 CI 成品；发布这些包并把地址和校验值加入
 `tools/fetch_bridge_mod_jars.py` 后，CI 才能稳定包含它们。
+
+WSL 的准备、自动测试和 WSLg 界面测试见 `WSL_TESTING.md`。

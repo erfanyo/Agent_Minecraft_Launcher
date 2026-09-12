@@ -50,6 +50,7 @@ class UpdateDialog(QDialog):
         self.sig.downloaded.connect(self._on_downloaded)
         self.sig.failed.connect(self._on_failed)
         self.result = {"launcher": None, "bridge": None, "error": ""}
+        self._pending_update_bat = ""
 
         self.launcher_label = QLabel("AMCL 启动器: 正在检查...")
         self.bridge_label = QLabel("bridge-mod: 正在检查...")
@@ -134,10 +135,12 @@ class UpdateDialog(QDialog):
 
     def _download_and_apply(self, url, new_exe, exe_path):
         try:
-            updater.download_to(url, new_exe, progress_callback=self.sig.progress.emit)
+            expected_size = int((self.result.get("launcher") or {}).get("size") or 0)
+            updater.download_to(url, new_exe, progress_callback=self.sig.progress.emit,
+                                expected_size=expected_size)
             bat = os.path.join(os.path.dirname(new_exe), "update.bat")
-            updater.make_update_bat(exe_path, new_exe, bat)
-            updater.run_update_bat(bat)
+            updater.make_update_bat(exe_path, new_exe, bat, current_pid=os.getpid())
+            self._pending_update_bat = bat
             self.sig.downloaded.emit()
         except Exception as e:
             self.sig.failed.emit(str(e))
@@ -150,6 +153,11 @@ class UpdateDialog(QDialog):
         QMessageBox.information(
             self, t("UPDATE"),
             t("UPDATE_DOWNLOADED_THE_APP_WILL_RESTART"))
+        try:
+            updater.run_update_bat(self._pending_update_bat)
+        except Exception as e:
+            self._on_failed(str(e))
+            return
         QTimer.singleShot(300, QApplication.instance().quit)
 
     def _on_failed(self, msg):

@@ -1,4 +1,4 @@
-# 正式 Windows 构建使用的已验证直接依赖版本；配合 Python 3.12.x。
+# 正式 Windows 构建使用的已验证直接依赖版本；配合 Python 3.14.7。
 # 日常源码开发仍可使用 requirements.txt / requirements-webview.txt 的兼容范围。
 PySide6==6.11.2
 requests==2.34.2

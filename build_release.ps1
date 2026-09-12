@@ -12,8 +12,8 @@ Agent Minecraft Launcher 一键发布脚本:测试 + 准备组件 + 打包 + 成
   3) 生成 SHA256 校验码 + 打印公钥指纹(供 RELEASE_NOTES / README 记录)
 
 前提:
-  - 正式构建固定使用 Python 3.12.x；推荐创建 .venv-release 并安装 requirements-release.txt
-  - 已生成 ed25519 密钥(身份 erfanyo / 29330387076@qq.com)
+  - 正式构建固定使用 Python 3.14.7；推荐创建 .venv-release 并安装 requirements-release.txt
+  - 已生成 ed25519 密钥(身份 erfanyo / 2933038076@qq.com)
   - gpg 在 PATH 或通过 -GpgExe 指定(注:Git 自带 gpg 不完整,建议用独立 GnuPG 2.5.x)
 #>
 [CmdletBinding()]
@@ -22,7 +22,7 @@ param(
     [switch]$NoSign,                      # 跳过签名(仅打包)
     [switch]$SkipTests,                   # CI 已单独跑完整测试时使用
     [string]$KeyId = "erfanyo",           # 用于签名的密钥 id/uid
-    [string]$PythonExe = "",              # 留空:优先项目 .venv-release,其次 .venv/PATH；随后强制检查 3.12
+    [string]$PythonExe = "",              # 留空:优先项目 .venv-release,其次 .venv/PATH；随后强制检查 3.14.7
     [string]$OutputDir = ""               # 留空输出到 dist;验证时可用 .tmp\release-validation
 )
 
@@ -49,6 +49,7 @@ if (-not $PythonExe) {
     }
 }
 if (-not (Test-Path $PythonExe)) { throw "找不到 Python: $PythonExe" }
+$PythonExe = (Resolve-Path -LiteralPath $PythonExe).Path
 
 # ---- 1) 定位 gpg ----
 function Find-Gpg {
@@ -83,8 +84,24 @@ if ($LASTEXITCODE -ne 0) { throw "正式打包输入检查失败" }
 
 # ---- 3) 打包 ----
 Write-Host "==> 3/5 PyInstaller 打包 (spec) ==" -ForegroundColor Cyan
-& $PythonExe -m PyInstaller --noconfirm --clean --distpath $OutputDir AgentMinecraftLauncher.spec
-if ($LASTEXITCODE -ne 0) { throw "打包失败" }
+# 只让 PyInstaller 从 Python 与 Windows 系统目录解析动态库。开发终端可能把
+# Poppler、Git、Java 等工具目录加入 PATH；其中同名 ICU/MSVC DLL 会被误收进成品，
+# 覆盖 Windows/Qt 应使用的运行库并导致 QtCore 启动失败。
+$originalPath = $env:Path
+$pythonDir = Split-Path -Parent $PythonExe
+$windowsDir = $env:SystemRoot
+$env:Path = @(
+    $pythonDir,
+    (Join-Path $pythonDir "Scripts"),
+    (Join-Path $windowsDir "System32"),
+    $windowsDir
+) -join ";"
+try {
+    & $PythonExe -m PyInstaller --noconfirm --clean --distpath $OutputDir AgentMinecraftLauncher.spec
+    if ($LASTEXITCODE -ne 0) { throw "打包失败" }
+} finally {
+    $env:Path = $originalPath
+}
 $exe = Join-Path $OutputDir $ExeName
 if (-not (Test-Path $exe)) { throw "未找到产物: $exe" }
 Write-Host "  产物: $exe" -ForegroundColor Green
@@ -99,7 +116,12 @@ $smoke = Start-Process -FilePath $exe -ArgumentList "--amcl-ci-smoke" -PassThru 
 try {
     Wait-Process -Id $smoke.Id -Timeout 90 -ErrorAction Stop
 } catch {
-    Stop-Process -Id $smoke.Id -Force -ErrorAction SilentlyContinue
+    # PyInstaller 单文件程序会先启动解包父进程，再启动真正的应用子进程。
+    # 超时时必须结束整棵进程树，否则子进程会继续占用 exe，导致下次打包无法覆盖。
+    & "$env:SystemRoot\System32\taskkill.exe" /PID $smoke.Id /T /F 2>$null | Out-Null
+    Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($ExeName)) -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $exe } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     throw "成品启动检查超过 90 秒，已停止测试进程"
 }
 $smoke.Refresh()

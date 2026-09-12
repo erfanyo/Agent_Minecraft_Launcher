@@ -53,11 +53,20 @@ a = Analysis(
     hiddenimports=WEB_IMPORTS + SMOKE_IMPORTS,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['tools/pyi_runtime_clean_dll_path.py'],
     excludes=['webview.platforms.qt', 'webview.platforms.cef', 'PySide6.QtWebEngineCore',
               'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineQuick', 'cefpython3'],
     noarchive=False,
     optimize=0,
+)
+
+# Qt 6 uses Windows' ICU forwarding DLLs. A developer PATH may also contain an
+# unrelated ICU build (for example Poppler's versioned ICU). PyInstaller can
+# mistake that build for Qt's dependency and place it beside the executable,
+# where it shadows the compatible Windows component and breaks QtCore import.
+_FOREIGN_ICU = {'icuuc.dll', 'icudt78.dll'}
+a.binaries = type(a.binaries)(
+    item for item in a.binaries if item[0].lower() not in _FOREIGN_ICU
 )
 pyz = PYZ(a.pure)
 

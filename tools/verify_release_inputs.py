@@ -14,13 +14,14 @@ from tools import fetch_bridge_mod_jars, fetch_llamacpp  # noqa: E402
 
 
 REQUIRED_MODULES = ("PySide6", "requests", "psutil", "cryptography", "webview", "PyInstaller")
+RELEASE_PYTHON = (3, 14, 7)
 
 
 def main() -> int:
     errors = []
-    if sys.version_info[:2] != (3, 12):
+    if sys.version_info[:3] != RELEASE_PYTHON:
         errors.append(
-            f"正式 Windows 构建必须使用 Python 3.12.x；当前是 "
+            f"正式 Windows 构建必须使用 Python 3.14.7；当前是 "
             f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     missing_modules = [name for name in REQUIRED_MODULES if importlib.util.find_spec(name) is None]
     if missing_modules:
