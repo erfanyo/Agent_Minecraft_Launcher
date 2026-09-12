@@ -835,7 +835,7 @@ class SettingsCenter(QWidget):
         title = QLabel("Java 运行时")
         title.setStyleSheet(f"font-weight:bold; color:{text_color()};")
         hint = QLabel(
-            "启动器会按 Minecraft 版本自动选择 Java。这里可以准备 Java 8/17/21，"
+            "启动器会按 Minecraft 版本自动选择 Java。这里可以准备 Java 8/17/21/25，"
             "或登记整合包要求的特殊 Java；单个实例仍可在「实例详情 → 启动设置」中覆盖。")
         hint.setWordWrap(True); hint.setStyleSheet(f"color:{muted_color()};")
         self.java_list = QListWidget()
@@ -849,7 +849,7 @@ class SettingsCenter(QWidget):
         forget_btn = QPushButton("取消首选")
         open_btn = QPushButton("打开运行时目录")
         install_buttons = []
-        for major in (8, 17, 21):
+        for major in (8, 17, 21, 25):
             button = QPushButton(f"准备 Java {major}")
             button.clicked.connect(lambda _checked=False, m=major: self._install_java(m))
             install_buttons.append(button)
@@ -914,7 +914,7 @@ class SettingsCenter(QWidget):
             self.java_list.addItem(item)
         self.java_status.setText(
             f"找到 {self.java_list.count()} 个 Java；★ 表示该大版本的全局首选。"
-            if self.java_list.count() else "没有找到 Java；可让启动器准备 Java 8/17/21。")
+            if self.java_list.count() else "没有找到 Java；可让启动器准备 Java 8/17/21/25。")
 
     def _add_existing_java(self):
         from PySide6.QtWidgets import QFileDialog

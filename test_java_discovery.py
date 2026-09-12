@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from java_manager import (_java_candidates, java_download_urls,
+from java_manager import (_java_candidates, java_download_urls, java_version_probe,
                           list_java_installations, java_major)
 from loaders import loader_processor_java_major
 
@@ -57,6 +57,12 @@ class JavaDiscoveryTests(unittest.TestCase):
         self.assertEqual([name for name, _url in sources],
                          ["Eclipse Temurin", "Amazon Corretto"])
         self.assertTrue(all("21" in url for _name, url in sources))
+
+    def test_java_probe_preserves_windows_launch_error(self):
+        with patch('java_manager.subprocess.run', side_effect=OSError(193, 'not a valid application')):
+            major, reason = java_version_probe('java.exe')
+        self.assertEqual(major, 0)
+        self.assertIn('not a valid application', reason)
 
 
 if __name__ == '__main__':

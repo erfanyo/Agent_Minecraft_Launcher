@@ -87,20 +87,35 @@ def minecraft_java_warning(mc_version: str, java_major_version: int) -> str:
     return ""
 
 
-def java_major(java_exe: str) -> int:
-    """运行 java -version 并解析大版本;失败返回 0。
-    检测时不弹控制台黑窗口(CREATE_NO_WINDOW)。"""
+def java_version_probe(java_exe: str) -> tuple[int, str]:
+    """运行 ``java -version``，返回大版本和可直接展示的失败原因。"""
     try:
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         with tempfile.TemporaryFile() as f:
-            subprocess.run([java_exe, "-version"], stdout=f,
-                           stderr=subprocess.STDOUT, timeout=15,
-                           creationflags=creationflags)
+            completed = subprocess.run(
+                [java_exe, "-version"], stdout=f, stderr=subprocess.STDOUT,
+                timeout=15, creationflags=creationflags)
             f.seek(0)
             text = f.read().decode("utf-8", "replace")
-        return parse_java_major(text)
-    except Exception:
-        return 0
+        returncode = int(getattr(completed, "returncode", 0) or 0)
+        summary = " ".join(text.strip().split())[:300]
+        if returncode != 0:
+            return 0, f"java.exe 启动失败（退出码 {returncode}）：{summary or '没有输出'}"
+        major = parse_java_major(text)
+        if major <= 0:
+            return 0, f"无法识别 Java 版本：{summary or 'java -version 没有输出'}"
+        return major, ""
+    except subprocess.TimeoutExpired:
+        return 0, "java.exe 启动超过 15 秒仍无响应"
+    except OSError as error:
+        return 0, f"无法启动 java.exe：{error}"
+    except Exception as error:
+        return 0, f"检查 Java 版本时出错：{type(error).__name__}: {error}"
+
+
+def java_major(java_exe: str) -> int:
+    """运行 java -version 并解析大版本;失败返回 0。"""
+    return java_version_probe(java_exe)[0]
 
 
 def find_java(runtime_dir: str, min_major: int,
@@ -290,6 +305,7 @@ def ensure_java(runtime_dir: str, required_major: int,
     zip_path = os.path.join(runtime_dir, f"jre-{required_major}.zip")
     dest_dir = os.path.join(runtime_dir, f"jre-{required_major}")
 
+    last_failure = "没有生成可用的 Java 运行时"
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         source_name, url = sources[(attempt - 1) % len(sources)]
         # 1) 下载:残留的损坏 zip 先删掉,别让它骗过"已存在"检查
@@ -312,9 +328,11 @@ def ensure_java(runtime_dir: str, required_major: int,
 
         # 2) 解压前再校验一次完整性(下载中断可能留下能打开但 CRC 错的包)
         if not valid_zip(zip_path):
+            last_failure = f"从 {source_name} 下载的压缩包校验失败"
             os.remove(zip_path)
             if attempt >= MAX_DOWNLOAD_ATTEMPTS:
-                raise RuntimeError("Java 压缩包损坏(多次下载仍失败),请检查网络后重试")
+                raise RuntimeError(
+                    f"Java {required_major} 安装失败（已重试 {attempt} 次）：{last_failure}")
             continue
 
         # 3) 解压:先清掉上次可能残留的半截目录
@@ -325,21 +343,36 @@ def ensure_java(runtime_dir: str, required_major: int,
         try:
             with zipfile.ZipFile(zip_path) as z:
                 z.extractall(dest_dir)
-        except Exception:
+        except Exception as error:
+            last_failure = f"解压 {source_name} 包时出错：{type(error).__name__}: {error}"
             shutil.rmtree(dest_dir, ignore_errors=True)
             if os.path.exists(zip_path):
                 os.remove(zip_path)
             if attempt >= MAX_DOWNLOAD_ATTEMPTS:
-                raise RuntimeError("Java 解压失败(已重试多次),请清理后重试")
+                raise RuntimeError(
+                    f"Java {required_major} 安装失败（已重试 {attempt} 次）：{last_failure}")
             continue
 
         # 4) 验证解压结果:找到 java.exe 且版本达标,否则整目录作废重来
         java_exe = _find_java_exe(dest_dir)
-        if java_exe and java_major(java_exe) >= required_major:
+        installed_major, probe_error = java_version_probe(java_exe) if java_exe else (0, "")
+        if (java_exe and installed_major >= required_major
+                and (max_major is None or installed_major <= max_major)):
             os.remove(zip_path)  # 解压成功就删掉压缩包,省空间
             return java_exe
+        if not java_exe:
+            last_failure = f"从 {source_name} 解压后没有找到 java.exe"
+        elif probe_error:
+            last_failure = f"从 {source_name} 解压出的 Java 无法运行：{probe_error}"
+        else:
+            expected = (f"{required_major}～{max_major}" if max_major is not None
+                        and max_major != required_major else str(required_major))
+            last_failure = f"需要 Java {expected}，但 {source_name} 包识别为 Java {installed_major}"
+        if status_callback:
+            status_callback(f"{last_failure}；正在尝试其他来源…")
         shutil.rmtree(dest_dir, ignore_errors=True)
         if os.path.exists(zip_path):
             os.remove(zip_path)
 
-    raise RuntimeError(f"Java {required_major} 安装失败(已重试 {MAX_DOWNLOAD_ATTEMPTS} 次)")
+    raise RuntimeError(
+        f"Java {required_major} 安装失败（已重试 {MAX_DOWNLOAD_ATTEMPTS} 次）：{last_failure}")
