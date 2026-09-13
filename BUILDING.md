@@ -43,6 +43,8 @@ py -V:3.14 -m venv .venv-release
 - Windows、macOS、Linux：源码导入检查。
 - Windows：完整自动测试和 Python 文件编译检查。
 - Windows 手动任务：使用 Python 3.14.7 构建单文件 exe，并实际启动成品验证内置资源。
+- Linux 手动任务：在 Ubuntu 22.04 上构建 `onedir`，实际启动成品验证内置资源，
+  然后上传 `AgentMinecraftLauncher-linux-x86_64.tar.gz` 和 SHA256 文件。
 
 打包任务只在手动触发 CI 时运行；日常提交仍运行三平台加载检查和完整自动测试。这样既不
 隐藏现有打包问题，也不会让尚未解决的第三方冻结问题阻塞普通开发。
@@ -52,3 +54,6 @@ py -V:3.14 -m venv .venv-release
 `tools/fetch_bridge_mod_jars.py` 后，CI 才能稳定包含它们。
 
 WSL 的准备、自动测试和 WSLg 界面测试见 `WSL_TESTING.md`。
+
+Linux 测试包也可在 Linux 环境中运行 `bash tools/build_linux.sh` 构建。正式 Linux
+兼容包以 CI 的 Ubuntu 22.04 产物为准；不要使用较新的本地发行版替代正式构建环境。

@@ -33,3 +33,26 @@ bash tools/test_wsl.sh --gui
 界面出现后，先测试页面切换、设置保存、版本列表和资源搜索。要测试 Linux 下实际启动
 Minecraft，请在 WSL 内另建测试游戏目录并安装 Linux JDK；不要直接选
 `/mnt/c/.../.minecraft`，以免把 Windows 与 Linux 的 Java、原生库和实例设置混在一起。
+
+## 验收 CI 生成的 Linux 包
+
+在 GitHub Actions 页面手动运行 `CI`。任务完成后下载
+`AgentMinecraftLauncher-linux-x86_64` artifact，把其中的压缩包放进 WSL 主目录，执行：
+
+```bash
+mkdir -p ~/amcl-package-test
+tar -xzf AgentMinecraftLauncher-linux-x86_64.tar.gz -C ~/amcl-package-test
+cd ~/amcl-package-test/AgentMinecraftLauncher
+./AgentMinecraftLauncher
+```
+
+不要直接在 `/mnt/c` 或 `/mnt/e` 中运行包；Linux 权限、文件监听和读写性能在 Windows
+挂载盘上与真实 Linux 不同。缺少 Qt/XCB 运行库时先安装：
+
+```bash
+sudo apt update
+sudo apt install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0
+```
+
+验收时至少检查首次启动、设置保存、版本列表、Java 下载、原版实例启动，以及关闭后
+再次打开。测试数据默认落在解压目录旁；整个 `~/amcl-package-test` 可在测试后删除。
