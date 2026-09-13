@@ -25,21 +25,28 @@ SMOKE_IMPORTS = [
 # PySide6 的 QtCore 依赖同目录中的 MSVC/Qt 运行库；显式补齐运行库。
 # 成品仍必须通过 build_release.ps1 的真实启动检查后才能发布。
 PYSIDE6_DIR = Path(PySide6.__file__).parent
+MSVC_RUNTIME_NAMES = (
+    'msvcp140.dll',
+    'msvcp140_1.dll',
+    'msvcp140_2.dll',
+    'msvcp140_codecvt_ids.dll',
+    'vcruntime140.dll',
+    'vcruntime140_1.dll',
+)
 PYSIDE6_BINARIES = [
     (str(PYSIDE6_DIR / name), 'PySide6')
-    for name in (
-        'msvcp140.dll',
-        'msvcp140_1.dll',
-        'msvcp140_2.dll',
-        'msvcp140_codecvt_ids.dll',
-        'vcruntime140.dll',
-        'vcruntime140_1.dll',
-    )
+    for name in MSVC_RUNTIME_NAMES
+]
+# External Java distributions expect the VC runtime from the operating system.
+# Keep a collision-free copy for clean Windows VMs instead of exposing all Qt DLLs.
+EXTERNAL_RUNTIME_BINARIES = [
+    (str(PYSIDE6_DIR / name), 'external-runtime')
+    for name in ('vcruntime140.dll', 'vcruntime140_1.dll')
 ]
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=PYSIDE6_BINARIES + WEB_BINARIES,
+    binaries=PYSIDE6_BINARIES + EXTERNAL_RUNTIME_BINARIES + WEB_BINARIES,
     datas=[
         ('AMCL/runtime/llama-cpp/*', 'runtime/llama-cpp'),
         ('bridge-mod/dist/*.jar', 'bridge-mod'),

@@ -25,6 +25,9 @@ def sanitized_subprocess_environment(source=None) -> dict:
                 inside = False
             if entry and not inside:
                 entries.append(entry)
+        external_runtime = os.path.join(bundle, "external-runtime")
+        if os.path.isdir(external_runtime):
+            entries.insert(0, external_runtime)
         env["PATH"] = os.pathsep.join(entries)
     if os.name != "nt":
         original = env.pop("LD_LIBRARY_PATH_ORIG", None)

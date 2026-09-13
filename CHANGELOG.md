@@ -40,6 +40,7 @@
 - 设置持久化、设置中心和弃用功能登记收拢到 `settings/`；移除无调用的旧设置弹窗，两个单用途小模块并回所属服务。
 - Java 解压后无法运行时保留真实的 Windows 错误、退出码或版本识别结果；设置页补充 Java 25 准备入口。
 - 打包版启动 Java/Forge/NeoForge/Minecraft 前清理 PyInstaller 临时 DLL 搜索路径，修复 `could not find java.dll`；启动画面移除黑色外框并改为透明圆角。
+- 成品为干净 Windows 系统单独携带并隔离暴露 VC++ 运行库，解决 Temurin 的 `java.dll`/`jvm.dll` 因缺少 `VCRUNTIME140*.dll` 无法载入。
 - 实例管理、运行配置、下载圆环(`download_indicator.py`)、依赖导入、Mod 依赖网络、
   启动命令(`launcher.py`/`game_files.py`/`loaders.py`)等多项修正。
 - 日志隐私:AI 操作记录、云端工具调用日志统一脱敏;旧值不写撤销记录。
