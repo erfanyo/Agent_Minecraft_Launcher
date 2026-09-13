@@ -8,7 +8,8 @@
 4. 就地目录不可写(如 Program Files)→ 自动退回 %APPDATA%\\AgentMinecraftLauncher
 
 这样 PyInstaller 打包后数据不会写进临时解压目录(%TEMP%\\_MEIxxx,重启即丢),
-config.json(游戏目录/AI 设置)、.minecraft、runtime 全部持久化在 exe 旁边。
+config.json(游戏目录/AI 设置)、.minecraft、runtime 默认持久化在 exe 旁边。
+Windows 上若该位置含非 ASCII 字符，Java 会自动改放到用户本地数据目录。
 
 支持在设置/首次引导里改游戏目录:
 - set_game_dir() 更新模块级 GAME_DIR / RUNTIME_DIR,改完立即全局生效
@@ -81,8 +82,36 @@ def _saved_game_dir() -> str:
     return ""
 
 
+def _ascii_path(path: str) -> bool:
+    try:
+        os.fspath(path).encode("ascii")
+        return True
+    except (UnicodeEncodeError, AttributeError, TypeError):
+        return False
+
+
+def managed_runtime_dir(game_dir: str, environment=None,
+                        platform_name: str | None = None) -> str:
+    """Choose a Java directory that old Windows launchers can reliably open."""
+    env = os.environ if environment is None else environment
+    override = (env.get("AML_RUNTIME_DIR") or "").strip()
+    if override:
+        return os.path.abspath(override)
+    normal = os.path.join(game_dir, "runtime")
+    current_platform = sys.platform if platform_name is None else platform_name
+    if current_platform != "win32" or _ascii_path(normal):
+        return normal
+    local = (env.get("LOCALAPPDATA") or "").strip()
+    if local and _ascii_path(local):
+        return os.path.join(local, "AMCL", "runtime")
+    public = (env.get("PUBLIC") or "").strip()
+    if public and _ascii_path(public):
+        return os.path.join(public, "Documents", "AMCL", "runtime")
+    return normal
+
+
 GAME_DIR = _saved_game_dir() or DEFAULT_GAME_DIR
-RUNTIME_DIR = os.path.join(GAME_DIR, "runtime")
+RUNTIME_DIR = managed_runtime_dir(GAME_DIR)
 
 
 def set_game_dir(path: str) -> None:
@@ -90,7 +119,7 @@ def set_game_dir(path: str) -> None:
     global GAME_DIR, RUNTIME_DIR
     p = (path or "").strip()
     GAME_DIR = p if p else DEFAULT_GAME_DIR
-    RUNTIME_DIR = os.path.join(GAME_DIR, "runtime")
+    RUNTIME_DIR = managed_runtime_dir(GAME_DIR)
 
 
 def looks_like_game_dir(path: str) -> bool:
