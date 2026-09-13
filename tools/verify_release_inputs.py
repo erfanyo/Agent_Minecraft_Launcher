@@ -21,7 +21,7 @@ def main() -> int:
     errors = []
     if sys.version_info[:3] != RELEASE_PYTHON:
         errors.append(
-            f"正式 Windows 构建必须使用 Python 3.14.7；当前是 "
+            f"正式构建必须使用 Python 3.14.7；当前是 "
             f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
     missing_modules = [name for name in REQUIRED_MODULES if importlib.util.find_spec(name) is None]
     if missing_modules:
@@ -40,9 +40,11 @@ def main() -> int:
         elif fetch_bridge_mod_jars._sha1(path) != sha1:
             errors.append(f"bridge-mod 校验失败：{name}")
 
-    for relative in (os.path.join("icons", "grass_block.png"),
-                     os.path.join("icons", "grass_block.ico"),
-                     "THIRD_PARTY_NOTICES.md"):
+    required_files = [os.path.join("icons", "grass_block.png"),
+                      "THIRD_PARTY_NOTICES.md"]
+    if current_os_name() == "windows":
+        required_files.append(os.path.join("icons", "grass_block.ico"))
+    for relative in required_files:
         if not os.path.isfile(os.path.join(ROOT, relative)):
             errors.append(f"缺少打包资源：{relative}")
 

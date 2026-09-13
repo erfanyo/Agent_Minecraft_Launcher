@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -20,6 +21,7 @@ class JavaDiscoveryTests(unittest.TestCase):
                 path.touch()
             env = {'PATH': '"' + str(paths[0].parent) + '"', 'JAVA_HOME': str(paths[0].parent.parent)}
             with patch.dict(os.environ, env, clear=True), \
+                 patch('java_manager._java_platform', return_value=('windows', '.zip', 'java.exe')), \
                  patch('java_manager._java_search_roots', return_value=[str(root / 'vendor')]), \
                  patch('java_manager._registry_java_homes', return_value=[str(paths[3].parent.parent)]):
                 found = _java_candidates(str(root / 'runtime'), [str(paths[0])])
@@ -58,6 +60,31 @@ class JavaDiscoveryTests(unittest.TestCase):
         self.assertEqual([name for name, _url in sources],
                          ["Eclipse Temurin", "Amazon Corretto"])
         self.assertTrue(all("21" in url for _name, url in sources))
+
+    def test_linux_java_download_uses_tar_runtime(self):
+        sources = java_download_urls(21, "linux", "x64")
+        self.assertEqual([name for name, _url in sources], ["Eclipse Temurin"])
+        self.assertIn("/linux/x64/jre/", sources[0][1])
+
+    def test_linux_runtime_extracts_java_without_exe_suffix(self):
+        with tempfile.TemporaryDirectory() as temp:
+            archive = Path(temp, 'source.tar.gz')
+            payload = Path(temp, 'java')
+            payload.write_bytes(b'dummy')
+            with tarfile.open(archive, 'w:gz') as package:
+                package.add(payload, arcname='jdk/bin/java')
+            runtime = Path(temp, 'runtime')
+
+            def copy_download(_url, destination, **_kwargs):
+                Path(destination).write_bytes(archive.read_bytes())
+
+            with patch('java_manager.find_java', return_value=None), \
+                 patch('java_manager.download_file', side_effect=copy_download), \
+                 patch('java_manager.java_version_probe', return_value=(21, '')), \
+                 patch('java_manager._java_platform', return_value=('linux', '.tar.gz', 'java')):
+                result = ensure_java(str(runtime), 21)
+
+            self.assertTrue(result.endswith(os.path.join('jdk', 'bin', 'java')))
 
     def test_java_probe_preserves_windows_launch_error(self):
         with patch('java_manager.subprocess.run', side_effect=OSError(193, 'not a valid application')):

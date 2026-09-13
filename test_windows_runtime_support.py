@@ -63,7 +63,7 @@ class WindowsRuntimeSupportTests(unittest.TestCase):
         kernel.CloseHandle = Function(lambda _handle: 1)
         statuses = []
         with patch.object(support.os, 'name', 'nt'), \
-             patch.object(support.ctypes, 'WinDLL', side_effect=[shell, kernel]):
+             patch.object(support.ctypes, 'WinDLL', side_effect=[shell, kernel], create=True):
             code, detail = support._run_elevated_installer(
                 r'C:\cache\vc_redist.x64.exe', status_callback=statuses.append)
         self.assertEqual((code, detail), (0, ''))

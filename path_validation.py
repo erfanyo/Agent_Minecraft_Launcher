@@ -41,7 +41,9 @@ def assess_game_path(path: str, environment=None) -> PathAssessment:
 
     if any(ord(char) > 127 for char in expanded):
         warnings.append("路径含中文或特殊字符；少数旧 Java、加载器或驱动可能无法识别。")
-    if expanded.startswith("\\\\"):
+    # Preserve the user's raw spelling: POSIX abspath turns a Windows UNC path
+    # into a local-looking path before this check runs in cross-platform CI.
+    if raw.startswith("\\\\") or expanded.startswith("\\\\"):
         warnings.append("这是网络共享位置；断网或共享断开时，游戏和 Java 会无法启动。")
     if len(expanded) > 120:
         warnings.append("路径已经很长，安装 Mod 后可能超过 Windows 的长度限制。")
@@ -55,4 +57,3 @@ def assess_game_path(path: str, environment=None) -> PathAssessment:
         warnings.append("这是同步盘目录，文件同步可能与游戏更新互相冲突。")
 
     return PathAssessment(tuple(dict.fromkeys(errors)), tuple(dict.fromkeys(warnings)))
-

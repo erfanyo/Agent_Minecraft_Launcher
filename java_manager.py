@@ -15,6 +15,8 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
+import tarfile
 import tempfile
 import zipfile
 
@@ -38,6 +40,15 @@ def java_download_urls(major: int, os_name: str, arch: str) -> list[tuple[str, s
             f"https://corretto.aws/downloads/latest/amazon-corretto-{major}-x64-windows-jdk.zip",
         ))
     return urls
+
+
+def _java_platform() -> tuple[str, str, str]:
+    """Return Adoptium OS name, archive suffix and Java executable name."""
+    if os.name == "nt":
+        return "windows", ".zip", "java.exe"
+    if sys.platform == "darwin":
+        return "mac", ".tar.gz", "java"
+    return "linux", ".tar.gz", "java"
 
 
 def parse_java_major(output: str) -> int:
@@ -159,6 +170,11 @@ def _java_search_roots() -> list[str]:
                       'Zulu', 'BellSoft', 'Semeru'))
     roots.extend(os.path.join(os.path.expanduser('~'), part) for part in
                  ('.jdks', '.sdkman/candidates/java', 'scoop/apps/temurin', 'scoop/apps/openjdk'))
+    if sys.platform == 'darwin':
+        roots.extend(('/Library/Java/JavaVirtualMachines',
+                      os.path.expanduser('~/Library/Java/JavaVirtualMachines')))
+    elif os.name != 'nt':
+        roots.extend(('/usr/lib/jvm', '/usr/java', '/opt/java', '/opt/jdk'))
     return list(dict.fromkeys(roots))
 
 
@@ -187,21 +203,22 @@ def _registry_java_homes() -> list[str]:
 
 
 def _java_candidates(runtime_dir: str, extra_paths=None) -> list[str]:
+    executable_name = _java_platform()[2]
     candidates = [str(path) for path in (extra_paths or []) if path]
     if os.path.isdir(runtime_dir):
         for root, _dirs, files in os.walk(runtime_dir):
-            if "java.exe" in files:
-                candidates.append(os.path.join(root, "java.exe"))
+            if executable_name in files:
+                candidates.append(os.path.join(root, executable_name))
     homes = _registry_java_homes()
     for key in ('JAVA_HOME', 'JDK_HOME', 'JRE_HOME'):
         if os.environ.get(key):
             homes.append(os.environ[key].strip().strip('"'))
-    candidates.extend(os.path.join(home, 'bin', 'java.exe') for home in homes)
+    candidates.extend(os.path.join(home, 'bin', executable_name) for home in homes)
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         directory = os.path.expandvars(directory.strip().strip('"'))
         if not directory:
             continue
-        executable = os.path.join(directory, "java.exe")
+        executable = os.path.join(directory, executable_name)
         if os.path.isfile(executable):
             candidates.append(executable)
     roots = _java_search_roots()
@@ -212,12 +229,15 @@ def _java_candidates(runtime_dir: str, extra_paths=None) -> list[str]:
         elif os.path.basename(os.path.dirname(path)).lower() == 'bin':
             roots.append(os.path.dirname(os.path.dirname(os.path.dirname(path))))
     for base in dict.fromkeys(roots):
-        candidates.append(os.path.join(base, 'bin', 'java.exe'))
+        candidates.append(os.path.join(base, 'bin', executable_name))
         try:
             with os.scandir(base) as entries:
                 for entry in entries:
                     if entry.is_dir():
-                        candidates.append(os.path.join(entry.path, 'bin', 'java.exe'))
+                        candidates.append(os.path.join(entry.path, 'bin', executable_name))
+                        if sys.platform == 'darwin':
+                            candidates.append(os.path.join(
+                                entry.path, 'Contents', 'Home', 'bin', executable_name))
         except OSError:
             pass
     unique = {}
@@ -267,10 +287,14 @@ def _pick_compatible_java(candidates: list[str], min_major: int,
 
 
 def _find_java_exe(directory: str) -> str | None:
-    """在解压后的目录树里找 java.exe"""
+    """在解压后的目录树里找当前平台的 Java 可执行文件。"""
+    executable_name = _java_platform()[2]
     for root, _dirs, files in os.walk(directory):
-        if "java.exe" in files:
-            return os.path.join(root, "java.exe")
+        if executable_name in files and os.path.basename(root) == "bin":
+            path = os.path.join(root, executable_name)
+            if os.name != "nt":
+                os.chmod(path, os.stat(path).st_mode | 0o100)
+            return path
     return None
 
 
@@ -281,6 +305,25 @@ def valid_zip(path: str) -> bool:
             return z.testzip() is None
     except (zipfile.BadZipFile, OSError, EOFError):
         return False
+
+
+def _valid_archive(path: str, archive_suffix: str) -> bool:
+    if archive_suffix == ".zip":
+        return valid_zip(path)
+    try:
+        with tarfile.open(path, "r:gz") as package:
+            return bool(package.getmembers())
+    except (tarfile.TarError, OSError, EOFError):
+        return False
+
+
+def _extract_java_archive(path: str, destination: str, archive_suffix: str) -> None:
+    if archive_suffix == ".zip":
+        with zipfile.ZipFile(path) as package:
+            package.extractall(destination)
+        return
+    with tarfile.open(path, "r:gz") as package:
+        package.extractall(destination, filter="data")
 
 
 def ensure_java(runtime_dir: str, required_major: int,
@@ -302,9 +345,10 @@ def ensure_java(runtime_dir: str, required_major: int,
 
     os.makedirs(runtime_dir, exist_ok=True)
     arch = "x64" if platform.machine().lower() in ("amd64", "x86_64") else "aarch64"
-    sources = java_download_urls(required_major, "windows", arch)
+    os_name, archive_suffix, _executable_name = _java_platform()
+    sources = java_download_urls(required_major, os_name, arch)
 
-    zip_path = os.path.join(runtime_dir, f"jre-{required_major}.zip")
+    archive_path = os.path.join(runtime_dir, f"jre-{required_major}{archive_suffix}")
     dest_dir = os.path.join(runtime_dir, f"jre-{required_major}")
 
     last_failure = "没有生成可用的 Java 运行时"
@@ -312,27 +356,27 @@ def ensure_java(runtime_dir: str, required_major: int,
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         source_name, url = sources[(attempt - 1) % len(sources)]
         # 1) 下载:残留的损坏 zip 先删掉,别让它骗过"已存在"检查
-        if os.path.exists(zip_path) and not valid_zip(zip_path):
+        if os.path.exists(archive_path) and not _valid_archive(archive_path, archive_suffix):
             if status_callback:
                 status_callback(f"发现 Java 压缩包损坏,删除后重新下载(第 {attempt} 次)")
-            os.remove(zip_path)
-        if not os.path.exists(zip_path):
+            os.remove(archive_path)
+        if not os.path.exists(archive_path):
             if status_callback:
                 status_callback(
                     f"从 {source_name} 下载 Java {required_major}(第 {attempt} 次)...")
             try:
-                download_file(url, zip_path, progress_callback=progress_callback)
+                download_file(url, archive_path, progress_callback=progress_callback)
             except Exception as e:
-                if os.path.exists(zip_path):
-                    os.remove(zip_path)  # 下载中断:清掉半截文件
+                if os.path.exists(archive_path):
+                    os.remove(archive_path)  # 下载中断:清掉半截文件
                 if attempt >= MAX_DOWNLOAD_ATTEMPTS:
                     raise RuntimeError(f"Java 下载失败(已重试 {attempt} 次):{e}")
                 continue
 
         # 2) 解压前再校验一次完整性(下载中断可能留下能打开但 CRC 错的包)
-        if not valid_zip(zip_path):
+        if not _valid_archive(archive_path, archive_suffix):
             last_failure = f"从 {source_name} 下载的压缩包校验失败"
-            os.remove(zip_path)
+            os.remove(archive_path)
             if attempt >= MAX_DOWNLOAD_ATTEMPTS:
                 raise RuntimeError(
                     f"Java {required_major} 安装失败（已重试 {attempt} 次）：{last_failure}")
@@ -344,13 +388,12 @@ def ensure_java(runtime_dir: str, required_major: int,
         if status_callback:
             status_callback(f"解压 Java {required_major}...")
         try:
-            with zipfile.ZipFile(zip_path) as z:
-                z.extractall(dest_dir)
+            _extract_java_archive(archive_path, dest_dir, archive_suffix)
         except Exception as error:
             last_failure = f"解压 {source_name} 包时出错：{type(error).__name__}: {error}"
             shutil.rmtree(dest_dir, ignore_errors=True)
-            if os.path.exists(zip_path):
-                os.remove(zip_path)
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
             if attempt >= MAX_DOWNLOAD_ATTEMPTS:
                 raise RuntimeError(
                     f"Java {required_major} 安装失败（已重试 {attempt} 次）：{last_failure}")
@@ -376,7 +419,8 @@ def ensure_java(runtime_dir: str, required_major: int,
                     probe_error = f"{probe_error}；自动修复未完成：{repair_detail}"
         if (java_exe and installed_major >= required_major
                 and (max_major is None or installed_major <= max_major)):
-            os.remove(zip_path)  # 解压成功就删掉压缩包,省空间
+            if os.path.exists(archive_path):
+                os.remove(archive_path)  # 解压成功就删掉压缩包,省空间
             return java_exe
         if not java_exe:
             last_failure = f"从 {source_name} 解压后没有找到 java.exe"
@@ -389,8 +433,8 @@ def ensure_java(runtime_dir: str, required_major: int,
         if status_callback:
             status_callback(f"{last_failure}；正在尝试其他来源…")
         shutil.rmtree(dest_dir, ignore_errors=True)
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        if os.path.exists(archive_path):
+            os.remove(archive_path)
 
     raise RuntimeError(
         f"Java {required_major} 安装失败（已重试 {MAX_DOWNLOAD_ATTEMPTS} 次）：{last_failure}")
