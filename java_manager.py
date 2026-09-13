@@ -20,7 +20,6 @@ import zipfile
 
 from downloader import download_file
 from os_platform.process import external_process_environment
-from windows_runtime_support import missing_vc_runtime
 
 # Adoptium 免登录下载地址模板
 ADOPTIUM_API = ("https://api.adoptium.net/v3/binary/latest/{major}/ga/"
@@ -114,14 +113,6 @@ def java_version_probe(java_exe: str) -> tuple[int, str]:
         return 0, f"无法启动 java.exe：{error}"
     except Exception as error:
         return 0, f"检查 Java 版本时出错：{type(error).__name__}: {error}"
-
-
-def java_executable_has_non_ascii_path(java_exe: str) -> bool:
-    try:
-        os.fspath(java_exe).encode("ascii")
-        return False
-    except (UnicodeEncodeError, AttributeError, TypeError):
-        return True
 
 
 def java_major(java_exe: str) -> int:
@@ -368,9 +359,8 @@ def ensure_java(runtime_dir: str, required_major: int,
         # 4) 验证解压结果:找到 java.exe 且版本达标,否则整目录作废重来
         java_exe = _find_java_exe(dest_dir)
         installed_major, probe_error = java_version_probe(java_exe) if java_exe else (0, "")
-        if (java_exe and probe_error and not vc_runtime_repair_attempted
-                and os.name == "nt" and not java_executable_has_non_ascii_path(java_exe)):
-            from windows_runtime_support import install_vc_runtime
+        if java_exe and probe_error and not vc_runtime_repair_attempted and os.name == "nt":
+            from windows_runtime_support import install_vc_runtime, missing_vc_runtime
             if missing_vc_runtime(probe_error):
                 vc_runtime_repair_attempted = True
                 repaired, repair_detail = install_vc_runtime(
@@ -391,11 +381,7 @@ def ensure_java(runtime_dir: str, required_major: int,
         if not java_exe:
             last_failure = f"从 {source_name} 解压后没有找到 java.exe"
         elif probe_error:
-            if java_executable_has_non_ascii_path(java_exe) and missing_vc_runtime(probe_error):
-                last_failure = (f"Java 所在路径含中文或特殊字符，当前 Windows 无法从这里启动 Java："
-                                f"{java_exe}。请重启 AMCL，它会改用安全的运行时目录。")
-            else:
-                last_failure = f"从 {source_name} 解压出的 Java 无法运行：{probe_error}"
+            last_failure = f"从 {source_name} 解压出的 Java 无法运行：{probe_error}"
         else:
             expected = (f"{required_major}～{max_major}" if max_major is not None
                         and max_major != required_major else str(required_major))

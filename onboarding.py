@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QStackedWidget,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 import paths
+from path_validation import assess_game_path
 from assistant import AISettingsForm
 from settings import load_settings, save_settings
 
@@ -40,6 +42,7 @@ class OnboardingDialog(QDialog):
         self.setMinimumSize(580, 500)
         self.settings = load_settings()
         self.want_tutorial = False   # 用户在第一步是否选了「新手」(决定是否自动播教程)
+        self._confirmed_risky_path = ""
         # 对话框统一主题背景(深浅色自适应);页面本身透明,避免「白边」
         # 注意:父级一旦设置样式表,Qt 引擎会接管渲染,子控件文字会回退为默认黑色
         # (深浅色系统都可能「黑底黑字」),所以必须在这里把所有控件类型显式上色。
@@ -210,6 +213,8 @@ class OnboardingDialog(QDialog):
 
     def _next(self):
         idx = self.stack.currentIndex()
+        if idx == 1 and not self._confirm_path():
+            return
         if idx < self.stack.count() - 1:
             self.stack.setCurrentIndex(idx + 1)
             self.prev_btn.setEnabled(True)
@@ -226,11 +231,17 @@ class OnboardingDialog(QDialog):
 
     def _check_path(self):
         p = self.path_edit.text().strip()
+        self._confirmed_risky_path = ""
         if not p:
-            self.path_info.setText("")
+            self.path_info.setText("❌ 还没有选择游戏文件夹。")
             return
+        assessment = assess_game_path(p)
+        issues = [f"❌ {item}" for item in assessment.errors]
+        issues += [f"⚠️ {item}" for item in assessment.warnings]
+        prefix = "\n".join(issues)
         if not os.path.isdir(p):
-            self.path_info.setText("⚠️ 该目录还不存在——启动器会自动创建它。")
+            normal = "该目录还不存在，确认后启动器会自动创建它。"
+            self.path_info.setText("\n".join(filter(None, (prefix, normal))))
             return
         if paths.looks_like_game_dir(p):
             versions = os.path.join(p, "versions")
@@ -243,14 +254,42 @@ class OnboardingDialog(QDialog):
                             names.append(name)
             extra = "、".join(names) + ("…" if n > 5 else "")
             if n:
-                self.path_info.setText(f"✅ 检测到 .minecraft 目录,里面有 {n} 个实例:\n{extra}")
+                normal = f"✅ 检测到 .minecraft 目录，里面有 {n} 个实例：\n{extra}"
             else:
-                self.path_info.setText("✅ 这是一个 .minecraft 目录(目前还没有实例)。")
+                normal = "✅ 这是一个 .minecraft 目录（目前还没有实例）。"
         else:
-            self.path_info.setText("这是一个普通文件夹,启动器会把它当成全新的游戏目录使用。")
+            normal = "这是一个普通文件夹，启动器会把它当成全新的游戏目录使用。"
+        self.path_info.setText("\n".join(filter(None, (prefix, normal))))
+
+    def _confirm_path(self) -> bool:
+        path = self.path_edit.text().strip()
+        assessment = assess_game_path(path)
+        if assessment.errors:
+            QMessageBox.warning(self, "换一个文件夹", "\n".join(assessment.errors))
+            self.stack.setCurrentIndex(1)
+            self.prev_btn.setEnabled(True)
+            return False
+        normalized = os.path.normcase(os.path.abspath(path))
+        if assessment.warnings and self._confirmed_risky_path != normalized:
+            box = QMessageBox(self)
+            box.setWindowTitle("这个位置可能带来问题")
+            box.setText("\n".join(assessment.warnings))
+            box.setInformativeText("建议改到简短的英文路径，例如 D:\\AMCL\\.minecraft。")
+            change = box.addButton("返回修改", QMessageBox.ButtonRole.AcceptRole)
+            keep = box.addButton("仍然使用", QMessageBox.ButtonRole.DestructiveRole)
+            box.setDefaultButton(change)
+            box.exec()
+            if box.clickedButton() is not keep:
+                self.stack.setCurrentIndex(1)
+                self.prev_btn.setEnabled(True)
+                return False
+            self._confirmed_risky_path = normalized
+        return True
 
     # ---- 保存并关闭 ----
     def _finish(self):
+        if not self._confirm_path():
+            return
         self.settings["game_dir"] = self.path_edit.text().strip()
         self.settings.update(self.ai_form.values())
         # 首次引导:若磁盘上的 config.json 没存过内存(说明是首次/默认),按机器物理内存给合理默认
