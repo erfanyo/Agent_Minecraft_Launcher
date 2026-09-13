@@ -7,7 +7,7 @@
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1
+sudo apt install -y git python3 python3-venv libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
 cd ~
 git clone https://github.com/erfanyo/Agent_Minecraft_Launcher.git amcl-wsl-test
 cd amcl-wsl-test
@@ -51,7 +51,7 @@ cd ~/amcl-package-test/AgentMinecraftLauncher
 
 ```bash
 sudo apt update
-sudo apt install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1
+sudo apt install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
 ```
 
 AMCL 在 WSLg 中会自动使用 X11 软件渲染，避免 Wayland 下只出现透明或空白窗口。
