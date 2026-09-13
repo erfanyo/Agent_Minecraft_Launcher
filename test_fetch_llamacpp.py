@@ -31,14 +31,20 @@ class FetchLlamaCppTests(unittest.TestCase):
             output = os.path.join(temp, "out")
             with tarfile.open(archive, "w:gz") as bundle:
                 for name, content in (("bin/llama-server", b"server"),
-                                      ("lib/libllama.so.0", b"library"),
+                                      ("lib/libllama.so.0.2.0", b"library"),
                                       ("bin/llama-cli", b"unneeded")):
                     info = tarfile.TarInfo(name)
                     info.size = len(content)
                     bundle.addfile(info, io.BytesIO(content))
+                link = tarfile.TarInfo("lib/libllama.so.0")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "libllama.so.0.2.0"
+                bundle.addfile(link)
             extracted = fetch_llamacpp._extract(archive, output, "linux")
             self.assertIn("llama-server", extracted)
             self.assertIn("libllama.so.0", extracted)
+            with open(os.path.join(output, "libllama.so.0"), "rb") as alias:
+                self.assertEqual(b"library", alias.read())
             self.assertFalse(os.path.exists(os.path.join(output, "llama-cli")))
             fetch_llamacpp.verify_runtime(output, "linux")
 

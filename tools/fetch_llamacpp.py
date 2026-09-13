@@ -118,6 +118,7 @@ def _extract(archive: str, dest_dir: str, os_name: str) -> list[str]:
                     print("  解出:", base)
     else:
         with tarfile.open(archive, "r:gz") as tf:
+            links = []
             for m in tf.getmembers():
                 if m.isfile():
                     base = os.path.basename(m.name)
@@ -130,6 +131,34 @@ def _extract(archive: str, dest_dir: str, os_name: str) -> list[str]:
                             os.chmod(target, os.stat(target).st_mode | stat.S_IXUSR)
                         got.append(base)
                         print("  解出:", base)
+                elif m.issym():
+                    base = os.path.basename(m.name)
+                    link_target = os.path.basename(m.linkname)
+                    if (base and link_target
+                            and _is_server_runtime_file(base, os_name)
+                            and _is_server_runtime_file(link_target, os_name)):
+                        links.append((base, link_target))
+            # llama.cpp Linux/macOS archives use SONAME links such as
+            # libllama-common.so.0 -> libllama-common.so.0.2.0.  Flattening only
+            # regular files leaves llama-server unable to load; recreate the
+            # safe basename-only links beside the extracted libraries.
+            link_map = dict(links)
+            for base, link_target in links:
+                seen = {base}
+                while link_target in link_map and link_target not in seen:
+                    seen.add(link_target)
+                    link_target = link_map[link_target]
+                target = os.path.join(dest_dir, base)
+                source = os.path.join(dest_dir, link_target)
+                if not os.path.isfile(source):
+                    continue
+                # Copy the target bytes under the SONAME instead of creating a
+                # symlink. This survives PyInstaller collection and also keeps
+                # extraction tests usable on Windows without symlink privilege.
+                import shutil
+                shutil.copy2(source, target)
+                got.append(base)
+                print("  解出:", base, "->", link_target)
     return got
 
 
