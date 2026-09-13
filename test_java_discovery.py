@@ -2,9 +2,10 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 from java_manager import (_java_candidates, java_download_urls, java_version_probe,
-                          list_java_installations, java_major)
+                          ensure_java, list_java_installations, java_major)
 from loaders import loader_processor_java_major
 
 
@@ -63,6 +64,28 @@ class JavaDiscoveryTests(unittest.TestCase):
             major, reason = java_version_probe('java.exe')
         self.assertEqual(major, 0)
         self.assertIn('not a valid application', reason)
+
+    def test_missing_vc_runtime_is_repaired_then_same_java_is_rechecked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            archive = Path(temp, 'source.zip')
+            with zipfile.ZipFile(archive, 'w') as package:
+                package.writestr('jdk/bin/java.exe', b'dummy')
+            runtime = Path(temp, 'runtime')
+
+            def copy_download(_url, destination, **_kwargs):
+                Path(destination).write_bytes(archive.read_bytes())
+
+            with patch('java_manager.find_java', return_value=None), \
+                 patch('java_manager.download_file', side_effect=copy_download), \
+                 patch('java_manager.java_version_probe', side_effect=[
+                     (0, 'Error: could not find java.dll'), (21, '')]), \
+                 patch('java_manager.os.name', 'nt'), \
+                 patch('windows_runtime_support.install_vc_runtime',
+                       return_value=(True, '')) as repair:
+                result = ensure_java(str(runtime), 21)
+
+            self.assertTrue(result.endswith(os.path.join('jdk', 'bin', 'java.exe')))
+            repair.assert_called_once()
 
 
 if __name__ == '__main__':

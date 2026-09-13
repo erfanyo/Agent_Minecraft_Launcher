@@ -18,6 +18,8 @@
     current_token("bg1")      # 新语义槽
     RADIUS["md"], DURATION["fade"]
 """
+import sys
+
 from PySide6.QtWidgets import QApplication
 
 
@@ -30,8 +32,22 @@ def is_dark_mode() -> bool:
         scheme = app.styleHints().colorScheme()
         if hasattr(scheme, "name") and scheme.name == "Dark":
             return True
+        if hasattr(scheme, "name") and scheme.name == "Light":
+            return False
     except Exception:
         pass
+    # Windows 10 may report an unknown Qt color scheme even though its app theme
+    # is set. Read the same preference used by Windows applications.
+    if sys.platform == "win32":
+        try:
+            import winreg
+            with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+                value, _kind = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return not bool(value)
+        except OSError:
+            pass
     win = app.palette().window().color()
     return win.lightness() < 128
 

@@ -44,7 +44,7 @@ from log_privacy import redact_text
 from downloader import failure_advice
 
 from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -108,22 +108,28 @@ def application_icon() -> QIcon:
 
 def startup_splash() -> QSplashScreen:
     """轻量启动屏：主窗口构建期间给出确定的视觉反馈，不引入额外 UI 框架。"""
+    palette = QApplication.palette()
+    background = palette.color(QPalette.ColorRole.Window)
+    text = palette.color(QPalette.ColorRole.WindowText)
+    muted = palette.color(QPalette.ColorRole.PlaceholderText)
+    if not muted.isValid():
+        muted = palette.color(QPalette.ColorRole.Text)
     pixmap = QPixmap(540, 300)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#26384a"))
+    painter.setBrush(background)
     painter.drawRoundedRect(1, 1, 538, 298, 20, 20)
     icon = application_icon().pixmap(QSize(58, 58))
     painter.drawPixmap(44, 58, icon)
-    painter.setPen(QColor("#f2f6fb"))
+    painter.setPen(text)
     title_font = QFont()
     title_font.setPointSize(20)
     title_font.setBold(True)
     painter.setFont(title_font)
     painter.drawText(122, 88, "AMCL")
-    painter.setPen(QColor("#aebdca"))
+    painter.setPen(muted)
     sub_font = QFont()
     sub_font.setPointSize(10)
     painter.setFont(sub_font)
@@ -135,6 +141,12 @@ def startup_splash() -> QSplashScreen:
     )
     splash.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
     return splash
+
+
+def startup_message_color() -> QColor:
+    """Keep splash progress text readable in the current system theme."""
+    color = QApplication.palette().color(QPalette.ColorRole.PlaceholderText)
+    return color if color.isValid() else QApplication.palette().color(QPalette.ColorRole.Text)
 
 
 
@@ -2249,6 +2261,8 @@ if __name__ == "__main__":
         raise SystemExit(0)
     print("正在获取版本列表(首次约几秒,请稍等)...")
     app = QApplication(sys.argv)
+    # Fusion gives custom-styled controls the same geometry on Windows 10/11.
+    app.setStyle("Fusion")
     app.setWindowIcon(application_icon())
     from ui_style import apply_global_dark_palette
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
@@ -2256,7 +2270,7 @@ if __name__ == "__main__":
     splash = startup_splash()
     splash.show()
     splash.showMessage("正在读取启动器设置…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-                       QColor("#c9d6e2"))
+                       startup_message_color())
     app.processEvents()
 
     # 首次启动:还没配置过游戏目录 → 弹引导界面(选路径 + 首次配置 AI + 新手/老手)
@@ -2273,16 +2287,16 @@ if __name__ == "__main__":
 
         splash.show()
         splash.showMessage("正在加载启动器组件…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-                           QColor("#c9d6e2"))
+                           startup_message_color())
         app.processEvents()
 
     splash.showMessage("正在加载功能模块与界面…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-                       QColor("#c9d6e2"))
+                       startup_message_color())
     app.processEvents()
     window = MainWindow()
     window.setWindowIcon(application_icon())
     splash.showMessage("正在扫描已有实例…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
-                       QColor("#c9d6e2"))
+                       startup_message_color())
     app.processEvents()
     if not _CI_STARTUP_SMOKE:
         window.load_versions()  # 启动时先加载一次

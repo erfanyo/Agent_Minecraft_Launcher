@@ -308,6 +308,7 @@ def ensure_java(runtime_dir: str, required_major: int,
     dest_dir = os.path.join(runtime_dir, f"jre-{required_major}")
 
     last_failure = "没有生成可用的 Java 运行时"
+    vc_runtime_repair_attempted = False
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         source_name, url = sources[(attempt - 1) % len(sources)]
         # 1) 下载:残留的损坏 zip 先删掉,别让它骗过"已存在"检查
@@ -358,6 +359,21 @@ def ensure_java(runtime_dir: str, required_major: int,
         # 4) 验证解压结果:找到 java.exe 且版本达标,否则整目录作废重来
         java_exe = _find_java_exe(dest_dir)
         installed_major, probe_error = java_version_probe(java_exe) if java_exe else (0, "")
+        if java_exe and probe_error and not vc_runtime_repair_attempted and os.name == "nt":
+            from windows_runtime_support import install_vc_runtime, missing_vc_runtime
+            if missing_vc_runtime(probe_error):
+                vc_runtime_repair_attempted = True
+                repaired, repair_detail = install_vc_runtime(
+                    os.path.join(runtime_dir, "prerequisites"), arch,
+                    progress_callback=progress_callback,
+                    status_callback=status_callback,
+                )
+                if repaired:
+                    if status_callback:
+                        status_callback("Windows 运行组件已修复，正在重新检查 Java…")
+                    installed_major, probe_error = java_version_probe(java_exe)
+                else:
+                    probe_error = f"{probe_error}；自动修复未完成：{repair_detail}"
         if (java_exe and installed_major >= required_major
                 and (max_major is None or installed_major <= max_major)):
             os.remove(zip_path)  # 解压成功就删掉压缩包,省空间
