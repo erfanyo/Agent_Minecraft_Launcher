@@ -106,7 +106,8 @@ class JavaDiscoveryTests(unittest.TestCase):
                  patch('java_manager.download_file', side_effect=copy_download), \
                  patch('java_manager.java_version_probe', side_effect=[
                      (0, 'Error: could not find java.dll'), (21, '')]), \
-                 patch('java_manager.os.name', 'nt'), \
+                 patch('java_manager._java_platform', return_value=('windows', '.zip', 'java.exe')), \
+                 patch('java_manager._is_windows', return_value=True), \
                  patch('windows_runtime_support.install_vc_runtime',
                        return_value=(True, '')) as repair:
                 result = ensure_java(str(runtime), 21)

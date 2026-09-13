@@ -30,6 +30,10 @@ ADOPTIUM_API = ("https://api.adoptium.net/v3/binary/latest/{major}/ga/"
 MAX_DOWNLOAD_ATTEMPTS = 3  # 下载/解压失败重试次数(网络不稳时自动重下)
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def java_download_urls(major: int, os_name: str, arch: str) -> list[tuple[str, str]]:
     """下载候选源：轻量 Temurin JRE 优先，Windows x64 用 Corretto JDK 兜底。"""
     urls = [("Eclipse Temurin", ADOPTIUM_API.format(
@@ -44,7 +48,7 @@ def java_download_urls(major: int, os_name: str, arch: str) -> list[tuple[str, s
 
 def _java_platform() -> tuple[str, str, str]:
     """Return Adoptium OS name, archive suffix and Java executable name."""
-    if os.name == "nt":
+    if _is_windows():
         return "windows", ".zip", "java.exe"
     if sys.platform == "darwin":
         return "mac", ".tar.gz", "java"
@@ -376,7 +380,8 @@ def ensure_java(runtime_dir: str, required_major: int,
         # 2) 解压前再校验一次完整性(下载中断可能留下能打开但 CRC 错的包)
         if not _valid_archive(archive_path, archive_suffix):
             last_failure = f"从 {source_name} 下载的压缩包校验失败"
-            os.remove(archive_path)
+            if os.path.exists(archive_path):
+                os.remove(archive_path)
             if attempt >= MAX_DOWNLOAD_ATTEMPTS:
                 raise RuntimeError(
                     f"Java {required_major} 安装失败（已重试 {attempt} 次）：{last_failure}")
@@ -402,7 +407,7 @@ def ensure_java(runtime_dir: str, required_major: int,
         # 4) 验证解压结果:找到 java.exe 且版本达标,否则整目录作废重来
         java_exe = _find_java_exe(dest_dir)
         installed_major, probe_error = java_version_probe(java_exe) if java_exe else (0, "")
-        if java_exe and probe_error and not vc_runtime_repair_attempted and os.name == "nt":
+        if java_exe and probe_error and not vc_runtime_repair_attempted and _is_windows():
             from windows_runtime_support import install_vc_runtime, missing_vc_runtime
             if missing_vc_runtime(probe_error):
                 vc_runtime_repair_attempted = True
