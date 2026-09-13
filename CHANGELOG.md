@@ -42,6 +42,7 @@
 - 打包版启动 Java/Forge/NeoForge/Minecraft 前清理 PyInstaller 临时 DLL 搜索路径，修复 `could not find java.dll`；启动画面移除黑色外框并改为透明圆角。
 - 成品为干净 Windows 系统单独携带并隔离暴露 VC++ 运行库，解决 Temurin 的 `java.dll`/`jvm.dll` 因缺少 `VCRUNTIME140*.dll` 无法载入。
 - Java 出现 `java.dll` 缺失时自动下载并验证微软官方 VC++ 运行库，只请求一次系统授权，修复后原地重试；启动页跟随系统深浅色，Windows 10/11 统一控件绘制。
+- 微软运行库修复由完全静默改为显示安装进度，等待期间持续更新状态；失败或超时会保留并指出安装日志。
 - 实例管理、运行配置、下载圆环(`download_indicator.py`)、依赖导入、Mod 依赖网络、
   启动命令(`launcher.py`/`game_files.py`/`loaders.py`)等多项修正。
 - 日志隐私:AI 操作记录、云端工具调用日志统一脱敏;旧值不写撤销记录。

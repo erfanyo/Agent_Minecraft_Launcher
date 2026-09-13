@@ -67,8 +67,9 @@ def _trusted_signature(path: str) -> tuple[bool, str]:
     return status == 0, "" if status == 0 else f"Windows 信任检查返回 0x{status & 0xffffffff:08X}"
 
 
-def _run_elevated_installer(path: str) -> tuple[int | None, str]:
-    """Show one normal Windows UAC prompt and wait for the official installer."""
+def _run_elevated_installer(path: str, status_callback=None,
+                            timeout_seconds: int = 600) -> tuple[int | None, str]:
+    """Show UAC plus Microsoft's progress UI, reporting while installation runs."""
     if os.name != "nt":
         return None, "当前系统不是 Windows"
 
@@ -96,17 +97,38 @@ def _run_elevated_installer(path: str) -> tuple[int | None, str]:
     info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
     info.lpVerb = "runas"
     info.lpFile = os.path.abspath(path)
-    info.lpParameters = "/install /quiet /norestart"
+    log_path = os.path.join(os.path.dirname(os.path.abspath(path)), "vc_redist-install.log")
+    info.lpParameters = f'/install /passive /norestart /log "{log_path}"'
     info.nShow = 1
     shell32 = ctypes.WinDLL("shell32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(ShellExecuteInfo)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
     if not shell32.ShellExecuteExW(ctypes.byref(info)):
         code = ctypes.get_last_error()
         if code == 1223:
             return None, "用户取消了系统授权"
         return None, f"无法启动微软运行库安装程序（Windows 错误 {code}）"
     try:
-        kernel32.WaitForSingleObject(info.hProcess, 0xFFFFFFFF)
+        elapsed = 0
+        while True:
+            wait_result = int(kernel32.WaitForSingleObject(info.hProcess, 1000))
+            if wait_result == 0:  # WAIT_OBJECT_0
+                break
+            if wait_result != 258:  # WAIT_TIMEOUT
+                return None, ("等待微软运行库安装时出现系统错误"
+                              f"（Windows 错误 {ctypes.get_last_error()}；日志：{log_path}）")
+            elapsed += 1
+            if status_callback and elapsed % 5 == 0:
+                status_callback(f"微软运行组件正在安装…（已等待 {elapsed} 秒）")
+            if elapsed >= timeout_seconds:
+                return None, f"微软运行库安装超过 {timeout_seconds // 60} 分钟；日志：{log_path}"
         exit_code = wintypes.DWORD()
         if not kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(exit_code)):
             return None, f"无法读取安装结果（Windows 错误 {ctypes.get_last_error()}）"
@@ -138,9 +160,12 @@ def install_vc_runtime(cache_dir: str, arch: str = "x64",
             return False, f"微软修复程序签名验证失败{f'：{detail}' if detail else ''}"
         if status_callback:
             status_callback("请在系统提示中选择“是”，AMCL 会修复组件后继续安装 Java。")
-        code, detail = _run_elevated_installer(installer)
+        code, detail = _run_elevated_installer(installer, status_callback=status_callback)
         if code not in _SUCCESS_CODES:
-            return False, detail or f"微软运行库安装失败（退出码 {code}）"
+            log_path = os.path.join(cache_dir, "vc_redist-install.log")
+            return False, detail or f"微软运行库安装失败（退出码 {code}；日志：{log_path}）"
+        if status_callback:
+            status_callback("微软运行组件安装完成，正在继续检查 Java…")
         return True, "若 Windows 提示需要重启，可先继续尝试；仍失败时再重启。"
     except Exception as error:
         return False, f"微软运行库修复失败：{type(error).__name__}: {error}"
