@@ -29,6 +29,18 @@ if _CI_STARTUP_SMOKE:
     if not (getattr(sys, 'frozen', False) and sys.platform == 'win32'):
         os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     os.environ.setdefault('AML_DATA_DIR', os.path.join(tempfile.gettempdir(), 'amcl-ci-smoke'))
+# WSLg's Wayland path can create a visible but unpainted translucent Qt window.
+# Prefer its X11 bridge with software rendering; users can still override any
+# of these variables before launch. This must run before importing PySide6.
+if __name__ == '__main__' and not _CI_STARTUP_SMOKE:
+    try:
+        from os_platform.system import is_wsl
+        if is_wsl():
+            os.environ.setdefault('QT_QPA_PLATFORM', 'xcb')
+            os.environ.setdefault('QT_OPENGL', 'software')
+            os.environ.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
+    except Exception:
+        pass
 if __name__ == '__main__' and '--amcl-memory-relief' in sys.argv:
     from memory_relief import main as memory_relief_main
     raise SystemExit(memory_relief_main(sys.argv[sys.argv.index('--amcl-memory-relief') + 1]))

@@ -7,7 +7,7 @@
 
 ```bash
 sudo apt update
-sudo apt install -y git python3 python3-venv libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1
+sudo apt install -y git python3 python3-venv libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1
 cd ~
 git clone https://github.com/erfanyo/Agent_Minecraft_Launcher.git amcl-wsl-test
 cd amcl-wsl-test
@@ -51,8 +51,11 @@ cd ~/amcl-package-test/AgentMinecraftLauncher
 
 ```bash
 sudo apt update
-sudo apt install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0
+sudo apt install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1
 ```
+
+AMCL 在 WSLg 中会自动使用 X11 软件渲染，避免 Wayland 下只出现透明或空白窗口。
+如果测试者预先设置了 `QT_QPA_PLATFORM` 或 `QT_OPENGL`，启动器会尊重已有设置。
 
 验收时至少检查首次启动、设置保存、版本列表、Java 下载、原版实例启动，以及关闭后
 再次打开。测试数据默认落在解压目录旁；整个 `~/amcl-package-test` 可在测试后删除。

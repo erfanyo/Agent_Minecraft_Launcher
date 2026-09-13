@@ -37,6 +37,11 @@ SMOKE_DATA="$(mktemp -d)"
 trap 'rm -rf "$SMOKE_DATA"' EXIT
 QT_QPA_PLATFORM=offscreen AML_DATA_DIR="$SMOKE_DATA" \
     timeout 90s "$PROGRAM" --amcl-ci-smoke
+if command -v xvfb-run >/dev/null 2>&1; then
+    QT_QPA_PLATFORM=xcb QT_OPENGL=software LIBGL_ALWAYS_SOFTWARE=1 \
+        AML_DATA_DIR="$SMOKE_DATA" xvfb-run -a \
+        timeout 90s "$PROGRAM" --amcl-ci-smoke
+fi
 
 echo "==> Create tar.gz and checksums"
 tar -C "$OUTPUT_DIR" -czf "$OUTPUT_DIR/$PACKAGE_NAME" AgentMinecraftLauncher
