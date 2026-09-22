@@ -14,8 +14,9 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QListWidget, QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+                               QLineEdit, QListWidget, QPushButton, QSpinBox,
+                               QVBoxLayout, QWidget)
 
 from center_shell import CenterShell
 from server_packs import (list_servers, read_candidate_report,
@@ -262,10 +263,25 @@ class ServerDetailsView(QWidget):
         return tab
 
     def _build_runtime(self) -> QWidget:
+        """运行配置:内存可调(写 user_jvm_args.txt)+ 额外 JVM 参数 + 启动信息。
+
+        内存写进 ``user_jvm_args.txt``——Forge/NeoForge 服务端启动器会把这个文件
+        原样塞进 java 命令行,所以它就是服务端的「运行配置」。额外参数受**与启动侧
+        同一套**校验约束(只放行内存与常用 GC 开关),避免「保存成功但起不来」。
+        """
+        import server_jvm as sj
+        import server_jvm_io as sj_io
+
         tab, layout = self._panel(
-            '运行配置', '内存、Java、启动参数等运行期设置。')
+            '运行配置',
+            '内存与 JVM 参数写入服务端的 user_jvm_args.txt；保存前会备份，'
+            '服务端运行时不允许修改。')
+
+        info = sj_io.current_settings(self.server_dir)
         report = (self.server or {}).get('report') or {}
-        rows = [
+
+        # ---- 启动信息(只读) ----
+        facts = [
             ('加载器', f"{report.get('loader', 'unknown')} "
                        f"{report.get('loaderVersion') or ''}".strip()),
             ('Minecraft', report.get('minecraftVersion') or '未确认'),
@@ -273,17 +289,118 @@ class ServerDetailsView(QWidget):
             ('启动入口', (report.get('verification') or {}).get('entry') or '未静态验证'),
             ('EULA', '已接受' if report.get('eulaAccepted') else '未接受（首次启动需确认）'),
         ]
-        for name, value in rows:
+        for name, value in facts:
             label = QLabel(f'<b>{name}</b>：{value}')
             label.setWordWrap(True)
             layout.addWidget(label)
-        note = QLabel('这些值来自转换时生成的报告。内存与 JVM 参数的逐项修改'
-                      '会接到客户端同一套「启动设置」体系上（尚未接线）。')
-        note.setWordWrap(True)
-        note.setStyleSheet(hint_style())
-        layout.addWidget(note)
+
+        # ---- 内存 ----
+        memory_box = QGroupBox('内存')
+        memory_form = QFormLayout(memory_box)
+        self.jvm_max_spin = QSpinBox()
+        self.jvm_max_spin.setRange(1, 256)
+        self.jvm_max_spin.setSuffix(' GB')
+        self.jvm_max_spin.setToolTip('Java 堆上限(-Xmx)。太小会 OutOfMemory,太大反而拖慢 GC。')
+        self.jvm_min_spin = QSpinBox()
+        self.jvm_min_spin.setRange(0, 256)
+        self.jvm_min_spin.setSuffix(' GB')
+        self.jvm_min_spin.setSpecialValueText('不设置')
+        self.jvm_min_spin.setToolTip('初始堆(-Xms)。留 0 表示不写这一项。')
+        current_max = sj_io.parse_gb(info['max']) or 4
+        current_min = sj_io.parse_gb(info['min']) or 0
+        self.jvm_max_spin.setValue(current_max)
+        self.jvm_min_spin.setValue(current_min)
+        memory_form.addRow('最大内存', self.jvm_max_spin)
+        memory_form.addRow('初始内存', self.jvm_min_spin)
+        layout.addWidget(memory_box)
+
+        # ---- 额外 JVM 参数 ----
+        extra_box = QGroupBox('额外 JVM 参数')
+        extra_column = QVBoxLayout(extra_box)
+        self.jvm_extra_edit = QLineEdit(' '.join(info['extras']))
+        self.jvm_extra_edit.setPlaceholderText('例如 -XX:+UseZGC（只支持内存与常用 GC 开关）')
+        extra_column.addWidget(self.jvm_extra_edit)
+        gc_row = QHBoxLayout()
+        gc_row.addWidget(QLabel('常用 GC：'))
+        for label, flag in sj.GC_CHOICES:
+            btn = QPushButton(label)
+            btn.setToolTip(flag)
+            btn.clicked.connect(lambda _c=False, f=flag: self._append_jvm_arg(f))
+            gc_row.addWidget(btn)
+        gc_row.addStretch()
+        extra_column.addLayout(gc_row)
+        extra_note = QLabel('启动器只接受内存参数与上列 GC 开关；其它参数会在保存前被拒绝'
+                            '（避免出现「保存成功但服务端起不来」）。')
+        extra_note.setWordWrap(True)
+        extra_note.setStyleSheet(hint_style())
+        extra_column.addWidget(extra_note)
+        layout.addWidget(extra_box)
+
+        if info['unsupported']:
+            warn = QLabel('⚠ 文件里已有启动器不接受的参数，保存会被拒绝，请先手工处理：'
+                          + '、'.join(info['unsupported']))
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+
+        # ---- 操作 ----
+        status = QLabel('')
+        status.setWordWrap(True)
+        self.jvm_status = status
+        save_btn = QPushButton('保存运行配置')
+        save_btn.clicked.connect(self._save_runtime)
+        open_btn = QPushButton('打开服务端目录')
+
+        def do_open():
+            from os_platform.openpath import open_path
+            open_path(self.server_dir)
+
+        open_btn.clicked.connect(do_open)
+        row = QHBoxLayout()
+        row.addWidget(save_btn)
+        row.addWidget(open_btn)
+        row.addStretch()
+        layout.addLayout(row)
+        layout.addWidget(status)
+        self._refresh_runtime_status()
         layout.addStretch()
         return tab
+
+    def _append_jvm_arg(self, flag: str):
+        """把某个 GC 开关填进额外参数。
+
+        所有 ``-XX:[+-]Use*GC`` 属于**同一族**:JVM 同时收到两个选择型 GC 开关会报
+        冲突,所以选一个就要把同族其它选择型开关去掉。这里是「替换」而不是「追加」,
+        与直觉相反但正是 JVM 的要求。
+        """
+        import re
+        import server_jvm as sj
+        current = sj.tokenize(self.jvm_extra_edit.text())
+        gc_flag = re.compile(r'-XX:[+-]Use\w*GC$')
+        current = [a for a in current if not gc_flag.fullmatch(a)]
+        # 显式关闭某个 GC(-XX:-UseXxxGC)也一并清掉,避免与选择项打架
+        if flag not in current:
+            current.append(flag)
+        self.jvm_extra_edit.setText(' '.join(current))
+
+    def _refresh_runtime_status(self):
+        import server_jvm_io as sj_io
+        if not hasattr(self, 'jvm_status'):
+            return
+        if sj_io.server_running(self.server_dir):
+            self.jvm_status.setText('⛔ 服务端正在运行：运行中的进程不会重读该文件，'
+                                    '请先停止服务端再改运行配置。')
+        else:
+            self.jvm_status.setText('✅ 可以保存。')
+
+    def _save_runtime(self):
+        import server_jvm as sj
+        import server_jvm_io as sj_io
+        extras = sj.tokenize(self.jvm_extra_edit.text())
+        max_gb = self.jvm_max_spin.value()
+        min_gb = self.jvm_min_spin.value() or None
+        result = sj_io.apply_update(self.server_dir, max_gb=max_gb, min_gb=min_gb,
+                                    extras=extras, replace_extras=True)
+        self.jvm_status.setText(('✅ ' if result['ok'] else '⛔ ') + result['message'])
 
     def _build_backups(self) -> QWidget:
         tab, layout = self._panel(
