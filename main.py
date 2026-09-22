@@ -296,6 +296,15 @@ class MainWindow(QMainWindow):
             self.instance_details, t("INSTANCE_DETAILS"))
         self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
         tab_a.instance_selected.connect(self._on_instance_selected)
+        # 服务端详情:与客户端实例详情同构(同一个 CenterShell 骨架)。
+        # 未选择服务端时隐藏,选中服务端标签页里的条目后出现。
+        from server_details import ServerDetailsView
+        self.server_details = ServerDetailsView()
+        self.server_details.setObjectName("server_details")
+        self._server_details_tab_idx = self.main_tabs.addTab(
+            self.server_details, "服务端详情")
+        self.main_tabs.setTabVisible(self._server_details_tab_idx, False)
+        tab_a.server_center.selection_changed.connect(self._on_server_selected)
         self.main_tabs.addTab(self.resource_center, t("RESOURCES"))
         # 联机方案中心:改为「下载新资源」右侧的标签卡(卡片形式)
         from online_center import OnlineCenter
@@ -2203,6 +2212,28 @@ class MainWindow(QMainWindow):
 
     def _hide_instance_details(self):
         self.main_tabs.setTabVisible(self._inst_details_tab_idx, False)
+
+    # ---- 服务端详情(与实例详情同构) ----
+    def _on_server_selected(self, server):
+        """服务端标签页选中变化 → 显示/隐藏「服务端详情」标签页。"""
+        if not server:
+            self._hide_server_details()
+        else:
+            self._show_server_details(server, switch=False)
+
+    def _show_server_details(self, server, switch: bool = False):
+        self.server_details.set_server(server)
+        was_hidden = not self.main_tabs.isTabVisible(self._server_details_tab_idx)
+        self.main_tabs.setTabVisible(self._server_details_tab_idx, True)
+        if was_hidden:
+            from ui_anim import fade_in
+            from ui_tokens import DURATION
+            fade_in(self.server_details, DURATION.get("slide", 320))
+        if switch:
+            self.main_tabs.setCurrentIndex(self._server_details_tab_idx)
+
+    def _hide_server_details(self):
+        self.main_tabs.setTabVisible(self._server_details_tab_idx, False)
 
     def _animate_instance_details_in(self):
         """标签页出现动画:淡入(320ms OutCubic,走 ui_anim 统一封装;关闭动画则直接显示)。"""

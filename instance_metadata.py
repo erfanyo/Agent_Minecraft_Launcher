@@ -25,6 +25,44 @@ def read_metadata(folder):
     except (OSError, ValueError):
         return {}
 
+
+#: ``amcl_instance.json`` 里放界面状态的子命名空间;与 Minecraft/加载器用的键
+#: (``minecraft_version`` 等)分开,避免互相污染。
+UI_STATE_KEY = 'ui_state'
+
+
+def read_ui_state(folder, key: str, default=None):
+    """读某个实例的界面状态(如「高级选项」是否展开)。
+
+    存在 ``amcl_instance.json`` 而不是全局 settings 里,是为了让每个实例各自
+    记忆自己的展开状态(工作/生活两套实例互不干扰)。
+    """
+    state = read_metadata(folder).get(UI_STATE_KEY)
+    if not isinstance(state, dict):
+        return default
+    value = state.get(key, default)
+    return value
+
+
+def write_ui_state(folder, key: str, value) -> bool:
+    """写某个实例的界面状态;写失败返回 False(不抛,免得点一下菜单就崩)。
+
+    只动 ``ui_state`` 子字典,其余元数据原样保留。
+    """
+    try:
+        path = safe_child(folder, 'amcl_instance.json')
+        data = read_metadata(folder)
+        state = data.get(UI_STATE_KEY)
+        if not isinstance(state, dict):
+            state = {}
+        state[str(key)] = value
+        data[UI_STATE_KEY] = state
+        atomic_json(path, data)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def rename_display(game_root, instance_id, name):
     from instances import scan_instances
     safe_component(instance_id)

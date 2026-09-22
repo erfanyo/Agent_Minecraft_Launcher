@@ -119,6 +119,44 @@ def set_server_launch_jar(server, jar_path):
     return relative
 
 
+def read_server_ui_state(server, key, default=None):
+    """读某个服务端的界面状态(如「高级选项」是否展开)。
+
+    与客户端一致地放在服务端自身的 ``.amcl-server.json`` 里,让每个服务端各自
+    记忆展开状态,而不是全局一份。
+    """
+    try:
+        path = Path(server['packagePath'], '.amcl-server.json')
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return default
+    state = data.get('ui_state')
+    if not isinstance(state, dict):
+        return default
+    return state.get(key, default)
+
+
+def write_server_ui_state(server, key, value):
+    """写服务端界面状态;失败返回 False(点一下菜单不该让界面崩)。"""
+    try:
+        path = Path(server['packagePath'], '.amcl-server.json')
+        data = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(data, dict):
+            return False
+        state = data.get('ui_state')
+        if not isinstance(state, dict):
+            state = {}
+        state[str(key)] = value
+        data['ui_state'] = state
+        pending = path.with_name('.amcl-server.pending')
+        pending.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                           encoding='utf-8')
+        os.replace(pending, path)
+        return True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def import_server_pack(path, game_dir, expected_sha256, status_callback=None,
                        progress_callback=None, display_name=None):
     """Import in place with an incomplete marker; never rename the whole directory."""

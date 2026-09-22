@@ -41,6 +41,32 @@ class CenterShell(QWidget):
             self.stack.addWidget(build_fn())
         return idx
 
+    def add_section_group(self, group_id: str, label: str, *,
+                          open_state: bool = False) -> int:
+        """加一个可折叠分组标题(如「高级选项」)。
+
+        与 :meth:`add_section` 不同,标题本身不对应右侧面板——它只控制成员章节
+        在菜单里的显示/隐藏。需要折叠的章节用 :meth:`add_grouped_section` 添加。
+        返回标题按钮的菜单索引。
+
+        这里会为标题占位补一个空 QStackedWidget 页,保证「菜单索引 == 堆栈索引」
+        这一不变式不被破坏(否则后续章节的右侧面板会整体错位一格)。
+        """
+        idx = self.menu.add_group(group_id, label, open_state=open_state)
+        self.stack.addWidget(QWidget())
+        return idx
+
+    def add_grouped_section(self, group_id: str, label: str, build_fn,
+                            *, lazy: bool = False) -> int:
+        """往折叠分组里加一个章节(语义同 add_section)。"""
+        idx = self.menu.add_group_item(group_id, label)
+        if lazy:
+            self._lazy_builders[idx] = build_fn
+            self.stack.addWidget(QWidget())
+        else:
+            self.stack.addWidget(build_fn())
+        return idx
+
     def switch_to(self, idx: int):
         self.menu.select(idx)
 
@@ -54,6 +80,11 @@ class CenterShell(QWidget):
 
     def _on_item_clicked(self, row: int):
         previous = self.stack.currentIndex()
+        # 目标章节若藏在收起的分组里,先自动展开,否则用户会看到「切过去了但菜单
+        # 里没有高亮项」的迷惑状态。
+        group = self.menu.group_of(row)
+        if group is not None and not self.menu.is_group_open(group):
+            self.menu.toggle_group(group, True)
         self._ensure_built(row)
         self.stack.setCurrentIndex(row)
         if previous != row:
