@@ -53,22 +53,22 @@ class EntryLayoutTests(unittest.TestCase):
         home.details_btn.click()
         self.assertEqual(seen, [1])
 
-    def test_five_action_buttons_in_both_modes(self):
-        """按钮总数不变:详情 1 + 功能 4 + 启动 1。"""
+    def test_action_buttons_in_both_modes(self):
+        """行2 已移除:左列只剩 实例详情 + 导入/一键配置 + 启动。"""
         home = self._home()
         for setter in (home._set_client_mode, lambda: home._set_server_mode(None)):
             setter()
-            buttons = [home.details_btn, home.new_game_btn, home.find_mod_btn,
-                       home.import_btn, home.config_btn, home.launch_btn]
-            self.assertEqual(len(buttons), 6)
+            buttons = [home.details_btn, home.import_btn, home.config_btn,
+                       home.launch_btn]
             for button in buttons:
                 self.assertTrue(button.text().strip(), '按钮文字不能为空')
+            # 行2 那两个高频按钮已按需求删除
+            self.assertFalse(hasattr(home, 'new_game_btn'))
+            self.assertFalse(hasattr(home, 'find_mod_btn'))
 
     def test_client_mode_labels(self):
         home = self._home()
         home._set_client_mode()
-        self.assertEqual(home.new_game_btn.text(), '新建游戏')
-        self.assertEqual(home.find_mod_btn.text(), '下载 Mod')
         self.assertIn('导入', home.import_btn.text())      # 导入整合包 / 智能导入
         self.assertIn('一键配置', home.config_btn.text())
         self.assertEqual(home.launch_btn.text(), '启动游戏')
@@ -76,8 +76,6 @@ class EntryLayoutTests(unittest.TestCase):
     def test_server_mode_labels(self):
         home = self._home()
         home._set_server_mode(None)
-        self.assertEqual(home.new_game_btn.text(), '打开目录')
-        self.assertEqual(home.find_mod_btn.text(), '查看 Mod')
         self.assertEqual(home.import_btn.text(), '服务端管理')
         self.assertEqual(home.config_btn.text(), '导入服务端')
         self.assertEqual(home.launch_btn.text(), '启动服务端')
@@ -87,8 +85,7 @@ class EntryLayoutTests(unittest.TestCase):
         home = self._home()
         for setter in (home._set_client_mode, lambda: home._set_server_mode(None)):
             setter()
-            labels = [home.new_game_btn.text(), home.find_mod_btn.text(),
-                      home.import_btn.text(), home.config_btn.text(),
+            labels = [home.import_btn.text(), home.config_btn.text(),
                       home.details_btn.text()]
             self.assertEqual(len(labels), len(set(labels)),
                              f'按钮文字重复: {labels}')
@@ -118,6 +115,14 @@ class EntryLayoutTests(unittest.TestCase):
         self.assertIsNotNone(menu)
         texts = [a.text() for a in menu.actions()]
         self.assertTrue(any('一键配置' in t for t in texts), texts)
+
+    def test_instance_card_is_clickable_entry(self):
+        """详情主入口改为「当前实例卡片」:点卡片要能发信号。"""
+        home = self._home()
+        seen = []
+        home.instance_details_requested.connect(lambda: seen.append(1))
+        home.inst_card.clicked.emit()
+        self.assertEqual(seen, [1])
 
     def test_smart_import_toggle_does_not_relabel_wrong_button(self):
         """智能导入开关只影响导入整合包按钮,不能污染其它按钮。"""

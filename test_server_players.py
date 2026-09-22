@@ -139,10 +139,13 @@ class IOTests(unittest.TestCase):
         """核心安全行为:读不出来的名单文件绝不覆盖。"""
         with tempfile.TemporaryDirectory() as temp:
             root = self._server(temp, text='{broken')
-            before = open(sp.file_path(root, 'whitelist'), encoding='utf-8').read()
+            path = sp.file_path(root, 'whitelist')
+            with open(path, encoding='utf-8') as stream:
+                before = stream.read()
             result = sp.apply_entries(root, 'whitelist', [{'name': 'X'}])
             self.assertFalse(result['ok'])
-            after = open(sp.file_path(root, 'whitelist'), encoding='utf-8').read()
+            with open(path, encoding='utf-8') as stream:
+                after = stream.read()
             self.assertEqual(before, after)
 
     def test_running_server_refuses(self):

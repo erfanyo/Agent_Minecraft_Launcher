@@ -552,16 +552,28 @@ class LoginCard(QWidget):
 
 
 class InstanceSettingsCard(QWidget):
-    """当前实例卡片(纯展示):显示选中的实例关键信息。
+    """当前实例卡片:显示选中的实例关键信息,**点击进入详情**。
 
-    具体操作(实例管理/启动器设置/版本选择)已下沉到「启动游戏」下方的
-    「启动器设置」与「管理 ▾」按钮,卡片只负责把当前实例说明清楚。
+    详情入口从「顶部标签页」收敛到这张卡片——卡片本来就是「当前选择」的展示区,
+    点它看详情符合直觉,也不用再占一行按钮。
     """
+
+    clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._inst = None
         self._build_ui()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip('点击查看当前实例 / 服务端的详情')
+
+    def mouseReleaseEvent(self, event):
+        """整张卡片可点(左键);其它按键交给基类,避免抢掉右键菜单之类。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -661,17 +673,16 @@ class VersionHome(QWidget):
         self.login_card.open_settings_requested.connect(self.open_settings_requested.emit)
         lay.addWidget(self.login_card)
 
-        # 当前实例卡片(纯展示)
+        # 当前实例卡片:点击即进入详情(详情入口不再占用按钮行)
         self.inst_card = InstanceSettingsCard()
+        self.inst_card.clicked.connect(self.instance_details_requested.emit)
         lay.addWidget(self.inst_card)
 
         lay.addStretch(1)
 
-        # 「实例详情」大入口:紧贴启动按钮上方。
-        # 原先详情藏在主标签页里(选中实例才冒出来),用户根本找不到;这里改成
-        # 与「启动」同一视觉层级的主入口。它占据原来第一行两个按钮的位置
-        # (客户端原为 新建游戏/下载Mod,服务端原为 导入服务端/打开目录),
-        # 因此按钮总数不变、也不需要新加按钮。
+        # 「实例详情」按钮:紧贴启动按钮上方,按模式路由(客户端实例 / 服务端)。
+        # 行2(新建游戏 / 下载 Mod)已移除:这两个功能在「下载新资源」页本就有,
+        # 新手教程会说明;少一行按钮让左列更清爽。
         self.details_btn = QPushButton("实例详情")
         self.details_btn.setToolTip("查看当前实例/服务端的详细信息、Mod、配置与日志")
         self.details_btn.setMinimumHeight(44)
@@ -679,22 +690,6 @@ class VersionHome(QWidget):
         set_style(self.details_btn, card_btn_style)
         self.details_btn.clicked.connect(self.instance_details_requested.emit)
         lay.addWidget(self.details_btn)
-
-        # 高频入口始终可见：不依赖 AI，也不用到多层菜单里找。
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(10)
-        self.new_game_btn = QPushButton("新建游戏")
-        self.new_game_btn.setToolTip("选择 Minecraft 版本和加载器，创建一个新游戏")
-        self.find_mod_btn = QPushButton("下载 Mod")
-        self.find_mod_btn.setToolTip("浏览、搜索并下载 Mod；也可进入整合包、光影和资源包页面")
-        for btn in (self.new_game_btn, self.find_mod_btn):
-            btn.setMinimumHeight(40)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            set_style(btn, card_btn_style)
-            quick_row.addWidget(btn, 1)
-        self.new_game_btn.clicked.connect(lambda: self._run_left_action('first'))
-        self.find_mod_btn.clicked.connect(lambda: self._run_left_action('second'))
-        lay.addLayout(quick_row)
 
         # 「导入整合包」(左)+「一键配置」(右)并排，属于次高频操作。
         tool_row = QHBoxLayout()
@@ -877,19 +872,14 @@ class VersionHome(QWidget):
         self._server_mode = True
         self.login_card.set_server_mode(server)
         self.inst_card.set_server(server)
-        # 行2:打开目录 / 查看 Mod(与客户端「新建游戏 / 下载 Mod」同一位置)
-        self.new_game_btn.setText('打开目录')
-        self.new_game_btn.setToolTip('打开当前服务端目录')
-        self.find_mod_btn.setText('查看 Mod')
-        self.find_mod_btn.setToolTip('查看服务端 Mod 及适用端信息')
-        # 行3:服务端管理(下拉) / 导入服务端 —— 即「查看 Mod」腾出来的位置
+        # 行2(打开目录 / 查看 Mod)已移除:行3 的「服务端管理」下拉里本就有
+        # 「打开服务端目录」,「查看 Mod」走右侧服务端详情的 Mod 页。
         self.import_btn.setText('服务端管理')
         self.import_btn.setToolTip('启动入口 / 运行库 / 审核报告 / 导出')
         self.import_btn.setMenu(self._server_manage_menu())
         self.config_btn.setText('导入服务端')
         self.config_btn.setMenu(self._import_menu())
         has_server = server is not None
-        self.find_mod_btn.setEnabled(has_server)
         self.import_btn.setEnabled(has_server)
         self.config_btn.setEnabled(True)
         self.launch_btn.setEnabled(has_server)
@@ -933,10 +923,7 @@ class VersionHome(QWidget):
         self._server_mode = False
         self.login_card.set_player_mode()
         self.inst_card.set_client_mode(self.current_instance())
-        self.new_game_btn.setText('新建游戏')
-        self.new_game_btn.setToolTip('选择 Minecraft 版本和加载器，创建一个新游戏')
-        self.find_mod_btn.setText('下载 Mod')
-        self.find_mod_btn.setToolTip('浏览、搜索并下载 Mod；也可进入整合包、光影和资源包页面')
+        # 行2 已移除(新建游戏 / 下载 Mod → 都在「下载新资源」页,教程会说明)。
         self.import_btn.setText('智能导入' if self._smart_import_enabled
                                 else t("VERSION_HOME_IMPORT_MODPACK"))
         self.import_btn.setToolTip(
@@ -945,7 +932,7 @@ class VersionHome(QWidget):
         self.import_btn.setMenu(None)
         self.config_btn.setText(t("VERSION_HOME_ONE_CLICK"))
         self.config_btn.setMenu(self._client_config_menu)
-        for button in (self.new_game_btn, self.find_mod_btn, self.import_btn, self.config_btn):
+        for button in (self.import_btn, self.config_btn):
             button.setEnabled(True)
         self.launch_btn.setText(t("VERSION_HOME_LAUNCH_GAME"))
         self.launch_btn.setEnabled(self.current_instance() is not None)
@@ -972,30 +959,15 @@ class VersionHome(QWidget):
              ((server or {}).get('name') or '请先选择一个服务端')))
 
     def _run_left_action(self, slot):
-        """左侧按钮动作。
+        """左侧按钮动作(行2 已移除,现在只剩导入整合包走这里)。
 
-        每个按钮有**固定职责**(不再按模式互换语义),这样信号槽不会串:
-        - first  : 客户端=新建游戏  / 服务端=打开目录
-        - second : 客户端=下载 Mod / 服务端=查看 Mod
-        - third  : 导入整合包(客户端)
-        - fourth : 导入服务端(两种模式都是同一个导入入口)
+        - third : 导入整合包(客户端)
+        服务端的两个按钮都是下拉菜单,不需要在这里派发。
         """
         if self._server_mode:
-            if slot == 'first':
-                self.server_center.open_folder()
-            elif slot == 'second':
-                self.server_center.show_mods()
-            # 'third'/'fourth' 在服务端模式是下拉菜单(服务端管理 / 导入服务端),
-            # 由 QMenu 自己处理,不走这里。
             return
-        if slot == 'first':
-            self.open_resources_requested.emit(1)
-        elif slot == 'second':
-            self.open_resources_requested.emit(3)
-        elif slot == 'third':
+        if slot == 'third':
             self.import_modpack_requested.emit()
-        elif slot == 'fourth':
-            self._import_server()
 
     def _on_primary_launch(self):
         if self._server_mode:
