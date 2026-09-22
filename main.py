@@ -291,19 +291,16 @@ class MainWindow(QMainWindow):
         set_style(self.main_tabs, tab_style)   # 外层标签页:圆角+字体放大(14px)
         self.main_tabs.addTab(tab_a, t("MY_INSTANCES"))
         self._my_inst_tab_idx = 0   # 「我的实例」= 主标签第 0 页(拖入文件 → 当作整合包安装)
-        # 客户端实例详情:不再占用与「设置」平级的标签页,改为从首页「当前实例卡片」
-        # 或左侧「实例详情」按钮进入(见 _open_details_for_current)。
+        # 客户端实例详情:不再是与「设置」平级的标签页,改为**覆盖层 + 左上角返回**
+        # (与「下载详情」同一套交互:点开看详情,返回回到原页)。
         from instance_manager import InstanceManagerDialog
         self.instance_details = InstanceManagerDialog()
         self.instance_details.setObjectName("instance_details")
-        self._inst_details_tab_idx = -1      # 不是常驻标签页,仅按需加入/移除
         tab_a.instance_selected.connect(self._on_instance_selected)
-        # 服务端详情:与客户端实例详情同构(同一个 CenterShell 骨架)。
-        # 同样按需挂载;两者互斥,选中哪种实例就只显示对应的详情页。
+        # 服务端详情:与客户端实例详情同构,同样用覆盖层。
         from server_details import ServerDetailsView
         self.server_details = ServerDetailsView()
         self.server_details.setObjectName("server_details")
-        self._server_details_tab_idx = -1
         tab_a.server_center.selection_changed.connect(self._on_server_selected)
         self.main_tabs.addTab(self.resource_center, t("RESOURCES"))
         # 联机方案中心:改为「下载新资源」右侧的标签卡(卡片形式)
@@ -461,9 +458,8 @@ class MainWindow(QMainWindow):
         self.statusBar().hide()
         self.apply_background()   # AI dock 已建好,再刷一次让 dock 也带上壁纸(幂等)
 
-        # 启动阶段结束:此后用户选中实例/服务端才自动挂载详情页。
-        # 启动过程本身会触发一轮「选中第一个实例/服务端」,那时挂详情页纯属多余
-        # (用户没要求看,而且会立刻扫描 mods/日志,拖慢开窗)。
+        # 启动阶段结束标记。详情页已改为「用户点开才显示」的覆盖层,不再需要在
+        # 这里挡住自动挂载;保留该标记供外部/测试判断窗口是否已完成初始化。
         self._ui_ready = True
 
     # ---- 设置 ----
@@ -1556,15 +1552,16 @@ class MainWindow(QMainWindow):
             self._in_game_ai = None
 
     def _toggle_log(self, checked: bool):
-        """显示游戏日志:确保「实例详情」已打开并切到「游戏日志」项。
+        """显示游戏日志:打开「实例详情」覆盖层并切到「游戏日志」项。
 
-        详情页现在是按需挂载的临时标签页,所以这里要先把它挂上,再切页面——
-        否则会去 setCurrentIndex(-1) 什么也不发生。
+        详情已改为覆盖层(与下载详情同一套),所以这里直接打开覆盖层再切页面,
+        不再需要先挂标签页。
         """
         if hasattr(self, "instance_details") and self.instance_details.shell is not None:
-            index = self._attach_details_tab('client', self.instance_details,
-                                             t("INSTANCE_DETAILS"))
-            self.main_tabs.setCurrentIndex(index)
+            inst = self.home_panel.current_instance()
+            if inst is None:
+                return
+            self._show_instance_details(inst)
             self.instance_details.shell.switch_by_label("游戏日志")
 
     # ---- 自动 debug:游戏异常退出时收集日志,让 AI 分析 ----
@@ -2205,85 +2202,75 @@ class MainWindow(QMainWindow):
         self._show_instance_details(inst, switch=True)
 
     def _on_instance_selected(self, inst):
-        """首页选中实例变化 → 打开/关闭客户端实例详情页。
+        """首页选中实例变化 → 仅更新当前选择。
 
-        启动阶段的自动选中不在这里挂载详情页(见 ``_ui_ready``):否则一开窗口
-        就多出一个详情标签页,而用户并没有主动要看它。
+        覆盖层是「用户主动点开看」的交互(与下载详情一致):选中列表项只更新
+        当前选择卡片,不会突然糊住整个界面。要看详情请点卡片或左侧「实例详情」。
         """
-        if inst is None:
-            self._detach_details_tabs()
-        elif getattr(self, '_ui_ready', False):
-            self._show_instance_details(inst, switch=False)   # 选中即可见,不强制跳到该页
+        # 没有实例可选时,把正开着的详情收掉,避免留下过时内容。
+        if inst is None and self._details_open:
+            self._hide_instance_details()
 
-    # ---- 详情标签页的挂载(两个详情页互斥,且都是按需挂载) ----
+    # ---- 详情覆盖层(与「下载详情」同一套:覆盖层 + 左上角返回) ----
     #
-    # 为什么不再用「常驻标签页 + setTabVisible」:那样两个详情页会同时存在(只是
-    # 一个被隐藏),当前页又停在别处时,用户分不清看到的是谁——这正是「在服务端
-    # 里看到客户端实例详情」那次困惑的来源。改成按需插入/移除后,任意时刻最多
-    # 只有一个详情页存在,也就不存在看错的可能。
-    INSTANCE_DETAILS_SLOT = 1        # 「我的实例」右边
+    # 为什么从标签页改成覆盖层:标签页会常驻在「设置」旁边,用户切回来时看到
+    # 一个并非自己打开的页面(而且分不清是客户端还是服务端的)。覆盖层则是
+    # 点开→看→返回,与下载详情行为一致,也不占常驻标签位。
+    def _ensure_details_overlay(self):
+        """惰性创建详情覆盖层(客户端/服务端共用同一个控件,只换内容)。"""
+        if getattr(self, "_details_overlay", None) is not None:
+            return self._details_overlay
+        from ui_overlay import ContentOverlay
+        overlay = ContentOverlay(self._background)
+        overlay.backRequested.connect(self._on_details_back)
+        self._details_overlay = overlay
+        return overlay
 
-    def _attach_details_tab(self, which: str, widget, title: str):
-        """挂载指定详情页;先清掉另一个,保证互斥。"""
-        self._detach_details_tabs()
-        index = self.main_tabs.insertTab(self.INSTANCE_DETAILS_SLOT, widget, title)
-        if which == 'client':
-            self._inst_details_tab_idx = index
-        else:
-            self._server_details_tab_idx = index
-        return index
+    @property
+    def _details_open(self) -> bool:
+        overlay = getattr(self, "_details_overlay", None)
+        return bool(overlay is not None and overlay.isVisible())
 
-    def _detach_details_tabs(self):
-        """移除两个详情标签页(控件保留,状态可复用)。
+    def _open_details_overlay(self, widget, title: str):
+        """把某个详情控件放进覆盖层并显示(同一时刻只有一个)。"""
+        overlay = self._ensure_details_overlay()
+        overlay.set_title(title)
+        overlay.set_content(widget)
+        self.main_tabs.hide()      # 隐藏主内容,让覆盖层压在壁纸上(同下载详情)
+        overlay.show_overlay()
 
-        先移除索引较大的,避免移除小索引后大索引前移而错删。
-        """
-        for attr in ('_inst_details_tab_idx', '_server_details_tab_idx'):
-            index = getattr(self, attr, -1)
-            if isinstance(index, int) and index >= 0:
-                self.main_tabs.removeTab(index)
-                setattr(self, attr, -1)
+    def _on_details_back(self):
+        """覆盖层「← 返回」:收起覆盖层,回到原来的页面。"""
+        overlay = getattr(self, "_details_overlay", None)
+        if overlay is not None:
+            overlay.hide_overlay()
+            overlay.set_content(None)   # 摘掉内容,避免持有已切走的控件
+        self.main_tabs.show()
 
-    def _show_instance_details(self, inst, switch: bool):
+    def _show_instance_details(self, inst, switch: bool = True):
         self.instance_details.set_instance(inst, paths.GAME_DIR)
-        first_time = self._inst_details_tab_idx < 0
-        index = self._attach_details_tab('client', self.instance_details,
-                                         t("INSTANCE_DETAILS"))
-        if first_time:
-            self._animate_instance_details_in()
-        if switch:
-            self.main_tabs.setCurrentIndex(index)
+        self._open_details_overlay(self.instance_details, t("INSTANCE_DETAILS"))
 
     def _hide_instance_details(self):
-        self._detach_details_tabs()
+        self._on_details_back()
 
     # ---- 服务端详情(与实例详情同构) ----
     def _on_server_selected(self, server):
-        """服务端标签页选中变化 → 打开/关闭服务端详情页(启动阶段不自动挂载)。"""
-        if not server:
-            self._detach_details_tabs()
-        elif getattr(self, '_ui_ready', False):
-            self._show_server_details(server, switch=False)
+        """服务端选中变化 → 仅记录;打开详情由用户点「实例详情」触发。"""
+        if not server and self._details_open:
+            self._hide_server_details()
 
-    def _show_server_details(self, server, switch: bool = False):
+    def _show_server_details(self, server, switch: bool = True):
         self.server_details.set_server(server)
-        first_time = self._server_details_tab_idx < 0
-        index = self._attach_details_tab('server', self.server_details,
-                                         "服务端详情")
-        if first_time:
-            from ui_anim import fade_in
-            from ui_tokens import DURATION
-            fade_in(self.server_details, DURATION.get("slide", 320))
-        if switch:
-            self.main_tabs.setCurrentIndex(index)
+        self._open_details_overlay(self.server_details, "服务端详情")
 
     def _hide_server_details(self):
-        self._detach_details_tabs()
+        self._on_details_back()
 
     def _open_details_for_current(self):
         """左侧「实例详情」按钮:按当前左侧面板所处模式决定打开哪个详情页。
 
-        客户端模式未选实例时给出提示,而不是默默什么都不做——那是上一次
+        客户端模式未选实例时给出提示,而不是默默什么都不做——那是之前
         「点了没反应」的问题来源。
         """
         home = self.home_panel
@@ -2292,24 +2279,18 @@ class MainWindow(QMainWindow):
             if server is None:
                 QMessageBox.information(self, '实例详情', '请先在右侧选中一个服务端。')
                 return
-            self._show_server_details(server, switch=True)
+            self._show_server_details(server)
             return
         inst = home.current_instance()
         if inst is None:
             QMessageBox.information(self, '实例详情', '请先在右侧选中一个实例。')
             return
-        self._show_instance_details(inst, switch=True)
+        self._show_instance_details(inst)
 
     def _smart_import_path(self, path: str):
         """「导入服务端 → 智能导入」:交给既有的智能导入流程。"""
         from smart_import_ui import start_smart_import
         start_smart_import(self, path)
-
-    def _animate_instance_details_in(self):
-        """标签页出现动画:淡入(320ms OutCubic,走 ui_anim 统一封装;关闭动画则直接显示)。"""
-        from ui_anim import fade_in
-        from ui_tokens import DURATION
-        fade_in(self.instance_details, DURATION.get("slide", 320))
 
     def _on_main_tab_changed(self, idx: int):
         """主标签页切换 → 新页淡入(250ms;关闭动画则跳过)。"""
