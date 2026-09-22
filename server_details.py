@@ -497,8 +497,10 @@ class ServerDetailsView(QWidget):
     def _build_kubejs(self) -> QWidget:
         from kubejs_viewer import KubejsViewer
         tab, layout = self._panel(
-            'KubeJS', '展开查看脚本内容（只读）。脚本报错常导致服务端直接起不来。')
+            'KubeJS', '展开查看脚本内容（只读）。点「报错定位」可从日志跳到出错的那一行。')
         viewer = KubejsViewer(os.path.join(self.server_dir, 'kubejs'))
+        # 把本实例的日志交给查看器:日志里的 KubeJS 报错点一下就能跳到对应行
+        viewer.set_log(self._collect_log())
         layout.addWidget(viewer, 1)
         return tab
 
@@ -541,8 +543,28 @@ class ServerDetailsView(QWidget):
         return suggestions_to_markdown(result)
 
     def _collect_log(self) -> str:
-        """收集本次日志与最近的崩溃报告(只读)。"""
+        """收集日志用于诊断与 KubeJS 报错定位(只读)。
+
+        来源包含:
+        - ``.amcl-runtime/logs/`` 下**最近几个**托管日志(Forge 完整输出,KubeJS 报错
+          就在里面)。不能只读"当前"那一个——服务端每次启动都会新建日志,而上一次
+          启动的报错仍留在旧文件里,只读当前文件会查不到。
+        - ``logs/latest.log``、``logs/kubejs/server.log``、最新崩溃报告。
+
+        每份取尾部 1200 行:报错常在很早的位置,截太短就找不到。
+        """
         chunks = []
+        runtime_logs = os.path.join(self.server_dir, '.amcl-runtime', 'logs')
+        if os.path.isdir(runtime_logs):
+            try:
+                files = [os.path.join(runtime_logs, name)
+                         for name in os.listdir(runtime_logs)
+                         if name.endswith('.log')]
+            except OSError:
+                files = []
+            files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+            for path in files[:3]:
+                chunks.extend(self._read_tail(path))
         candidates = [
             os.path.join(self.server_dir, 'logs', 'latest.log'),
             os.path.join(self.server_dir, 'logs', 'kubejs', 'server.log'),
@@ -553,14 +575,20 @@ class ServerDetailsView(QWidget):
             if reports:
                 candidates.append(os.path.join(crashes, reports[-1]))
         for path in candidates:
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, encoding='utf-8', errors='replace') as stream:
-                    chunks.append(stream.read(512 * 1024))
-            except OSError:
-                continue
+            chunks.extend(self._read_tail(path))
         return '\n'.join(chunks)
+
+    @staticmethod
+    def _read_tail(path: str, lines: int = 1200) -> list:
+        """读文件尾部若干行;不存在/读不了返回空列表(不抛)。"""
+        if not os.path.isfile(path):
+            return []
+        try:
+            with open(path, encoding='utf-8', errors='replace') as stream:
+                content = stream.read().splitlines()
+        except OSError:
+            return []
+        return ['\n'.join(content[-lines:])]
 
     def _build_placeholder(self) -> QWidget:
         tab, layout = self._panel('（未实现）')
