@@ -6,7 +6,7 @@
 1. 现有**非核心/可选功能**可作为插件注册、卸载(设置→插件 列出来,可启禁);
    核心组件(启动/实例/下载/设置/AI)不插件化,保持稳定。
 2. 插件 = `plugins/<名字>.py`,提供 `register(api)` 函数,在启动时被扫描装载(静态加载)。
-   支持 4 类注册点:AI 工具 / GUI 页面(章节)/ 设置项 / 技能(Skill)。
+   注册点:AI 工具 / 主标签页 / **实例详情分区** / 设置页 / 中心页 / 技能(Skill) / 语言包。
 3. 插件启停状态存设置 `settings["plugins_disabled"]`(默认全开);禁用则不装载其注册内容。
 
 设计原则:
@@ -43,6 +43,11 @@ TOOL_POLICIES = {}    # name -> {write, confirm}，由统一执行器处理权�
 SKILLS = []           # [Skill子类]                            (技能)
 LANGUAGE_PACKS = {}   # pack_id -> {"name", "pack"}            (语言包:文本覆盖)
 MAIN_TABS = []        # [(label, build_fn)]                    (主标签页,与 下载新资源/联机/设置 平级)
+# [(plugin_id, label, watch_mods, build_fn)]                   (实例详情分区)
+# 为什么不让插件各自开一个主标签页:「皮肤/枪包/原理图」这类页只在**某个实例**里
+# 才有意义,做成顶部标签既要在页内再放实例下拉框,又会把顶部标签栏撑满。放进实例
+# 详情的左侧菜单,和「Mod / 光影包 / 数据包」同级,才是它该在的位置。
+INSTANCE_SECTIONS = []
 
 # 最近一次装载的可读报告。过去插件异常会被静默吞掉，开发者只能猜“为什么没出现”。
 LOAD_REPORTS = {}     # plugin_id -> {"state": loaded/skipped/error, "message": str}
@@ -166,6 +171,26 @@ class PluginAPI:
             raise ValueError(f"主标签页重名:{label}")
         MAIN_TABS.append((label, build_fn))
 
+    def register_instance_section(self, label: str, build_fn, *, watch_mods=()):
+        """注册一个【实例详情分区】:出现在实例详情左侧菜单里(和 Mod/光影包 同级)。
+
+        ``build_fn(ctx)`` 收到一个 :class:`InstanceSectionContext`,里面有实例目录、
+        游戏目录、``ctx.has_mod(...)`` 与 ``ctx.open_dir(...)``;它返回 QWidget。
+        插件不该去够启动器内部对象,所以这里只给这个明确的小接口。
+
+        ``watch_mods`` = mod 关键字;只有当实例真的装了其中之一时,这个分区才会
+        出现(与模块级 ``WATCH_MODS`` 同口径,通常直接传它)。留空则总是出现。
+        """
+        if not isinstance(label, str) or not label.strip() or not callable(build_fn):
+            raise ValueError("实例详情分区需要非空标题和可调用的 build_fn")
+        keys = watch_mods
+        if isinstance(keys, str):
+            keys = (keys,)
+        keys = tuple(str(k).strip() for k in (keys or ()) if str(k).strip())
+        if any(old_label == label for _, old_label, _, _ in INSTANCE_SECTIONS):
+            raise ValueError(f"实例详情分区重名:{label}")
+        INSTANCE_SECTIONS.append((self.plugin_id, label, keys, build_fn))
+
     def register_center_page(self, center: str, page_id: str, label: str, build_fn):
         """Register a lazy sidebar page. Currently supported center: online."""
         if center != 'online':
@@ -192,6 +217,52 @@ class PluginAPI:
 
 def build_api(plugin_id: str, settings: dict | None = None) -> PluginAPI:
     return PluginAPI(plugin_id, settings)
+
+
+class InstanceSectionContext:
+    """插件实例分区的只读上下文(插件能看到的全部实例信息)。
+
+    刻意做得很小:插件只需要知道「是哪个实例、目录在哪、装没装某个 mod」,
+    不需要(也不该)拿到 InstanceManagerDialog 的内部。
+    """
+
+    def __init__(self, instance_id: str, instance_dir: str, game_dir: str,
+                 has_mod=None, open_dir=None, status=None):
+        self.instance_id = instance_id
+        self.instance_dir = instance_dir
+        self.game_dir = game_dir
+        self._has_mod = has_mod
+        self._open_dir = open_dir
+        self._status = status
+
+    def has_mod(self, *keys) -> bool:
+        """实例的 mods 目录里是否有文件名含任一关键字(与核心同口径)。"""
+        if self._has_mod is None:
+            return False
+        return bool(self._has_mod(*keys))
+
+    def open_dir(self, path: str):
+        """在系统文件管理器里打开目录(不存在则创建)。"""
+        if self._open_dir is not None:
+            self._open_dir(path)
+
+    def status(self, text: str):
+        """在启动器状态栏显示一句话(可选)。"""
+        if self._status is not None:
+            self._status(text)
+
+
+def instance_sections_for(has_mod) -> list:
+    """当前该显示的实例分区 → ``[(label, build_fn, plugin_id)]``,保持注册顺序。
+
+    ``has_mod`` = ``callable(*keys) -> bool``,由调用方按具体实例判断。
+    """
+    out = []
+    for plugin_id, label, watch_mods, build_fn in list(INSTANCE_SECTIONS):
+        if watch_mods and not has_mod(*watch_mods):
+            continue
+        out.append((label, build_fn, plugin_id))
+    return out
 
 
 def _read_plugin_meta(mod) -> dict:
@@ -606,6 +677,8 @@ def load_plugin(name: str, path: str, disabled: set, settings: dict | None = Non
         LOAD_REPORTS[name] = {"state": "error", "message": f"注册失败:{type(e).__name__}: {e}"}
         for center, pages in CENTER_PAGES.items():
             CENTER_PAGES[center] = [row for row in pages if row[0] != name]
+        # 注册到一半失败的插件,已登记的分区也要撤掉,避免留下半成品页
+        INSTANCE_SECTIONS[:] = [row for row in INSTANCE_SECTIONS if row[0] != name]
         return False
 
 
@@ -613,9 +686,10 @@ def load_all(settings: dict | None = None, disabled: set | None = None) -> dict:
     """启动时装载所有插件。disabled = 被禁用的插件 id 集合(显式禁用)。
     额外考虑"默认关闭"插件:PLUGIN_DEFAULT_ENABLED=False 且未被显式启用(settings['plugins_enabled'])
     的插件不装载。返回 {插件名: bool(是否装载)}。清空全局注册表后再扫。"""
-    global TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS, CENTER_PAGES
+    global TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META, LOAD_REPORTS, CENTER_PAGES, INSTANCE_SECTIONS
     CENTER_PAGES = {}
     TOOLS, TOOL_POLICIES, SKILLS, LANGUAGE_PACKS, MAIN_TABS, _PLUGIN_META = {}, {}, [], {}, [], {}
+    INSTANCE_SECTIONS = []
     LOAD_REPORTS = {}
     # 禁用集合 = 显式传入 disabled 并上 settings["plugins_disabled"](传 settings 时生效)
     disabled = set(disabled or [])

@@ -4,9 +4,8 @@
 - Mod 管理:列出 / 启用 / 禁用 / 删除已装 Mod(.jar ↔ .jar.disabled)
 - 数据包管理:按存档列出 datapacks + 从 Modrinth 下载(datapack 分类)
 - 光影包管理:shaderpacks 列表 + 从 Modrinth 下载(shader 分类)
-- 皮肤管理:检测到 YSM(Yes Steve Model)模组时,管理 ysm 皮肤目录
-- 枪包管理:检测到永恒枪械工坊(TACZ)模组时,管理 tacz 枪包目录
-- KubeJS 配方:检测到 KubeJS 模组时,管理脚本/配方目录
+- 插件分区:皮肤(YSM)/枪包(TACZ)/投影原理图 等 mod 专属目录管理页由插件提供,
+  装了对应 mod 才出现(见 plugin_manager.register_instance_section)
 - 运行配置:一键配置(下拉菜单,未来持续扩展;当前含 RCON 一键配置)
 - 备份·存档:手动备份、备份历史(查看/删除)、查看存档、FTB Backups 频率联动
 """
@@ -43,6 +42,29 @@ from PySide6.QtWidgets import (
 
 from backup import backup_instance, list_backups, set_ftb_backup_frequency
 from ui_style import card_btn_style, hint_style, set_style
+
+
+def _plugin_instance_sections(host) -> list:
+    """问插件系统:这个实例该显示哪些插件分区 → ``[(label, build_fn, plugin_id)]``。
+
+    插件系统没起来(单测/精简启动)时安静地返回空——实例详情本身必须照常可用。
+    """
+    try:
+        import plugin_manager as pm
+        return pm.instance_sections_for(lambda *keys: host._has_mod(*keys))
+    except Exception:
+        return []
+
+
+def _instance_section_ctx(host):
+    """给插件分区的上下文:只暴露实例标识、目录和目录操作(见 InstanceSectionContext)。"""
+    import plugin_manager as pm
+    return pm.InstanceSectionContext(
+        host.inst_id, host.inst_dir, host.game_dir,
+        has_mod=lambda *keys: host._has_mod(*keys),
+        open_dir=host._open_dir,
+        status=getattr(host, 'status_msg', None))
+
 
 
 class _DepGraphWorker(QObject):
@@ -133,14 +155,11 @@ class InstanceManagerDialog(QWidget):
         self.shell.add_section("Mod", self._build_mods_tab)
         self.shell.add_section("数据包", lambda: self._build_pack_tab("datapack"))
         self.shell.add_section("光影包", lambda: self._build_pack_tab("shader"))
-        if self._has_mod("ysm", "yes_steve_model", "yesstevemodel", "yes-steve-model"):
-            self.shell.add_section("皮肤(YSM)", self._build_ysm_tab)
-        if self._has_mod("tacz", "timeless_and_classics", "timeless", "tac_z"):
-            self.shell.add_section("枪包(TACZ)", self._build_tacz_tab)
-        if self._has_mod("create"):
-            self.shell.add_section("投影原理图", self._build_create_schematics_tab)
-        if self._has_mod("kubejs"):
-            self.shell.add_section("KubeJS", self._build_kubejs_tab)
+        # 插件贡献的分区(皮肤/枪包/原理图…):装了对应 mod 才出现。
+        # 这些页以前是硬编码在这里的,现在由插件注册(见 plugins/*_packs.py),
+        # 核心不再为「某个 mod 的目录长什么样」写死代码。
+        for label, build_fn, _plugin_id in _plugin_instance_sections(self):
+            self.shell.add_section(label, lambda fn=build_fn: fn(_instance_section_ctx(self)))
         self.shell.add_section("指令库", self._build_command_tab)
         self.shell.add_section("运行配置", self._build_config_tab)
         self.shell.add_section("备份·存档", self._build_backup_tab)
@@ -828,110 +847,11 @@ class InstanceManagerDialog(QWidget):
     def _game_version(self) -> str:
         return self._inst_base
 
-    # ---------- YSM 皮肤 / TACZ 枪包 / KubeJS(共用目录管理) ----------
-    def _build_ysm_tab(self) -> QWidget:
-        tab = QWidget()
-        ysm_dir = os.path.join(self.inst_dir, "ysm")
-        self.ysm_list = self._dir_list_widget()
-        open_btn = QPushButton("打开皮肤目录")
-        open_btn.clicked.connect(lambda: self._open_dir(ysm_dir))
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.clicked.connect(lambda: self._refresh_dir_list(self.ysm_list, ysm_dir))
-        row = QHBoxLayout()
-        row.addWidget(open_btn)
-        row.addWidget(refresh_btn)
-        row.addStretch()
-        hint = QLabel("检测到 YSM(Yes Steve Model)模组。皮肤文件(.png 贴图 + .model 绑定)放进 ysm 目录,"
-                      "进游戏后按 H 打开 YSM 界面即可穿戴管理。")
-        hint.setStyleSheet(hint_style())
-        hint.setWordWrap(True)
-        layout = QVBoxLayout(tab)
-        layout.addWidget(self.ysm_list, 1)
-        layout.addLayout(row)
-        layout.addWidget(hint)
-        self._refresh_dir_list(self.ysm_list, ysm_dir)
-        return tab
-
-    def _build_tacz_tab(self) -> QWidget:
-        tab = QWidget()
-        gunpack_dir = os.path.join(self.inst_dir, "tacz", "gunpack")
-        self.tacz_list = self._dir_list_widget()
-        open_btn = QPushButton("打开枪包目录")
-        open_btn.clicked.connect(lambda: self._open_dir(gunpack_dir))
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.clicked.connect(lambda: self._refresh_dir_list(self.tacz_list, gunpack_dir))
-        row = QHBoxLayout()
-        row.addWidget(open_btn)
-        row.addWidget(refresh_btn)
-        row.addStretch()
-        hint = QLabel("检测到永恒枪械工坊(TACZ)模组。枪包放进 tacz/gunpack 目录(每个子文件夹一个枪包),"
-                      "进游戏后用枪械工坊的枪包管理器刷新即可。")
-        hint.setStyleSheet(hint_style())
-        hint.setWordWrap(True)
-        layout = QVBoxLayout(tab)
-        layout.addWidget(self.tacz_list, 1)
-        layout.addLayout(row)
-        layout.addWidget(hint)
-        self._refresh_dir_list(self.tacz_list, gunpack_dir)
-        return tab
-
-    def _build_create_schematics_tab(self) -> QWidget:
-        """机械动力(Create)投影原理图:和 TACZ 枪包同款方案——列出实例 schematics/ 目录的 .nbt 图。"""
-        tab = QWidget()
-        schem_dir = os.path.join(self.inst_dir, "schematics")
-        self.schem_list = self._dir_list_widget()
-        open_btn = QPushButton("打开原理图目录")
-        open_btn.clicked.connect(lambda: self._open_dir(schem_dir))
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.clicked.connect(lambda: self._refresh_schematics())
-        row = QHBoxLayout()
-        row.addWidget(open_btn)
-        row.addWidget(refresh_btn)
-        row.addStretch()
-        hint = QLabel("检测到机械动力(Create)模组。投影原理图(.nbt)放进 schematics 目录;"
-                      "进游戏用蓝图大炮/工程师护目镜(手持蓝图 + Ctrl)选图即可。"
-                      "注:存档内的原理图在 <存档>/schematics/,这里是实例级目录。")
-        hint.setStyleSheet(hint_style())
-        hint.setWordWrap(True)
-        layout = QVBoxLayout(tab)
-        layout.addWidget(self.schem_list, 1)
-        layout.addLayout(row)
-        layout.addWidget(hint)
-        self._refresh_schematics()
-        return tab
-
-    def _refresh_schematics(self):
-        schem_dir = os.path.join(self.inst_dir, "schematics")
-        list_widget = getattr(self, "schem_list", None)
-        if list_widget is not None:
-            self._refresh_dir_list(list_widget, schem_dir, exts=(".nbt",))
-
-    def _build_kubejs_tab(self) -> QWidget:
-        tab = QWidget()
-        kjs_dir = os.path.join(self.inst_dir, "kubejs")
-        self.kubejs_list = self._dir_list_widget()
-        open_btn = QPushButton("打开 KubeJS 目录")
-        open_btn.clicked.connect(lambda: self._open_dir(kjs_dir))
-        refresh_btn = QPushButton("刷新")
-        refresh_btn.clicked.connect(lambda: self._refresh_kubejs())
-        row = QHBoxLayout()
-        row.addWidget(open_btn)
-        row.addWidget(refresh_btn)
-        row.addStretch()
-        hint = QLabel("检测到 KubeJS 模组。配方/逻辑脚本在 kubejs/server_scripts/ 下(.js 文件),"
-                      "改完进游戏 /reload 生效。列出的文件可选中后删除。")
-        hint.setStyleSheet(hint_style())
-        hint.setWordWrap(True)
-        layout = QVBoxLayout(tab)
-        layout.addWidget(self.kubejs_list, 1)
-        layout.addLayout(row)
-        layout.addWidget(hint)
-        self._refresh_kubejs()
-        return tab
-
-    def _refresh_kubejs(self):
-        self._refresh_dir_list(self.kubejs_list, os.path.join(self.inst_dir, "kubejs", "server_scripts"))
-
+    # ---------- 通用目录列表(Mod/数据包/插件分区共用) ----------
+    # 注:YSM 皮肤 / TACZ 枪包 / 投影原理图 / KubeJS 这类「某个 mod 专属目录」
+    # 的页面原本硬编码在这里,现在全部由插件注册(见 plugins/ 与
+    # plugin_manager.register_instance_section);核心不再为某个 mod 的目录
+    # 长什么样写死代码。
     @staticmethod
     def _refresh_dir_list(list_widget: QListWidget, path: str, exts: tuple = ()):
         list_widget.clear()

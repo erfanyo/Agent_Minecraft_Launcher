@@ -32,12 +32,40 @@ def register(api):
 |---|---|---|
 | `register_tool(name, description, parameters, handler)` | 注册 AI 工具。实际工具名为 `<插件id>__<name>` | 写全局 `TOOLS` |
 | `register_main_tab(label, build_fn)` | 注册主标签页(与 下载新资源/设置 平级) | 写 `MAIN_TABS` |
+| `register_instance_section(label, build_fn, watch_mods=())` | 注册**实例详情分区**(与 Mod/光影包 同级;装了 watch_mods 里的 mod 才出现) | 写 `INSTANCE_SECTIONS` |
 | `register_settings_page(build_fn)` | 注册独立设置页(左菜单单开一行) | 写 `_PLUGIN_META` |
 | `register_skill(skill_cls)` | 注册技能(Skill 子类) | 追加 `SKILLS` |
 | `register_language_pack(pack_id, name, pack, lang="")` | 注册语言包(文本覆盖) | 写 `LANGUAGE_PACKS` |
 | `get_config(key, default=None)` / `set_config(key, value)` | 读取或保存插件私有配置 | 自动使用 `plugin.<插件id>.*` 命名空间 |
 
 ### 2.1 `register_tool`
+
+### 2.1.1 `register_instance_section`(mod 专属页面走这条)
+
+「皮肤/枪包/原理图」这类**只在某个实例里有意义**的页面不要注册主标签页,注册成
+实例详情分区:它出现在实例详情的左菜单里(和 Mod/光影包同级),顶部标签栏不会被撑满。
+
+```python
+PLUGIN_DEFAULT_ENABLED = False          # 默认关闭,靠「检测到 mod」再问用户
+WATCH_MODS = ("tacz", "timeless_and_classics")
+
+def register(api):
+    def build(ctx):
+        # ctx: instance_id / instance_dir / game_dir / has_mod(*keys) / open_dir() / status()
+        return PackFolderPanel(os.path.join(ctx.instance_dir, "tacz", "gunpack"),
+                               hint="枪包放进 tacz/gunpack…", on_status=ctx.status)
+    api.register_instance_section("枪包(TACZ)", build, watch_mods=WATCH_MODS)
+```
+
+要点:
+
+- `build_fn(ctx)` 返回 `QWidget`;`ctx` 只给实例标识、目录和目录操作,**不要**去够启动器内部对象;
+- `watch_mods` 留空 = 分区总是出现;填了 = 只在实例真装了对应 mod 时出现;
+- 声明 `WATCH_MODS` + `PLUGIN_DEFAULT_ENABLED = False`,装了该 mod 的用户启动时会收到
+  **一次**「要不要启用这个插件」的提示(拒绝后不再问);
+- 核心已有通用面板 `pack_folder_ui.PackFolderPanel`(列目录/导入/删除/拖放),
+  目录是 mod 自己生成的就传 `read_only=True`。**动手前先看真实目录**,别把
+  mod 生成的数据目录当成「丢文件进去」的目录。
 ### 图钉上下文（API v1 的兼容扩展）
 
 `api.bind_ai_context(widget, context_id, name, description, provider=None)`
@@ -84,7 +112,8 @@ def register(api):
 
 ### 2.2 `register_main_tab` / `register_settings_page`
 两者 `build_fn()` 都返回一个 `QWidget`；`register_main_tab` 与 下载新资源/联机/设置 平级，`register_settings_page` 在设置左菜单单开一行。
-不要再用“注册一个嵌进插件管理页的普通页面”这类模糊入口：需要常用入口就注册主标签页，需要配置就注册设置页。
+不要再用“注册一个嵌进插件管理页的普通页面”这类模糊入口：需要常用入口就注册主标签页，需要配置就注册设置页，
+**只在某个实例里才有意义的页面**（皮肤/枪包/原理图这类 mod 专属目录）注册实例详情分区（见 2.1.1）。
 
 ### 2.3 `register_skill`
 ```python
