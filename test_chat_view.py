@@ -194,6 +194,31 @@ class MarkdownTableTests(unittest.TestCase):
         self.assertNotIn("<script>", html)
         self.assertIn("&lt;script&gt;", html)
 
+    def test_tool_level_none_from_dict_get_is_tolerated(self):
+        """真实调用方传的是 ``dict.get``:未记录的 id 返回 None,不能与 int 比较。
+
+        这是线上崩溃的回归用例(AIChatDock 传 ``self._tool_expand_levels.get``)。
+        """
+        entry = ChatEntry(kind="tool", tool_id=99, name="list_mods",
+                          args={}, result="ok")
+        levels = {}          # 空字典 → .get 返回 None
+        out = render_entry(entry, 0, TOKENS, tool_level=levels.get)
+        self.assertIn("[查看]", out)
+
+    def test_tool_level_none_at_render_entries_level(self):
+        """整条流渲染时也不能因为 None 级别而炸掉。"""
+        entries = [ChatEntry(kind="user", text="问"),
+                   ChatEntry(kind="tool", tool_id=1, name="t", args={}, result="r"),
+                   ChatEntry(kind="ai", text="答")]
+        html = render_entries(entries, TOKENS, tool_level={}.get)
+        self.assertIn("答", html)
+
+    def test_tool_level_out_of_range_dict_value(self):
+        """字典里存了奇怪值(如字符串)也不该抛异常。"""
+        entry = ChatEntry(kind="tool", tool_id=1, name="t", args={}, result="r")
+        out = render_entry(entry, 0, TOKENS, tool_level={1: 2}.get)
+        self.assertIn("[收起]", out)
+
     def test_tool_entry_level2_renders_table(self):
         entry = ChatEntry(kind="tool", tool_id=1, name="suggest_server_removals",
                           args={"server": "s"}, result=self.SAMPLE)

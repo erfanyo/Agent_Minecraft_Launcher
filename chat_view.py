@@ -350,7 +350,11 @@ def render_entry(entry: ChatEntry, index: int, tokens: dict, *,
         full = (entry.result or "").strip()
         # 工具结果里若含 Markdown 表格,直接画成真表(QTextBrowser 认的富文本表格)。
         rendered = render_text_with_tables(full, tokens)
+        # 折叠级别:调用方常用 ``dict.get`` 作回调,未记录的 id 会返回 None,
+        # 因此这里必须把 None 归一成 0,否则与 >= 比较会抛 TypeError(真实崩溃点)。
         level = level_of(entry.tool_id)
+        if level is None:
+            level = 0
         if level >= 2:
             return (f'<p style="color:{tokens["muted"]};">🔧 工具 {esc(entry.name)}'
                     f'({esc(args_text)})<br>&nbsp;&nbsp;→ {rendered} '
@@ -404,7 +408,12 @@ class ChatView(QTextBrowser):
     def set_entries(self, entries: Iterable[ChatEntry], *,
                     tool_level: Callable[[int], int] | None = None,
                     expanded_ai: set | None = None) -> None:
-        """重绘整条展示流。部件已销毁(关闭窗口竞态)时静默忽略。"""
+        """重绘整条展示流。部件已销毁(关闭窗口竞态)时静默忽略。
+
+        渲染异常**不再静默**:早期版本把 ``TypeError`` 一起吞掉,结果是对话区
+        空白但界面照常响应,极难定位。现在只对「C++ 对象已销毁」静默,其余异常
+        打印到 stderr 并降级为纯文本,保证消息至少可见。
+        """
         try:
             self.clear()
         except RuntimeError:
@@ -413,6 +422,18 @@ class ChatView(QTextBrowser):
             tokens = self._tokens_provider()
             body = render_entries(entries, tokens, tool_level=tool_level,
                                   expanded_ai=expanded_ai)
+        except RuntimeError:
+            return   # C++ 对象已销毁 → 忽略
+        except Exception as exc:                      # noqa: BLE001
+            import sys
+            print(f'[chat_view] 渲染失败,降级为纯文本:{type(exc).__name__}: {exc}',
+                  file=sys.stderr)
+            try:
+                body = ''.join(esc(getattr(e, 'plain_text', '') or '')
+                               for e in entries)
+            except Exception:
+                body = ''
+        try:
             if body:
                 self.append(body)
             self.verticalScrollBar().setValue(

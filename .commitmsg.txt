@@ -1,0 +1,23 @@
+fix blank chat when a tool entry has no expand level
+
+A tool entry rendered with the dock's own expand map crashed rendering:
+render_entry did level_of(tool_id) >= 2, and the production caller passes
+dict.get, which returns None for a tool id that was never expanded. The
+TypeError aborted _render_all, so the conversation area stayed empty while
+the rest of the window kept responding. It reproduced as soon as the
+stream contained a tool entry (restored archive or earlier session).
+
+Normalise a None level to 0, which is the intended default: unknown id
+means collapsed.
+
+Two test gaps let this through, both now covered. Every folding test
+passed an explicit lambda, never the dict.get the dock actually uses, and
+one asserts through render_entries rather than a single entry. The
+regression test drives the real dock path with an empty expand map, which
+is the shape that failed.
+
+set_entries also no longer conflates "widget destroyed" with any other
+error. It still ignores the RuntimeError raised when the C++ object is
+gone, but any other failure is reported to stderr and degrades to plain
+text, so a future render bug shows up as a visible, diagnosable message
+instead of a silently blank panel.
