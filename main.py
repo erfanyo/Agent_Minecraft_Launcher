@@ -461,6 +461,8 @@ class MainWindow(QMainWindow):
         # 启动阶段结束标记。详情页已改为「用户点开才显示」的覆盖层,不再需要在
         # 这里挡住自动挂载;保留该标记供外部/测试判断窗口是否已完成初始化。
         self._ui_ready = True
+        # 窗口大小/位置:放在最后恢复,确保其它控件已建好、不会在显示过程中被挤压
+        self._restore_window_geometry()
 
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
@@ -614,12 +616,56 @@ class MainWindow(QMainWindow):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, self._recompute_wallpaper)
 
+    # ---- 窗口几何:记住大小与位置 ----
+    def _restore_window_geometry(self):
+        """启动时恢复上次的窗口大小/位置;没有记录或记录不可见则用默认尺寸。
+
+        最大化/最小化不写入记录(见 window_geometry.capture),所以这里恢复的
+        始终是一个普通状态的尺寸,用户在标题栏还能自己最大化。
+        """
+        import window_geometry as wg
+        try:
+            target = wg.restore_target(self.settings.get(wg.SETTINGS_KEY),
+                                       QApplication.screens(),
+                                       QApplication.primaryScreen())
+        except Exception:
+            # 任何异常都退回默认尺寸,绝不让「记不住尺寸」变成「打不开窗口」
+            target = {'x': 60, 'y': 60, 'w': wg.DEFAULT_SIZE[0],
+                      'h': wg.DEFAULT_SIZE[1]}
+        self.setGeometry(target['x'], target['y'], target['w'], target['h'])
+
+    def _save_window_geometry(self):
+        """关闭时保存几何;最大化/全屏时不覆盖已有记录。"""
+        try:
+            import window_geometry as wg
+            geom = wg.capture(self)
+            if geom is None:
+                return
+            data = load_settings()
+            data[wg.SETTINGS_KEY] = geom
+            save_settings(data)
+        except Exception:
+            pass      # 记不住尺寸不该影响关窗
+
+    def reset_window_geometry(self):
+        """「恢复默认尺寸」:回到默认大小并居中(标题栏按钮调用)。"""
+        import window_geometry as wg
+        target = wg.default_geometry(QApplication.screens(),
+                                     QApplication.primaryScreen())
+        if self.isMaximized() or self.isFullScreen():
+            self.showNormal()
+        self.setGeometry(target['x'], target['y'], target['w'], target['h'])
+        # 立刻落盘,用户不必再关一次窗口才生效
+        self._save_window_geometry()
+        self.statusBar().showMessage('窗口已恢复默认尺寸', 3000)
+
     def closeEvent(self, event):
         if getattr(self.home_panel.server_center, '_busy', False):
             QMessageBox.information(self, '服务端任务尚未结束', '请等待服务端扫描、导入或补全任务结束后再关闭启动器。')
             event.ignore()
             return
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
+        self._save_window_geometry()
         self.download_tasks.cancel()
         if self._launch_task is not None:
             self._launch_task.cancel()

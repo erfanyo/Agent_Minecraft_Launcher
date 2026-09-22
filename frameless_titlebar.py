@@ -36,6 +36,11 @@ class FramelessTitleBar(QWidget):
         self.title_label.setObjectName("titleLabel")
         self.title_label.setStyleSheet("font-weight: bold; color: #e7ecf5; font-size: 13px;")
 
+        # 「恢复默认尺寸」:窗口大小/位置会被记住(见 window_geometry),但用户可能
+        # 拖到一个别扭的尺寸后自己调不回来,所以给一个一键还原的入口。
+        self.reset_size_btn = self._btn("⤢", self._reset_size, "恢复默认窗口尺寸")
+        self.reset_size_btn.setFixedSize(28, 28)
+
         if _is_mac():
             # 两个点(红=关闭,黄=最小化)在左;启动器名称放右上角
             lay.addWidget(self._dot("#FF5F57", self._close))
@@ -44,15 +49,17 @@ class FramelessTitleBar(QWidget):
             if trailing_widget is not None:
                 lay.addWidget(trailing_widget)
                 lay.addSpacing(8)
+            lay.addWidget(self.reset_size_btn)
             lay.addWidget(self.title_label)
             lay.addSpacing(8)
         else:
-            # 左上角名称,右侧 trailing 控件 + 最小化/关闭
+            # 左上角名称,右侧 trailing 控件 + 恢复尺寸/最小化/关闭
             lay.addWidget(self.title_label)
             lay.addStretch(1)
             if trailing_widget is not None:
                 lay.addWidget(trailing_widget)
                 lay.addSpacing(6)
+            lay.addWidget(self.reset_size_btn)
             lay.addWidget(self._btn("—", self._minimize, "最小化"))
             lay.addWidget(self._btn("✕", self._close, "关闭"))
 
@@ -94,6 +101,12 @@ class FramelessTitleBar(QWidget):
 
     def _close(self):
         self._win.close()
+
+    def _reset_size(self):
+        """回到默认窗口尺寸(主窗口提供实现;没有则忽略)。"""
+        fn = getattr(self._win, 'reset_window_geometry', None)
+        if callable(fn):
+            fn()
 
     # ---- 拖动移动 + 双击最大化 ----
     def mousePressEvent(self, e):

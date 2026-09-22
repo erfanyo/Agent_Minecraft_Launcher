@@ -12,7 +12,7 @@
     ov.backRequested.connect(lambda: ov.hide_overlay())
     ov.show_overlay()
 """
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ui_style import card_btn_style, set_style, text_color, current_color
@@ -26,6 +26,7 @@ class ContentOverlay(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("contentOverlay")
+        self._watched_parent = None
         # 半透明面板底(与面板统一:panel_bg),壁纸透出;主内容由调用方在 show 时隐藏
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"#contentOverlay {{ background: {current_color('panel_bg')}; }}")
@@ -77,9 +78,7 @@ class ContentOverlay(QWidget):
 
     def show_overlay(self) -> None:
         """铺满父控件并显示(置顶)。"""
-        p = self.parentWidget()
-        if p is not None:
-            self.setGeometry(p.rect())
+        self.sync_to_parent()
         self.show()
         self.raise_()
         from ui_anim import reveal
@@ -87,3 +86,34 @@ class ContentOverlay(QWidget):
 
     def hide_overlay(self) -> None:
         self.hide()
+
+    # ---- 跟随父控件尺寸 ----
+    #
+    # 只在 show 时 setGeometry 是不够的:显示期间用户拉大窗口,覆盖层仍是旧尺寸,
+    # 内容就缩在左上角一块(实测反馈)。所以装上父控件的事件过滤器,父一改尺寸
+    # 就同步——这样「下载详情」和「实例详情」两个覆盖层一起修好。
+    def sync_to_parent(self) -> None:
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+
+    def eventFilter(self, obj, event):
+        if obj is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self.sync_to_parent()
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event):
+        parent = self.parentWidget()
+        if parent is not None and self._watched_parent is not parent:
+            if self._watched_parent is not None:
+                self._watched_parent.removeEventFilter(self)
+            parent.installEventFilter(self)
+            self._watched_parent = parent
+        self.sync_to_parent()
+        super().showEvent(event)
+
+    def hideEvent(self, event):
+        if self._watched_parent is not None:
+            self._watched_parent.removeEventFilter(self)
+            self._watched_parent = None
+        super().hideEvent(event)
