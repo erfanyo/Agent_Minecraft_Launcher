@@ -246,6 +246,24 @@ TOOLS.extend([{"type":"function","function":{"name":"snapshot_instance","descrip
 TOOLS.append(_tool('find_compatible_mod_replacement', '仅在证据已确认 Mod 游戏版本或加载器不匹配后调用一次。合并读取 JAR 内部身份、文件指纹反查和当前实例精确兼容版本查询；结果缓存，找到时返回可交给 replace_mod_version 的 version_id。', {'instance': {'type': 'string'}, 'filename': {'type': 'string'}}, ['instance', 'filename']))
 
 TOOLS.append(_tool('compare_instance_snapshot', '比较当前实例与快照的新增、删除、修改文件和数量；不把游戏自己的日志变化当成 AI 修改。', {'instance': {'type': 'string'}, 'snapshot_id': {'type': 'string'}}, ['instance', 'snapshot_id']))
+
+TOOLS.extend([
+    _tool('list_server_instances', '列出 AMCL 管理的服务端及候选状态、版本和加载器。', {}, []),
+    _tool('read_server_candidate_report', '读取客户端转服务端时生成的审核报告，包括每个 Mod 的保留/排除理由。',
+          {'server': {'type': 'string', 'description': '服务端名称或 id'}}, ['server']),
+    _tool('list_server_mods', '列出服务端 Mod、启用状态、内部 modId 和元数据声明的适用端。未知不等于不兼容。',
+          {'server': {'type': 'string', 'description': '服务端名称或 id'}}, ['server']),
+    _tool('read_server_log', '读取 AMCL 托管的本次服务端启动日志；会脱敏并限制长度。',
+          {'server': {'type': 'string', 'description': '服务端名称或 id'},
+           'tail': {'type': 'integer', 'description': '末尾行数，20~1200，默认 240'}}, ['server']),
+    _tool('set_server_mod_enabled',
+          '可回退地启用或停用单个服务端 Mod（重命名 .jar/.jar.disabled，不删除）。必须先读日志并取得指向该 Mod 的证据；服务端运行时拒绝修改；每次必须让用户确认。',
+          {'server': {'type': 'string', 'description': '服务端名称或 id'},
+           'filename': {'type': 'string', 'description': 'list_server_mods 返回的文件名'},
+           'enabled': {'type': 'boolean'},
+           'reason': {'type': 'string', 'enum': ['client_only', 'dependency_conflict', 'wrong_version', 'diagnostic_only']}},
+          ['server', 'filename', 'enabled', 'reason']),
+])
 for _schema in TOOLS:
     if _schema['function']['name'] == 'inspect_mod_jar':
         _schema['function']['parameters']['properties']['view'] = {'type': 'string', 'enum': ['full', 'summary'], 'description': 'summary 返回完整结构化身份/依赖/冲突声明，适合预算紧张时复核；full 另附原始元数据（默认）'}
@@ -267,6 +285,8 @@ CONFIRM_TOOLS = {'repair_instance_core', 'complete_instance_files', 'reset_insta
 
 WRITE_TOOLS.update({'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'})
 CONFIRM_TOOLS.update({'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'})
+WRITE_TOOLS.add('set_server_mod_enabled')
+CONFIRM_TOOLS.add('set_server_mod_enabled')
 
 # ---- 插件注册的 AI 工具(plugin_manager.TOOLS)合并进 TOOLS --------
 def _merge_plugin_tools() -> list:
@@ -310,6 +330,8 @@ TOOL_GROUPS = {
     "log": ["read_instance_log", "read_crash_report", "resolve_mc_name"],
     "crashrepair": ['repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "set_setting", "backup_instance", "install_instance"],
     "keybind": ["get_key_bindings"],
+    "server": ["list_server_instances", "read_server_candidate_report",
+               "list_server_mods", "read_server_log", "set_server_mod_enabled"],
 }
 
 TOOL_GROUPS['crashrepair'].extend(["snapshot_instance","restore_instance_snapshot","list_instance_snapshots","inspect_mod_jar","inspect_instance_core","set_mod_enabled","observe_game","find_compatible_mod_replacement","replace_mod_version","launch_game","read_instance_log","read_crash_report"])
@@ -343,6 +365,7 @@ TOOL_GROUP_KEYWORDS = {
     "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因", "wiki", "维基", "百科", "查一下", "叫什么", "物品", "生物", "实体", "名词", "名称", "名字", "配料"],
     "crashrepair": ["崩溃", "崩了", "崩", "闪退", "报错", "诊断", "修", "修复", "解决", "重装", "装不上", "crash", "fix", "地狱", "测试", "快照", "benchmark"],
     "keybind": ["按键", "绑定", "键位", "keybind", "空格"],
+    "server": ["服务端", "服务器", "候选服务端", "开服", "server"],
 }
 
 
@@ -381,7 +404,9 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
         # 超限截断:保通用(前 3 个)+ 本请求命中组里"核心查询/解析"工具,
         # 砍掉排后的(通常是次要的操作/写工具),避免关键工具被挤掉导致模型选不到。
         core = {"resolve_mod_concept", "search_mods", "search_modpacks", "list_instances",
-                "get_settings", "get_recipe_path", "read_instance_log", "read_crash_report"}
+                "get_settings", "get_recipe_path", "read_instance_log", "read_crash_report",
+                "list_server_instances", "read_server_candidate_report", "list_server_mods",
+                "read_server_log", "set_server_mod_enabled"}
         keep = []
         for t in mounted:
             if t["function"]["name"] in core:
@@ -1572,8 +1597,8 @@ class AIChatDock(QDockWidget):
             f"QToolButton {{ color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
             f" border-radius: 6px; padding: 3px 8px; background: transparent; }}"
             f"QToolButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
-        skills_btn = QPushButton("技能管理…")
-        skills_btn.setToolTip("管理游戏运行时辅助技能(指令指南/任务拆分等)")
+        skills_btn = QPushButton("技能与可选功能…")
+        skills_btn.setToolTip("管理 AI 技能、运行辅助和实验性工作流")
         skills_btn.clicked.connect(self.open_skill_manager)
         skills_btn.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"

@@ -4,11 +4,13 @@ import os
 import tempfile
 import unittest
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 from log_privacy import redact, redact_text
 from safe_paths import safe_child
-from modpack import _extract_zip_to, _download_mods_parallel
+from modpack import (_extract_zip_to, _download_mods_parallel,
+                     _extract_optional_pack_icon)
 
 
 class SafetyTests(unittest.TestCase):
@@ -53,6 +55,20 @@ class SafetyTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 _download_mods_parallel([{'path': 'C:/escape', 'downloads': ['https://example.org']}], root)
             download.assert_not_called()
+
+    def test_root_pack_icon_is_preserved_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            pack = os.path.join(root, 'pack.zip')
+            target = os.path.join(root, 'instance')
+            os.makedirs(target)
+            with zipfile.ZipFile(pack, 'w') as archive:
+                archive.writestr('icon.png', b'pack-icon')
+            result = _extract_optional_pack_icon(pack, target)
+            self.assertEqual(Path(result).read_bytes(), b'pack-icon')
+            with open(os.path.join(target, 'icon.png'), 'wb') as file:
+                file.write(b'user-icon')
+            self.assertIsNone(_extract_optional_pack_icon(pack, target))
+            self.assertEqual(Path(target, 'icon.png').read_bytes(), b'user-icon')
 
     def test_failed_file_propagates(self):
         with tempfile.TemporaryDirectory() as root, patch('modpack.download_with_mirror', side_effect=RuntimeError('timeout')):

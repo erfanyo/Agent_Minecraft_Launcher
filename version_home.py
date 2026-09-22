@@ -17,10 +17,13 @@
 - .launch_btn      —— 左列「启动游戏」大按钮(QPushButton)
 - .refresh_btn     —— 右列「版本」标签里的刷新按钮(QPushButton)
 """
+import sys
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QUrl
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImageReader,
+                           QPainter, QPixmap)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -35,6 +38,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressDialog,
     QPushButton,
+    QSizePolicy,
     QTabWidget,
     QTextBrowser,
     QToolButton,
@@ -46,7 +50,8 @@ from changelog import changelog_html, load_changelog
 from i18n import t
 from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
-                      muted_color, panel_style, tab_style, text_color, set_style)
+                      accent_color, is_dark_mode, muted_color, panel_style,
+                      success_color, tab_style, text_color, set_style)
 
 # 登录方式:offline(离线昵称)/ microsoft(微软正版,设备码流)
 LOGIN_OFFLINE = "offline"
@@ -95,6 +100,70 @@ def _avatar_pixmap(name: str, size: int = _AVATAR_BASE) -> QPixmap:
     return pix
 
 
+def _server_fallback_pixmap(size: int = _AVATAR_BASE) -> QPixmap:
+    """Theme-aware pixel server/community node used when no server icon exists."""
+    root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
+    asset = root / 'icons' / (
+        'server_cabinet_dark.png' if is_dark_mode() else 'server_cabinet_light.png')
+    image = QPixmap(str(asset))
+    if not image.isNull():
+        return image.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.FastTransformation)
+    pix = QPixmap(size, size)
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+    unit = max(1, size // 8)
+    offset = (size - unit * 8) // 2
+    accent = QColor(accent_color())
+    panel = QColor(muted_color())
+    edge = QColor(text_color())
+    light = QColor(success_color())
+
+    # Two compact server units. Their hard 8×8 grid keeps a Minecraft-like
+    # silhouette while the colors come from AMCL's active theme.
+    for y in (0, 5):
+        painter.fillRect(offset + unit, offset + unit * y, unit * 6, unit * 3, edge)
+        painter.fillRect(offset + unit * 2, offset + unit * (y + 1), unit * 4, unit, panel)
+        painter.fillRect(offset + unit * 5, offset + unit * (y + 1), unit, unit, light)
+        painter.fillRect(offset + unit, offset + unit * (y + 2), unit * 6, unit, accent)
+
+    # A hub and two peers: generic enough for any server, but visibly conveys
+    # multiplayer/community rather than a Mojang-owned block texture.
+    painter.fillRect(offset + unit * 3, offset + unit * 3, unit * 2, unit * 2, accent)
+    painter.fillRect(offset, offset + unit * 3, unit, unit * 2, edge)
+    painter.fillRect(offset + unit * 7, offset + unit * 3, unit, unit * 2, edge)
+    painter.fillRect(offset + unit, offset + unit * 3, unit * 2, unit, accent)
+    painter.fillRect(offset + unit * 5, offset + unit * 3, unit * 2, unit, accent)
+    painter.end()
+    return pix
+
+
+def _server_avatar_pixmap(server, size: int = _AVATAR_BASE) -> QPixmap:
+    """Use the standard 64×64 server icon, with a safe local fallback."""
+    try:
+        root = (server or {}).get('path')
+        if not root:
+            raise ValueError('no selected server')
+        icon = Path(root, 'server-icon.png')
+        if (not icon.is_file() or icon.is_symlink()
+                or icon.stat().st_size > 1024 * 1024):
+            raise ValueError('missing or unusually large server icon')
+        reader = QImageReader(str(icon))
+        reader.setDecideFormatFromContent(True)
+        dimensions = reader.size()
+        if dimensions.width() != 64 or dimensions.height() != 64:
+            raise ValueError('server-icon.png must be 64×64')
+        image = reader.read()
+        if image.isNull():
+            raise ValueError('invalid server icon')
+        return QPixmap.fromImage(image).scaled(
+            size, size, Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+    except (OSError, TypeError, ValueError):
+        return _server_fallback_pixmap(size)
+
+
 class LoginCard(QWidget):
     """登录卡片:头像 + 昵称 + 登录方式 + 「更改登录方式」入口。
 
@@ -109,6 +178,8 @@ class LoginCard(QWidget):
         super().__init__(parent)
         self._avatar_size = _AVATAR_BASE   # 当前头像尺寸(随窗口自适应)
         self._name = ""
+        self._server_mode = False
+        self._server = None
         self._avatar_ready.connect(self._apply_avatar_bytes)
         self._build_ui()
         self.refresh()
@@ -157,6 +228,7 @@ class LoginCard(QWidget):
     def _build_ui(self):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("loginCard")
+        self.setMinimumHeight(164)
         set_style(self, lambda: f"#loginCard {{ {panel_style()} }}")
 
         self.avatar_label = QLabel()
@@ -216,7 +288,9 @@ class LoginCard(QWidget):
         if size != self._avatar_size:
             self._avatar_size = size
             self.avatar_label.setFixedSize(size, size)
-            self.avatar_label.setPixmap(_avatar_pixmap(self._name or "Steve", size))
+            self.avatar_label.setPixmap(
+                _server_avatar_pixmap(self._server, size) if self._server_mode
+                else _avatar_pixmap(self._name or "Steve", size))
         # 昵称字号跟随空间:头像很小(空间紧张)时缩小文字,恢复时回到默认
         if size <= 40:
             fs = max(12, int(size * 0.36))
@@ -228,6 +302,8 @@ class LoginCard(QWidget):
 
     def refresh(self):
         """根据最新设置刷新:头像/昵称/登录方式。"""
+        if self._server_mode:
+            return
         self._settings = load_settings()
         method = self._settings.get("login_method", LOGIN_OFFLINE)
         force_online = self._settings.get("microsoft_login", True)
@@ -282,6 +358,8 @@ class LoginCard(QWidget):
 
     def _apply_avatar_bytes(self, data: bytes):
         """主线程根据字节构建/缩放 QPixmap 并设置到头像。"""
+        if self._server_mode:
+            return
         try:
             from PySide6.QtGui import QPixmap as _QPixmap
             from PySide6.QtCore import QByteArray as _QBA
@@ -293,6 +371,29 @@ class LoginCard(QWidget):
                               Qt.TransformationMode.SmoothTransformation))
         except Exception:
             pass
+
+    def set_server_mode(self, server=None):
+        self._server_mode = True
+        self._server = server
+        self.avatar_label.setPixmap(_server_avatar_pixmap(server, self._avatar_size))
+        self.name_label.hide()
+        self.status_label.hide()
+        self.login_btn.hide()
+
+    def set_player_mode(self):
+        if not self._server_mode:
+            return
+        self._server_mode = False
+        self._server = None
+        self.name_label.show()
+        self.status_label.show()
+        self.login_btn.show()
+        self.refresh()
+
+    def refresh_visual(self):
+        if self._server_mode:
+            self.avatar_label.setPixmap(
+                _server_avatar_pixmap(self._server, self._avatar_size))
 
     def _change_offline_name(self):
         """修改离线昵称(前端可自洽:写到 config.json 并通知启动器)。"""
@@ -489,6 +590,23 @@ class InstanceSettingsCard(QWidget):
         else:
             self.inst_label.setText(inst.get("name") or inst.get("id", "?"))
 
+    def set_server(self, server: dict | None):
+        self._inst = None
+        self.title.setText('当前服务端')
+        if not server:
+            self.inst_label.setText('请选择一个服务端')
+            return
+        report = server.get('report') or {}
+        entry = server.get('launchJar') or '自动识别启动入口'
+        self.inst_label.setText(
+            f"{server.get('name') or server.get('id', '?')}\n"
+            f"{report.get('loader', 'unknown')} · MC {report.get('minecraftVersion') or '版本待确认'}\n"
+            f"入口：{entry}")
+
+    def set_client_mode(self, inst: dict | None):
+        self.title.setText(t("VERSION_HOME_CURRENT_SELECTION"))
+        self.set_instance(inst)
+
 
 class VersionHome(QWidget):
     """「我的版本」首页(仿 PCL2)。"""
@@ -508,6 +626,8 @@ class VersionHome(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._server_mode = False
+        self._smart_import_enabled = False
         self._build_ui()
         self._on_selection_changed(None, None)
         # 更新日志:后台线程拉取 GitHub CHANGELOG.md,完成后主线程渲染
@@ -520,8 +640,18 @@ class VersionHome(QWidget):
         main = QHBoxLayout(self)
         main.setContentsMargins(14, 14, 14, 14)
         main.setSpacing(14)
-        main.addWidget(self._build_left(), 1)
-        main.addWidget(self._build_right(), 2)
+        self._left_panel = self._build_left()
+        self._right_panel = self._build_right()
+        # Ignore changing text size hints (for example “服务端管理”) so both
+        # modes reuse the exact same 1:2 geometry without a one-frame jump.
+        self._left_panel.setMinimumWidth(0)
+        self._right_panel.setMinimumWidth(0)
+        self._left_panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self._right_panel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        main.addWidget(self._left_panel, 1)
+        main.addWidget(self._right_panel, 2)
+        main.setStretch(0, 1)
+        main.setStretch(1, 2)
 
     def _build_left(self) -> QWidget:
         """左列:登录 + 当前实例 + 启动按钮 + 启动器设置/管理。"""
@@ -544,17 +674,17 @@ class VersionHome(QWidget):
         # 高频入口始终可见：不依赖 AI，也不用到多层菜单里找。
         quick_row = QHBoxLayout()
         quick_row.setSpacing(10)
-        new_game_btn = QPushButton("新建游戏")
-        new_game_btn.setToolTip("选择 Minecraft 版本和加载器，创建一个新游戏")
-        find_mod_btn = QPushButton("下载 Mod")
-        find_mod_btn.setToolTip("浏览、搜索并下载 Mod；也可进入整合包、光影和资源包页面")
-        for btn in (new_game_btn, find_mod_btn):
+        self.new_game_btn = QPushButton("新建游戏")
+        self.new_game_btn.setToolTip("选择 Minecraft 版本和加载器，创建一个新游戏")
+        self.find_mod_btn = QPushButton("下载 Mod")
+        self.find_mod_btn.setToolTip("浏览、搜索并下载 Mod；也可进入整合包、光影和资源包页面")
+        for btn in (self.new_game_btn, self.find_mod_btn):
             btn.setMinimumHeight(40)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             set_style(btn, card_btn_style)
             quick_row.addWidget(btn, 1)
-        new_game_btn.clicked.connect(lambda: self.open_resources_requested.emit(1))
-        find_mod_btn.clicked.connect(lambda: self.open_resources_requested.emit(3))
+        self.new_game_btn.clicked.connect(lambda: self._run_left_action('first'))
+        self.find_mod_btn.clicked.connect(lambda: self._run_left_action('second'))
         lay.addLayout(quick_row)
 
         # 「导入整合包」(左)+「一键配置」(右)并排，属于次高频操作。
@@ -564,7 +694,7 @@ class VersionHome(QWidget):
         self.import_btn.setMinimumHeight(44)
         self.import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         set_style(self.import_btn, card_btn_style)
-        self.import_btn.clicked.connect(self.import_modpack_requested.emit)
+        self.import_btn.clicked.connect(lambda: self._run_left_action('third'))
         tool_row.addWidget(self.import_btn, 1)
 
         self.config_btn = QToolButton()
@@ -590,6 +720,7 @@ class VersionHome(QWidget):
                 lambda _c=False, s=sslug: self.one_click_config_requested.emit(s))
             it.setToolTip(f"{sname}:按所选实例的版本+加载器判断是否支持,支持才安装")
         self.config_btn.setMenu(cfg_menu)
+        self._client_config_menu = cfg_menu
         tool_row.addWidget(self.config_btn, 1)
         lay.addLayout(tool_row)
 
@@ -598,6 +729,7 @@ class VersionHome(QWidget):
         self.launch_btn.setMinimumHeight(56)
         self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         set_style(self.launch_btn, launch_btn_style)
+        self.launch_btn.clicked.connect(self._on_primary_launch)
         lay.addWidget(self.launch_btn)
 
         return left
@@ -684,6 +816,13 @@ class VersionHome(QWidget):
         set_style(self.tabs, tab_style)
 
         self._version_tab_index = self.tabs.addTab(self._build_version_tab(), t("VERSION_HOME_INSTANCES"))
+        from server_center import ServerCenter
+        self.server_center = ServerCenter(self)
+        self._server_tab_index = self.tabs.addTab(self.server_center, "服务端(共0个)")
+        self.server_center.count_changed.connect(
+            lambda count: self.tabs.setTabText(self._server_tab_index, f"服务端(共{count}个)"))
+        self.server_center.selection_changed.connect(self._on_server_selection_changed)
+        self.server_center.running_changed.connect(lambda _: self._update_server_launch_button())
         self.tabs.addTab(self._build_changelog_tab(), t("VERSION_HOME_CHANGELOG"))
         self.tabs.addTab(self._build_community_tab(), t("VERSION_HOME_COMMUNITY"))
         # 启动器日志:作为「MC 动态」同级的子标签页(游戏运行输出/命令)
@@ -702,8 +841,114 @@ class VersionHome(QWidget):
             self.tabs.setTabText(self._version_tab_index, t(f"实例(共{n}个)", f"Instances ({n})"))
 
     def _on_home_tab_changed(self, index: int):
+        if index == self._server_tab_index:
+            self._set_server_mode(self.server_center.selected())
+        else:
+            self._set_client_mode()
         if index == self._version_tab_index:
             self.refresh_requested.emit()
+
+    def _server_manage_menu(self):
+        menu = getattr(self, '_server_config_menu', None)
+        if menu is not None:
+            return menu
+        menu = QMenu(self.config_btn)
+        menu.addAction('手动指定启动 JAR（识别失败时）…', self.server_center.choose_launch_jar)
+        menu.addAction('恢复自动识别启动入口', self.server_center.use_automatic_launch_entry)
+        menu.addSeparator()
+        menu.addAction('补全运行库…', self.server_center.install_runtime)
+        menu.addAction('查看候选审核报告…', self.server_center.show_candidate_report)
+        menu.addAction('导出可启动运行包（含运行库）…', self.server_center.export_runtime)
+        menu.addAction('刷新服务端列表', self.server_center.refresh)
+        self._server_config_menu = menu
+        return menu
+
+    def _set_server_mode(self, server=None):
+        self._server_mode = True
+        self.login_card.set_server_mode(server)
+        self.inst_card.set_server(server)
+        self.new_game_btn.setText('导入服务端')
+        self.new_game_btn.setToolTip('扫描并安全导入服务端压缩包')
+        self.find_mod_btn.setText('打开目录')
+        self.find_mod_btn.setToolTip('打开当前服务端目录')
+        self.import_btn.setText('查看 Mod')
+        self.import_btn.setToolTip('查看服务端 Mod 及适用端信息')
+        self.config_btn.setText('服务端管理')
+        self.config_btn.setMenu(self._server_manage_menu())
+        has_server = server is not None
+        self.find_mod_btn.setEnabled(has_server)
+        self.import_btn.setEnabled(has_server)
+        self.config_btn.setEnabled(has_server)
+        self.launch_btn.setEnabled(has_server)
+        self._update_server_launch_button()
+
+    def _set_client_mode(self):
+        self._server_mode = False
+        self.login_card.set_player_mode()
+        self.inst_card.set_client_mode(self.current_instance())
+        self.new_game_btn.setText('新建游戏')
+        self.new_game_btn.setToolTip('选择 Minecraft 版本和加载器，创建一个新游戏')
+        self.find_mod_btn.setText('下载 Mod')
+        self.find_mod_btn.setToolTip('浏览、搜索并下载 Mod；也可进入整合包、光影和资源包页面')
+        self.import_btn.setText('智能导入' if self._smart_import_enabled
+                                else t("VERSION_HOME_IMPORT_MODPACK"))
+        self.import_btn.setToolTip(
+            '智能识别客户端、服务端和作者资料；严格扫描仍然生效。'
+            if self._smart_import_enabled else '')
+        self.config_btn.setText(t("VERSION_HOME_ONE_CLICK"))
+        self.config_btn.setMenu(self._client_config_menu)
+        for button in (self.new_game_btn, self.find_mod_btn, self.import_btn, self.config_btn):
+            button.setEnabled(True)
+        self.launch_btn.setText(t("VERSION_HOME_LAUNCH_GAME"))
+        self.launch_btn.setEnabled(self.current_instance() is not None)
+
+    def set_smart_import_enabled(self, enabled):
+        self._smart_import_enabled = bool(enabled)
+        if not self._server_mode:
+            self.import_btn.setText('智能导入' if enabled else t("VERSION_HOME_IMPORT_MODPACK"))
+            self.import_btn.setToolTip(
+                '智能识别客户端、服务端和作者资料；严格扫描仍然生效。' if enabled else '')
+
+    def _on_server_selection_changed(self, server):
+        if self.tabs.currentIndex() == self._server_tab_index:
+            self._set_server_mode(server)
+
+    def _update_server_launch_button(self):
+        if not self._server_mode:
+            return
+        running = self.server_center.is_running()
+        self.launch_btn.setText('停止服务端' if running else '启动服务端')
+        server = self.server_center.selected()
+        self.launch_btn.setToolTip(
+            ('安全停止并保存世界' if running else
+             ((server or {}).get('name') or '请先选择一个服务端')))
+
+    def _run_left_action(self, slot):
+        if self._server_mode:
+            actions = {
+                'first': self.server_center.choose_import,
+                'second': self.server_center.open_folder,
+                'third': self.server_center.show_mods,
+            }
+            actions[slot]()
+            return
+        if slot == 'first':
+            self.open_resources_requested.emit(1)
+        elif slot == 'second':
+            self.open_resources_requested.emit(3)
+        else:
+            self.import_modpack_requested.emit()
+
+    def _on_primary_launch(self):
+        if self._server_mode:
+            if self.server_center.is_running():
+                self.server_center.stop()
+            else:
+                self.server_center.launch()
+            return
+        inst = self.current_instance()
+        if inst is not None:
+            self.launch_requested.emit(inst)
 
     def _build_version_tab(self) -> QWidget:
         w = QWidget()
@@ -823,9 +1068,14 @@ class VersionHome(QWidget):
         """重新读取设置刷新登录卡片(昵称/头像)。"""
         self.login_card.refresh()
 
+    def refresh_visual(self):
+        """Refresh theme-dependent artwork without reloading account data."""
+        self.login_card.refresh_visual()
+
     def set_current_instances(self, instances: list):
         """刷新实例数量(由 MainWindow.refresh_instances 调用)→ 更新「实例(共x个)」标签文本。"""
         self.set_instance_count(len(instances))
+        self.server_center.refresh()
 
     def current_instance(self):
         """当前在「版本」列表里选中的实例 dict(没选返回 None)。"""
@@ -852,9 +1102,11 @@ class VersionHome(QWidget):
     def _on_selection_changed(self, current, _previous):
         """选中实例变化 → 更新「当前选择」卡片,并通知主窗口(显示/隐藏「实例详情」标签页)。"""
         inst = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
-        self.inst_card.set_instance(inst)
-        self.launch_btn.setToolTip(
-            (inst.get("name") or inst.get("id", "")) if inst is not None else t("VERSION_HOME_SELECT_INSTANCE_FIRST"))
+        if not self._server_mode:
+            self.inst_card.set_client_mode(inst)
+            self.launch_btn.setToolTip(
+                (inst.get("name") or inst.get("id", "")) if inst is not None else t("VERSION_HOME_SELECT_INSTANCE_FIRST"))
+            self.launch_btn.setEnabled(inst is not None)
         self.instance_selected.emit(inst)
 
     def _launch_current_via_key(self, item):

@@ -29,6 +29,8 @@ datas = [
     ("bridge-mod/dist/*.jar", "bridge-mod"),
     ("icons/*.svg", "icons"),
     ("icons/grass_block.png", "icons"),
+    ("icons/server_cabinet_dark.png", "icons"),
+    ("icons/server_cabinet_light.png", "icons"),
     ("LICENSE", "."),
     ("THIRD_PARTY.md", "."),
     ("THIRD_PARTY_NOTICES.md", "."),

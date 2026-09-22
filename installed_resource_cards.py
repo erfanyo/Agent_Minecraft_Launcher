@@ -13,6 +13,13 @@ from PySide6.QtWidgets import QStyledItemDelegate, QStyle
 CARD_ROLE = int(Qt.ItemDataRole.UserRole) + 71
 
 
+def environment_label(data):
+    if not data.get('formats'):
+        return ''
+    return {'client': '仅客户端', 'server': '仅服务端',
+            'both': '双端可加载', 'unknown': '适用端未知'}.get(data.get('environment'), '适用端未知')
+
+
 def _version(value):
     if not re.fullmatch(r"\d+(?:\.\d+)*", value):
         return None
@@ -67,7 +74,7 @@ def loaded_mod_evidence(mods_directory):
 
 @lru_cache(maxsize=512)
 def read_card(path, mtime, size):
-    result = {"id": "", "name": os.path.basename(path), "description": "", "image": b"", "formats": [], "mc": ""}
+    result = {"id": "", "name": os.path.basename(path), "description": "", "image": b"", "formats": [], "mc": "", "environment": "unknown"}
     try:
         with zipfile.ZipFile(path) as archive:
             def read(name, limit=512_000):
@@ -84,6 +91,8 @@ def read_card(path, mtime, size):
                               description=str(data.get('description') or ''),
                               mc=str(data.get('depends', {}).get('minecraft', '')))
                 result['formats'].append('fabric')
+                result['environment'] = {'client': 'client', 'server': 'server', '*': 'both'}.get(
+                    data.get('environment', '*'), 'unknown')
                 icon = data.get('icon', '')
                 if isinstance(icon, dict):
                     icon = next(iter(icon.values()), '')
@@ -93,6 +102,7 @@ def read_card(path, mtime, size):
                 import tomllib
                 data = tomllib.loads(read(filename).decode('utf-8'))
                 result['formats'].append(loader)
+                result['environment'] = 'unknown'
                 mods = data.get('mods') or [{}]
                 mod = mods[0]
                 result.update(id=str(mod.get('modId') or result['id']),
@@ -173,10 +183,11 @@ class CardDelegate(QStyledItemDelegate):
         description = ' '.join(str(data.get('description') or index.data()).split())
         painter.drawText(QRect(x, rect.top()+34, width, 20), Qt.AlignmentFlag.AlignVCenter,
                          painter.fontMetrics().elidedText(description, Qt.TextElideMode.ElideRight, width))
-        if data.get('warning'):
-            painter.setPen(QColor(warning_color()))
+        detail = ' · '.join(filter(None, [environment_label(data), data.get('warning')]))
+        if detail:
+            painter.setPen(QColor(warning_color() if data.get('warning') else muted_color()))
             painter.drawText(QRect(x, rect.top()+56, width, 20), Qt.AlignmentFlag.AlignVCenter,
-                             painter.fontMetrics().elidedText(data['warning'], Qt.TextElideMode.ElideRight, width))
+                             painter.fontMetrics().elidedText(detail, Qt.TextElideMode.ElideRight, width))
         painter.restore()
 
 
@@ -243,7 +254,8 @@ class CardLoader(QObject):
                     if not image.isNull():
                         item.setIcon(QIcon(QPixmap.fromImage(image)))
             item.setData(CARD_ROLE, data)
-            item.setToolTip('\n'.join(filter(None, [data['name'], item.text(), data.get('description', ''), data.get('warning', '')])))
+            item.setToolTip('\n'.join(filter(None, [data['name'], item.text(), data.get('description', ''),
+                environment_label(data), '适用端来自元数据；双端可加载不代表两边必须安装。' if data.get('formats') else '', data.get('warning', '')])))
 
 
 def load_cards(widget, directory, loader='', minecraft=''):

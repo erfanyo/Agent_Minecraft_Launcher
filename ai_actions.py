@@ -21,7 +21,7 @@ PERMISSIONS = [
 # “备份后连续处理”也不会越过这些会改变用户目标、写外部系统或扩大代码能力的动作。
 ALWAYS_CONFIRM_ACTIONS = {
     "install_instance", "install_modpack", "restore_instance_snapshot",
-    "send_game_command", "create_plugin",
+    "send_game_command", "create_plugin", "set_server_mod_enabled",
 }
 
 

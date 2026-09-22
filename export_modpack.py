@@ -66,8 +66,9 @@ class PackExportDialog(QDialog):
     """整合包导出的文件选择界面(类似 Windows 选安装路径)。"""
 
     def __init__(self, inst_id: str, inst_dir: str, parent=None,
-                 base: str = "", loader: str = "", loader_version: str = ""):
+                 base: str = "", loader: str = "", loader_version: str = "", server_mode=False):
         super().__init__(parent)
+        self.server_mode = server_mode
         self.inst_id = inst_id
         self.inst_dir = inst_dir
         self.base = base            # 基础(MC)版本,如 1.20.1(用于 .mrpack 依赖)
@@ -76,9 +77,26 @@ class PackExportDialog(QDialog):
         self.setWindowTitle(f"导出整合包 · {inst_id}")
         self.setMinimumSize(720, 660)
         self._build()
+        if server_mode:
+            self.setWindowTitle('导出为服务端 · ' + inst_id)
+            self.include_launcher.setChecked(False)
+            self.include_launcher.hide()
+            self.fmt_combo.clear()
+            self.fmt_combo.addItem('服务端内容包 .zip（导入后需补全运行库）', 'server')
         self._populate()
 
     # ---- UI ----
+    def reject(self):
+        if getattr(self, '_server_task', None) is not None and self._server_task.is_running:
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        if getattr(self, '_server_task', None) is not None and self._server_task.is_running:
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def _build(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
@@ -163,6 +181,14 @@ class PackExportDialog(QDialog):
         item.setData(0, Qt.ItemDataRole.UserRole + 1, rel)
         base = os.path.basename(disk_path)
         is_skipped = _is_skipped(base)
+        if self.server_mode and rel:
+            from server_export import server_content_allowed
+            normalized = rel.replace(os.sep, '/')
+            linked = os.path.islink(disk_path) or getattr(os.path, 'isjunction', lambda _: False)(disk_path)
+            if linked or not server_content_allowed(normalized, directory=os.path.isdir(disk_path)):
+                item.setCheckState(0, Qt.CheckState.Unchecked)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                return item
         # 计算默认勾选状态:先继承父,再按自身类别覆盖
         if force_content:
             default = Qt.CheckState.Checked
@@ -177,6 +203,18 @@ class PackExportDialog(QDialog):
         else:
             default = Qt.CheckState.Unchecked
         item.setCheckState(0, default)
+        if self.server_mode and rel:
+            # Configs/scripts require deliberate selection and privacy review.
+            is_mod = rel.replace(os.sep, '/').split('/')[0] == 'mods'
+            item.setCheckState(0, Qt.CheckState.Checked if is_mod else Qt.CheckState.Unchecked)
+            if is_mod and os.path.isfile(disk_path):
+                from mod_deps import read_mod_metadata
+                info = read_mod_metadata(disk_path) or {}
+                side = info.get('environment', 'unknown')
+                labels = {'client': '仅客户端（默认不选）', 'server': '仅服务端', 'both': '双端可加载', 'unknown': '适用端未知，请核对'}
+                item.setText(0, label + ' · ' + labels[side])
+                if side == 'client':
+                    item.setCheckState(0, Qt.CheckState.Unchecked)
         # 跳过目录/元数据:整项禁用(不进包)
         if is_skipped:
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
@@ -207,6 +245,8 @@ class PackExportDialog(QDialog):
         self._collect_checked_rec(item, out_list, include_self=True)
 
     def _collect_checked_rec(self, item, out_list, include_self=True):
+        if self.server_mode and not (item.flags() & Qt.ItemFlag.ItemIsEnabled):
+            return
         if item.checkState(0) != Qt.CheckState.Checked:
             # 未勾的文件夹:仍要递归看其子项(可能出现"子项被勾但父没勾")
             for i in range(item.childCount()):
@@ -258,11 +298,32 @@ class PackExportDialog(QDialog):
             QMessageBox.warning(self, "导出", "没有勾选任何文件。")
             return
         fmt = self.fmt_combo.currentData()
+        if fmt == 'server':
+            if QMessageBox.question(self, '确认导出服务端内容包',
+                    '会打包勾选的 Mod 和配置并生成服务端清单，不包含服务端运行库。\n'
+                    '仅客户端 Mod 默认不选；适用端未知的 Mod 不会自动删除，请自行核对依赖。\n'
+                    '配置和脚本可能包含密钥或私人信息，请展开文件树审核；不能保证自动脱敏。\n'
+                    '导入后可用“补全运行库”安装受支持的 Forge/NeoForge，其他加载器需手工安装。继续？',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
         # 目标扩展名按格式对齐
         want_ext = ".mrpack" if fmt == "mrpack" else ".zip"
         if not out.lower().endswith(want_ext):
             out += want_ext
             self.out_edit.setText(out)
+        if fmt == 'server':
+            from background_tasks import BackgroundTask
+            from server_export import export_server_template
+            self.setEnabled(False)
+            self._server_task = BackgroundTask(lambda _: export_server_template(
+                self.inst_dir, out, files, self.base, self.loader, self.loader_version), self)
+            self._server_task.succeeded.connect(lambda path: QMessageBox.information(
+                self, '服务端内容包导出完成', f'已导出到：\n{path}\n导入后还需补全服务端运行库。'))
+            self._server_task.failed.connect(lambda error: QMessageBox.warning(self, '导出失败', error))
+            self._server_task.finished.connect(lambda: self.setEnabled(True))
+            self._server_task.start()
+            return
         progress = QProgressDialog("正在打包...", "", 0, len(files), self)
         progress.setWindowTitle("导出整合包")
         progress.setMinimumDuration(0)

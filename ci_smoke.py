@@ -22,6 +22,8 @@ def packaged_file_errors() -> list[str]:
     bundle = getattr(sys, "_MEIPASS", "")
     required = [
         os.path.join("icons", "grass_block.png"),
+        os.path.join("icons", "server_cabinet_dark.png"),
+        os.path.join("icons", "server_cabinet_light.png"),
         "THIRD_PARTY_NOTICES.md",
         os.path.join("runtime", "llama-cpp",
                      "llama-server.exe" if sys.platform == "win32" else "llama-server"),
@@ -57,7 +59,9 @@ def main() -> int:
         "os_platform.system", "os_platform.openpath", "os_platform.temperature",
         "os_platform.notify",
         "game_command", "lan_tools", "instance_manager",
-        "version_home", "online_center",
+        "version_home", "online_center", "smart_import", "smart_import_ui",
+        "server_pack_builder", "server_pack_builder_ui", "server_pack_report",
+        "server_pack_rules", "export_paths", "export_destination_ui",
         "assistant_ui", "local_ai", "main",
     ]
     for m in mods:

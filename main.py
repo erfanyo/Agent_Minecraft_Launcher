@@ -48,6 +48,10 @@ if __name__ == '__main__' and '--amcl-memory-relief' in sys.argv:
 if __name__ == '__main__' and '--amcl-plugin-web-window' in sys.argv:
     from plugin_web_worker import main as web_window_main
     raise SystemExit(web_window_main())
+if __name__ == '__main__' and '--amcl-server-host' in sys.argv:
+    from server_host import main as server_host_main
+    _server_host_index = sys.argv.index('--amcl-server-host')
+    raise SystemExit(server_host_main(sys.argv[_server_host_index + 1:]))
 import time
 from datetime import datetime
 
@@ -56,7 +60,8 @@ from log_privacy import redact_text
 from downloader import failure_advice
 
 from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPalette, QPixmap
+from PySide6.QtGui import (QColor, QFont, QIcon, QImageReader, QPainter,
+                           QPalette, QPixmap)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -242,9 +247,8 @@ class MainWindow(QMainWindow):
         self.home_panel = tab_a                     # 保留引用,便于刷新登录显示等
         self.instance_list = tab_a.instance_list    # 版本列表(兼容旧引用:右键/视图/双击)
         self.launch_btn = tab_a.launch_btn          # 启动游戏大按钮
-        # 旧行为保留:双击启动 + 启动按钮;刷新按钮已移除,切回「实例」标签页自动刷新
+        # 双击仍直接启动；左侧主按钮由 VersionHome 按客户端/服务端模式分派。
         self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)
-        self.launch_btn.clicked.connect(self.launch_selected_instance)
         # 键盘导航(遥控器式):实例列表按回车 → 启动选中实例(itemActivated)
         tab_a.launch_requested.connect(lambda _inst: self.launch_selected_instance())
         tab_a.refresh_requested.connect(self.refresh_instances)
@@ -394,6 +398,8 @@ class MainWindow(QMainWindow):
 
         # ---- 技能管理器(游戏运行时辅助功能,可插拔) ----
         self.skill_mgr = SkillManager(self, self.settings)
+        self.home_panel.set_smart_import_enabled(
+            self.skill_mgr.is_enabled('smart_import'))
 
         # 游戏进程相关的运行时状态
         self.game_process = None
@@ -478,6 +484,7 @@ class MainWindow(QMainWindow):
         set_animations_enabled(self.settings.get("ui_animations_enabled", True))
         self.apply_background()
         self.dl_indicator.update()
+        self.home_panel.refresh_visual()
 
     def _on_runtime_settings_changed(self):
         """Java 首选等设置保存后立即供启动服务读取，不做昂贵的界面刷新。"""
@@ -598,6 +605,10 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._recompute_wallpaper)
 
     def closeEvent(self, event):
+        if getattr(self.home_panel.server_center, '_busy', False):
+            QMessageBox.information(self, '服务端任务尚未结束', '请等待服务端扫描、导入或补全任务结束后再关闭启动器。')
+            event.ignore()
+            return
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
         self.download_tasks.cancel()
         if self._launch_task is not None:
@@ -670,9 +681,11 @@ class MainWindow(QMainWindow):
         self._guide_driver.start()
 
     def open_skill_manager(self):
-        """打开技能管理(游戏运行时辅助功能,勾选启停)"""
+        """打开技能与可选功能管理，勾选后立即切换对应工作流。"""
         dlg = SkillManagerDialog(self.skill_mgr, self)
         dlg.exec()
+        self.home_panel.set_smart_import_enabled(
+            self.skill_mgr.is_enabled('smart_import'))
 
     def send_game_command_dialog(self):
         """手动给运行中的游戏发指令(如 /summon zombie)。也可在 AI 输入框直接输 / 开头。"""
@@ -806,6 +819,10 @@ class MainWindow(QMainWindow):
 
     def import_modpack(self):
         """导入整合包(自动识别格式:Modrinth .mrpack / CurseForge .zip / 扁平实例文件夹 zip),后台执行不卡界面"""
+        if self.skill_mgr.is_enabled('smart_import') is True:
+            from smart_import_ui import start_smart_import
+            start_smart_import(self)
+            return
         import traceback as _tb
         DBG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 ".tmp", "import_debug.log")
@@ -836,6 +853,10 @@ class MainWindow(QMainWindow):
             fmt = None
             dbg(f"detect_modpack_format EXC: {e}")
         dbg(f"fmt={fmt!r}")
+        if fmt == 'server':
+            self.home_panel.tabs.setCurrentIndex(self.home_panel._server_tab_index)
+            self.home_panel.server_center.scan_import(path)
+            return
         if fmt == "flat":
             mc_version, okv = QInputDialog.getText(self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
             if not okv or not mc_version.strip():
@@ -1108,8 +1129,14 @@ class MainWindow(QMainWindow):
                 elif u.isLocalFile() and path:
                     self.install_modpack_from_path(path)
             if folders:
-                from folder_instance_import import start_import
-                start_import(self, list(dict.fromkeys(folders)))
+                enabled = getattr(getattr(self, 'skill_mgr', None), 'is_enabled',
+                                  lambda _name: False)('smart_import') is True
+                if enabled:
+                    for folder in list(dict.fromkeys(folders)):
+                        self.install_modpack_from_path(folder)
+                else:
+                    from folder_instance_import import start_import
+                    start_import(self, list(dict.fromkeys(folders)))
             e.setDropAction(Qt.DropAction.CopyAction)
             e.accept()
         else:
@@ -1117,6 +1144,12 @@ class MainWindow(QMainWindow):
 
     def install_modpack_from_path(self, path: str):
         """把本地的整合包文件导入成新实例(拖放入口;自动识别格式)。"""
+        enabled = getattr(getattr(self, 'skill_mgr', None), 'is_enabled',
+                          lambda _name: False)('smart_import') is True
+        if enabled:
+            from smart_import_ui import start_smart_import
+            start_smart_import(self, path)
+            return
         if os.path.isdir(path):
             from folder_instance_import import start_import
             start_import(self, [path])
@@ -1126,6 +1159,10 @@ class MainWindow(QMainWindow):
         fmt = detect_modpack_format(path)
         mc_version = None
         loader = None
+        if fmt == 'server':
+            self.home_panel.tabs.setCurrentIndex(self.home_panel._server_tab_index)
+            self.home_panel.server_center.scan_import(path)
+            return
         if fmt == "flat":
             mc_version, ok = QInputDialog.getText(
                 self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
@@ -1794,9 +1831,31 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _instance_icon(instance_id: str):
-        """实例封面:优先版本 JSON 里的 favicon;没有就生成占位封面(色块+首字)"""
+        """Prefer a modpack/launcher icon, then JSON favicon, then fallback."""
+        instance_dir = os.path.join(paths.GAME_DIR, "versions", instance_id)
+        for relative in ("icon.png", "instance.png", "pack.png", "logo.png",
+                         os.path.join("PCL", "Logo.png"),
+                         os.path.join(".minecraft", "icon.png"),
+                         os.path.join(".minecraft", "instance.png")):
+            image_path = os.path.join(instance_dir, relative)
+            try:
+                if (not os.path.isfile(image_path) or os.path.islink(image_path)
+                        or os.path.getsize(image_path) > 5 * 1024 * 1024):
+                    continue
+                reader = QImageReader(image_path)
+                dimensions = reader.size()
+                if (dimensions.width() <= 0 or dimensions.height() <= 0
+                        or dimensions.width() > 4096 or dimensions.height() > 4096):
+                    continue
+                reader.setScaledSize(dimensions.scaled(
+                    QSize(64, 64), Qt.AspectRatioMode.KeepAspectRatio))
+                image = reader.read()
+                if not image.isNull():
+                    return QIcon(QPixmap.fromImage(image))
+            except (OSError, TypeError, ValueError):
+                continue
         try:
-            vjson = os.path.join(paths.GAME_DIR, "versions", instance_id, instance_id + ".json")
+            vjson = os.path.join(instance_dir, instance_id + ".json")
             with open(vjson, encoding="utf-8") as f:
                 data = json.load(f)
             favicon = data.get("favicon")

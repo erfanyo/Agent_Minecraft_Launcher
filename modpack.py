@@ -139,6 +139,8 @@ def _extract_zip_to(path: str, inst_dir: str, prefix: str,
     """把 zip 内容解压进实例目录(去掉 prefix);跳过目录项与路径穿越。
     prefix 非空时只解压该前缀下的成员(如 overrides/),其余(manifest.json 等)忽略。
     progress_callback(done, total):每解压一个文件上报一次,进度进下载指示器/详情。"""
+    from archive_inspection import inspect_archive
+    inspect_archive(path)
     with zipfile.ZipFile(path) as z:
         members = [m for m in z.namelist() if m and not m.endswith("/")
                    and (not prefix or m.startswith(prefix))]
@@ -163,6 +165,31 @@ def _extract_zip_to(path: str, inst_dir: str, prefix: str,
                     dst.write(chunk)
             if progress_callback:
                 progress_callback(i, total)
+
+
+def _extract_optional_pack_icon(path: str, inst_dir: str, status_callback=None):
+    """Preserve a small root-level pack icon that normal override extraction skips."""
+    if any(os.path.isfile(os.path.join(inst_dir, name))
+           for name in ('icon.png', 'instance.png', 'pack.png', 'logo.png')):
+        return None
+    with zipfile.ZipFile(path) as archive:
+        lookup = {name.replace('\\', '/').casefold(): name for name in archive.namelist()}
+        source = next((lookup.get(name) for name in
+                       ('icon.png', 'instance.png', 'pack.png', 'logo.png')
+                       if lookup.get(name)), None)
+        if not source:
+            return None
+        info = archive.getinfo(source)
+        if info.is_dir() or info.file_size > 5 * 1024 * 1024:
+            return None
+        destination = safe_child(inst_dir, 'icon.png')
+        with archive.open(info) as src, open(destination, 'xb') as dst:
+            while chunk := src.read(256 * 1024):
+                checkpoint()
+                dst.write(chunk)
+    if status_callback:
+        status_callback(f"已保留整合包图标：{os.path.basename(destination)}")
+    return destination
 
 
 def _cf_loader(manifest: dict):
@@ -226,6 +253,14 @@ def detect_modpack_format(path: str) -> str | None:
             names = z.namelist()
             if "modrinth.index.json" in names:
                 return "modrinth"
+            roots = {name.split('/')[0] for name in names}
+            prefix = next(iter(roots)) + '/' if len(roots) == 1 and all('/' in name for name in names) else ''
+            relative = [name[len(prefix):] for name in names]
+            if any(name in relative for name in ('server.properties', 'server.jar',
+                    'fabric-server-launch.jar', 'amcl-server-pack.json')) or any(
+                    re.fullmatch(r'libraries/net/(?:minecraftforge/forge|neoforged/neoforge)/[^/]+/(?:win|unix)_args\.txt', name)
+                    for name in relative):
+                return 'server'
             if "manifest.json" in names:
                 mf = json.loads(z.read("manifest.json"))
                 # CurseForge 特征:minecraft.modLoaders 存在 且 files 是带 projectID/fileID 的数组
@@ -439,6 +474,10 @@ def import_modpack(path: str, game_dir: str,
     """
     if not os.path.isfile(path):
         raise ValueError("文件不存在")
+    from archive_inspection import inspect_archive
+    report = inspect_archive(path)
+    if report['kind'] == 'server':
+        raise ValueError("这是服务端压缩包，请在「服务端」页导入，不能作为客户端启动。")
     fmt = detect_modpack_format(path)
     if fmt is None:
         raise ValueError("无法识别的整合包格式(既不是 Modrinth/CurseForge,也不像实例文件夹)")
@@ -576,6 +615,7 @@ def import_modpack(path: str, game_dir: str,
         if index is not None or cf or ftb:
             _extract_zip_to(path, inst_dir, "overrides/", status_callback, progress_callback)
             _extract_zip_to(path, inst_dir, "client-overrides/", status_callback, progress_callback)
+            _extract_optional_pack_icon(path, inst_dir, status_callback)
 
         if ftb:
             if status_callback:

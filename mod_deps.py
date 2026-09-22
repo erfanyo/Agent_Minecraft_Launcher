@@ -122,6 +122,8 @@ class ModGraph:
 
 def _read_zip(zf, name):
     try:
+        if zf.getinfo(name).file_size > 1024 * 1024:
+            return None
         return zf.read(name)
     except (KeyError, OSError):
         return None
@@ -150,7 +152,9 @@ def _read_fabric_mod(zf):
                 deps.append((modid, dep_type, str(rng or "*")))
                 seen.add((modid, dep_type))
     return {"loader": "fabric", "id": str(data["id"]), "name": str(data.get("name") or data["id"]),
-            "version": str(data.get("version") or ""), "deps": deps}
+            "version": str(data.get("version") or ""), "deps": deps,
+            "environment": {"client": "client", "server": "server", "*": "both"}.get(
+                data.get("environment", "*"), "unknown")}
 
 
 def _read_mods_toml(zf, name):
@@ -187,7 +191,8 @@ def _read_mods_toml(zf, name):
             deps.append((str(g["modId"]), t, str(g.get("versionRange") or "*")))
     return {"loader": "neoforge" if "neoforge" in name else "forge",
             "id": modid, "name": str(main.get("displayName") or main.get("name") or modid),
-            "version": str(main.get("version") or ""), "deps": deps}
+            "version": str(main.get("version") or ""), "deps": deps,
+            "environment": "unknown"}  # dependency.side is NOT the mod's own environment
 
 
 def read_mod_metadata(jar_path: str) -> dict | None:

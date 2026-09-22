@@ -8,6 +8,7 @@ Agent 工具层:CLI 命令与 AI 工具调用共用的函数实现。
 """
 from typing import Callable
 
+import json
 import os
 
 import paths
@@ -198,6 +199,136 @@ def read_crash_report(instance: str, game_dir: str | None = None) -> str:
 def get_settings() -> str:
     s = load_settings()
     return "\n".join(f"{k}: {v}" for k, v in s.items() if k != "ai_api_key")
+
+
+def _resolve_server(server: str, game_dir: str | None = None) -> dict:
+    from server_packs import list_servers as _list_servers
+    value = str(server or '').strip()
+    matches = [item for item in _list_servers(_gd(game_dir))
+               if item['id'] == value or item['name'] == value]
+    if len(matches) != 1:
+        available = '、'.join(item['name'] for item in _list_servers(_gd(game_dir))) or '无'
+        raise ValueError(f'无法唯一找到服务端“{value}”；当前服务端：{available}')
+    return matches[0]
+
+
+def list_server_instances(game_dir: str | None = None) -> str:
+    from server_packs import list_servers as _list_servers
+    servers = _list_servers(_gd(game_dir))
+    if not servers:
+        return '(还没有服务端)'
+    return '\n'.join(
+        f"{item['name']}  id={item['id']}  "
+        f"({'候选' if item.get('candidate') else '普通'} · "
+        f"{item['report'].get('loader', 'unknown')} · "
+        f"MC {item['report'].get('minecraftVersion') or '未知'})"
+        for item in servers)
+
+
+def read_server_candidate_report(server: str, game_dir: str | None = None) -> str:
+    from server_packs import read_candidate_report
+    from server_pack_report import report_text
+    item = _resolve_server(server, game_dir)
+    report = read_candidate_report(item)
+    return report_text(report) if report else '(这个服务端没有候选转换报告)'
+
+
+def list_server_mods(server: str, game_dir: str | None = None) -> str:
+    from mod_deps import read_mod_metadata
+    item = _resolve_server(server, game_dir)
+    directory = os.path.join(item['path'], 'mods')
+    if not os.path.isdir(directory):
+        return '(这个服务端没有 mods 目录)'
+    rows = []
+    for filename in sorted(os.listdir(directory)):
+        if not filename.lower().endswith(('.jar', '.jar.disabled')):
+            continue
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path) or os.path.islink(path):
+            continue
+        info = read_mod_metadata(path) or {}
+        state = '已停用' if filename.lower().endswith('.disabled') else '启用'
+        rows.append(f"{filename}  [{state} · {info.get('environment', 'unknown')}]"
+                    f"  modId={info.get('id') or '未知'}")
+    return '\n'.join(rows) if rows else '(mods 目录为空)'
+
+
+def read_server_log(server: str, tail: int = 240, game_dir: str | None = None) -> str:
+    from server_host_client import managed_status
+    from log_privacy import redact_text
+    item = _resolve_server(server, game_dir)
+    state = managed_status(item['path'], probe=False)
+    path = (state or {}).get('logFile')
+    if not path or not os.path.isfile(path):
+        return '(这个服务端还没有由 AMCL 托管的启动日志)'
+    root = os.path.realpath(item['path'])
+    actual = os.path.realpath(path)
+    if actual != root and not actual.startswith(root + os.sep):
+        return '(日志路径不安全，已拒绝读取)'
+    try:
+        size = os.path.getsize(actual)
+        with open(actual, 'rb') as stream:
+            offset = max(0, size - 4 * 1024 * 1024)
+            stream.seek(offset)
+            data = stream.read(4 * 1024 * 1024)
+        text = data.decode('utf-8', errors='replace')
+        lines = text.splitlines()
+        if offset and lines:
+            lines = lines[1:]  # first line may start in the middle of a character/record
+    except OSError as exc:
+        return f'(读取服务端日志失败：{exc})'
+    limit = max(20, min(int(tail or 240), 1200))
+    return redact_text('\n'.join(lines[-limit:]))
+
+
+def set_server_mod_enabled(server: str, filename: str, enabled: bool,
+                           reason: str = 'diagnostic_only', game_dir: str | None = None) -> str:
+    """Reversibly rename one server Mod. Never delete or touch a running server."""
+    from server_host_client import managed_status
+    item = _resolve_server(server, game_dir)
+    state = managed_status(item['path'])
+    if state and state.get('running'):
+        return '错误：服务端正在运行，请先正常停止后再调整 Mod。'
+    name = str(filename or '').strip()
+    allowed_reasons = {'client_only', 'dependency_conflict', 'wrong_version', 'diagnostic_only'}
+    if reason not in allowed_reasons:
+        return '错误：停用原因无效。'
+    if not name or os.path.basename(name) != name or name in ('.', '..'):
+        return '错误：Mod 文件名无效。'
+    directory = os.path.realpath(os.path.join(item['path'], 'mods'))
+    os.makedirs(directory, exist_ok=True)
+    if enabled:
+        disabled_name = name if name.lower().endswith('.jar.disabled') else name + '.disabled'
+        enabled_name = disabled_name[:-len('.disabled')]
+        source, target = os.path.join(directory, disabled_name), os.path.join(directory, enabled_name)
+    else:
+        enabled_name = name[:-len('.disabled')] if name.lower().endswith('.jar.disabled') else name
+        if not enabled_name.lower().endswith('.jar'):
+            return '错误：只能调整 .jar Mod。'
+        source, target = os.path.join(directory, enabled_name), os.path.join(directory, enabled_name + '.disabled')
+    if os.path.islink(source) or os.path.islink(target):
+        return '错误：拒绝调整链接文件。'
+    if not os.path.isfile(source):
+        if os.path.isfile(target):
+            return '无需修改：这个 Mod 已经是目标状态。'
+        return f'错误：没有找到 {os.path.basename(source)}。'
+    if os.path.exists(target):
+        return f'错误：目标文件 {os.path.basename(target)} 已存在，未覆盖。'
+    if not enabled and reason != 'diagnostic_only':
+        from mod_deps import read_mod_metadata
+        info = read_mod_metadata(source) or {}
+        if reason == 'client_only':
+            if info.get('environment') != 'client':
+                return '没有执行：Mod 内部元数据没有明确声明仅客户端。'
+        else:
+            log = read_server_log(server, tail=1200, game_dir=game_dir).lower()
+            evidence = [enabled_name.lower(), str(info.get('id') or '').lower()]
+            if not any(value and value in log for value in evidence):
+                return '没有执行：本次服务端日志没有指向这个 Mod，证据不足。'
+    os.replace(source, target)
+    action = '启用' if enabled else '停用'
+    return (f'已{action} {os.path.basename(target)}；原文件没有删除。'
+            f'原因：{reason}。若结果变差，可用相反状态恢复。')
 
 
 # ---------------- 写操作类(需要工作区写权限) ----------------

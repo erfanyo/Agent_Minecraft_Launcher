@@ -41,6 +41,8 @@ def main() -> int:
             errors.append(f"bridge-mod 校验失败：{name}")
 
     required_files = [os.path.join("icons", "grass_block.png"),
+                      os.path.join("icons", "server_cabinet_dark.png"),
+                      os.path.join("icons", "server_cabinet_light.png"),
                       "THIRD_PARTY_NOTICES.md"]
     if current_os_name() == "windows":
         required_files.append(os.path.join("icons", "grass_block.ico"))

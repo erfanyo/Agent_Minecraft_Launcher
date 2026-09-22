@@ -9,6 +9,11 @@ from installed_resource_cards import (read_card, warning, incompatible_version,
 
 
 class CardTests(unittest.TestCase):
+    def test_environment_labels(self):
+        from installed_resource_cards import environment_label
+        self.assertEqual(environment_label({'formats': []}), '')
+        self.assertEqual(environment_label({'formats': ['forge']}), '适用端未知')
+        self.assertEqual(environment_label({'formats': ['fabric'], 'environment': 'client'}), '仅客户端')
     def test_render(self):
         from PySide6.QtWidgets import QApplication, QListWidget, QListWidgetItem
         from PySide6.QtCore import Qt
@@ -50,6 +55,7 @@ class CardTests(unittest.TestCase):
             self.assertEqual(data['image'], b'example')
             self.assertEqual(data['formats'], ['fabric'])
             self.assertEqual(data['id'], 'test')
+            self.assertEqual(data['environment'], 'both')
 
     def test_latest_log_provides_loaded_mod_evidence(self):
         with tempfile.TemporaryDirectory() as folder:

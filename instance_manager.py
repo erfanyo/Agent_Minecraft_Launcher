@@ -394,6 +394,20 @@ class InstanceManagerDialog(QWidget):
         layout.addWidget(title)
         layout.addWidget(desc)
         layout.addWidget(btn)
+        server_btn = QPushButton("自动转换为候选服务端…")
+        set_style(server_btn, card_btn_style)
+        server_btn.clicked.connect(self._open_server_builder_dialog)
+        layout.addWidget(server_btn)
+        server_hint = QLabel(
+            "自动转换会安装并打包对应服务端运行库，生成可导入 AMCL 的候选服务端 ZIP；"
+            "不会只把客户端 mods/config 原样压缩。")
+        server_hint.setWordWrap(True)
+        server_hint.setStyleSheet(hint_style())
+        layout.addWidget(server_hint)
+        manual_server_btn = QPushButton("仅手动导出服务端内容（不含运行库）…")
+        set_style(manual_server_btn, card_btn_style)
+        manual_server_btn.clicked.connect(self._open_server_export_dialog)
+        layout.addWidget(manual_server_btn)
         layout.addWidget(hint)
         layout.addStretch()
         return tab
@@ -404,6 +418,20 @@ class InstanceManagerDialog(QWidget):
         dlg = PackExportDialog(self.inst_id, self.inst_dir, self,
                                base=base, loader=loader or "", loader_version=lver or "")
         dlg.exec()
+
+    def _open_server_export_dialog(self):
+        from export_modpack import PackExportDialog
+        dlg = PackExportDialog(self.inst_id, self.inst_dir, self,
+                               base=self._inst_base, loader=self._inst_loader or '',
+                               loader_version=self._detect_loader_version() or '', server_mode=True)
+        dlg.exec()
+
+    def _open_server_builder_dialog(self):
+        from server_pack_builder_ui import open_server_pack_builder
+        open_server_pack_builder(
+            self, instance_id=self.inst_id, instance_dir=self.inst_dir,
+            game_dir=self.game_dir, minecraft=self._inst_base,
+            loader=self._inst_loader or '', loader_version=self._detect_loader_version() or '')
 
     def _detect_loader_version(self) -> str:
         """从实例版本 JSON / 目录名推断加载器版本(如 fabric-loader-0.19.3-1.21.1 → 0.19.3)。"""

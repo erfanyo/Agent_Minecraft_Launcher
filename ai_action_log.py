@@ -42,6 +42,9 @@ def _plain_preview(name: str, args: dict) -> str:
         'install_instance': '保留当前实例，创建一个新的独立游戏实例，并下载运行所需文件。',
         'install_modpack': '创建一个新的独立整合包实例，不覆盖当前实例。',
         'create_plugin': '给启动器添加一项新功能；需要重启启动器后生效。',
+        'set_server_mod_enabled': (
+            f'{"恢复启用" if enabled else "暂时停用"}服务端“{args.get("server") or "当前服务端"}”中的'
+            f'“{args.get("filename") or "这个 Mod"}”；只重命名文件，不会删除。'),
     }
     return summaries.get(name, '执行完成当前任务所需的一项操作。')
 
@@ -51,11 +54,13 @@ def preview(name: str, args: dict, response_style: str = 'technical') -> str:
     args = dict(args or {})
     if response_style == 'plain':
         return _plain_preview(name, args)
-    if name in {'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'}:
+    if name in {'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled',
+                'replace_mod_version', 'set_server_mod_enabled'}:
         scopes = {'snapshot_instance': '复制完整实例，默认锁定 MC 和加载器；需要额外磁盘空间。',
                   'restore_instance_snapshot': '恢复指定快照，当前实例先移到保留目录；不是合并文件。',
                   'set_mod_enabled': '改变指定 Mod 启用状态，可能影响依赖和存档内容；不删除文件。',
-                  'replace_mod_version': '下载并校验指定版本后替换旧 JAR；旧文件保留，前置不自动安装。'}
+                  'replace_mod_version': '下载并校验指定版本后替换旧 JAR；旧文件保留，前置不自动安装。',
+                  'set_server_mod_enabled': '改变单个服务端 Mod 的启用状态；服务端必须已停止，只重命名文件，不删除。'}
         return scopes[name] + '\n具体参数：' + json.dumps(args, ensure_ascii=False)
     if name in {'repair_instance_core', 'complete_instance_files', 'reset_instance'}:
         from instance_maintenance import maintenance_preview
