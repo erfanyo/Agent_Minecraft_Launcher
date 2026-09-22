@@ -66,6 +66,19 @@ DATA_PALETTE_WHITELIST = {
     "#e8ecf2": "tutorial_gui 内联 HTML 文字(也是通用浅色文字,见候选区)",
     # 白色/主题无关 + 半透明灰浮层 + 深色画布/浮层 + 防御性 fallback
     "#ffffff": "绝对白(强调底白字 / 深色画布 / 浅色输入底)——主题无关",
+    # chat_view 渲染层单测的**固定注入 token**(不是产品配色,不应迁 ui_tokens)
+    # 用途:断言"传入什么色就渲染什么色",固定值才能稳定比对;产品侧颜色由
+    # ui_style 经 default_tokens() 注入,chat_view.py 自身零硬编码色值。
+    "#111111": "chat_view 单测注入 token(text)",
+    "#777777": "chat_view 单测注入 token(muted)",
+    "#2222cc": "chat_view 单测注入 token(accent)",
+    "#229922": "chat_view 单测注入 token(success)",
+    "#cc8800": "chat_view 单测注入 token(warning)",
+    "#cc2222": "chat_view 单测注入 token(danger)",
+    "#cccccc": "chat_view 单测注入 token(border)",
+    "#eeeeff": "chat_view 单测注入 token(user_bg)",
+    "#f5f5f5": "chat_view 单测注入 token(ai_bg)",
+    "#fafafa": "chat_view 单测注入 token(row_alt)",
     "rgba(128,128,128,90)": "assistant_ui 语音/截图按钮半透明灰悬停底",
     "rgba(128,128,128,160)": "assistant_ui 语音/截图按钮半透明灰按下底",
     "#2e5a85": "assistant_ui 发送按钮按下蓝(独立蓝系)",

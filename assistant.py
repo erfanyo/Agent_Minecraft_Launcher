@@ -49,7 +49,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
-    QTextBrowser,
     QToolButton,
     QTabWidget,
     QVBoxLayout,
@@ -70,6 +69,7 @@ from assistant_ui import (
     RecentScreenshotsDialog,
     SendWithRing,
 )
+from chat_view import ChatEntry, ChatView, coerce_entries
 from ui_style import set_style, list_style, muted_color, accent_color, success_color, warning_color, danger_color, text_color, current_color, tab_style
 from ui_background import BackgroundWidget
 from settings import save_settings
@@ -1572,10 +1572,8 @@ class AIChatDock(QDockWidget):
         # 用完即卸:本地推理结束 → 主线程安排闲置卸载(§5)
         self.signals.local_idle.connect(self._schedule_idle_unload)
 
-        self.history = QTextBrowser()
+        self.history = ChatView()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
-        self.history.setStyleSheet(
-            "QTextBrowser { background: transparent; border: none; }")
         self.input = _ChatInput()
         self.input.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)")
         self.input.returnPressed.connect(self.send)
@@ -1725,7 +1723,7 @@ class AIChatDock(QDockWidget):
         self.setObjectName("AIChatDock")
 
         self._tool_id = 0              # 工具调用编号
-        self._entries = []             # 历史条目(kind, ...),展开时整体重渲染
+        self._entries = []             # 展示流(ChatEntry);渲染交给 chat_view
         self._tool_expand_levels = {}  # 工具折叠级别:0摘要 / 1参数+结果摘要 / 2完整结果
         self._expanded_ai = set()      # 已展开的长 AI 回答(按 _entries 中的索引)
         self._chat_messages = []       # 真正的对话历史(喂给 LLM 的消息,不含 system)
@@ -1999,7 +1997,7 @@ class AIChatDock(QDockWidget):
             QMessageBox.warning(self, "恢复", f"❌ 读取失败:{s.get('error')}")
             return
         self._chat_messages = list(s.get("chat_messages", []))
-        self._entries = list(s.get("entries", []))
+        self._entries = coerce_entries(s.get("entries", []))
         self._render_all()
         self.tabs.setCurrentIndex(0)          # 切回聊天 tab
         self.input.setFocus()
@@ -2015,88 +2013,44 @@ class AIChatDock(QDockWidget):
             QMessageBox.information(self, "删除", "已删除该归档会话。")
             self._refresh_archive_list()
 
-    # ---- 消息显示(条目化,支持展开重渲染) ----
+    # ---- 消息显示(条目化,渲染委托给 chat_view) ----
     def _append_system(self, text: str):
-        self._entries.append(("system", text))
+        self._entries.append(ChatEntry(kind="system", text=text))
         self._render_all()
 
     def _append_user(self, text: str):
-        self._entries.append(("user", text))
+        self._entries.append(ChatEntry(kind="user", text=text))
         self._render_all()
 
     def _append_ai(self, text: str):
-        self._entries.append(("ai", text))
+        self._entries.append(ChatEntry(kind="ai", text=text))
+        self._render_all()
+
+    def append_table(self, title: str, columns: list, rows: list):
+        """追加一张结构化表格到对话流(工具返回结构化数据时的展示落点)。"""
+        self._entries.append(ChatEntry(kind="table", title=title,
+                                       columns=list(columns or []),
+                                       rows=[list(r) for r in (rows or [])]))
         self._render_all()
 
     def _ai_summary(self, text: str, width: int = 90) -> str:
-        """长 AI 回答的折叠摘要:取第一行,超宽截断加省略号。"""
-        first = (text or "").strip().split("\n", 1)[0].strip()
-        if len(first) > width:
-            return first[:width - 1].rstrip() + "…"
-        return first
+        """长 AI 回答的折叠摘要(实现见 chat_view,保留此名以兼容既有调用)。"""
+        from chat_view import ai_summary
+        return ai_summary(text, width)
 
     def _is_long_ai(self, text: str) -> bool:
-        """判定答案是否值得折叠:多行,或单行超过一定长度。"""
-        t = (text or "").strip()
-        if "\n" in t:
-            return True
-        return len(t) > 130
+        """答案是否值得折叠(实现见 chat_view,保留此名以兼容既有调用)。"""
+        from chat_view import is_long_ai
+        return is_long_ai(text)
 
     def _render_all(self):
-        """按条目重绘整个对话流(工具结果/长回答 展开收起都在这里决定)。
+        """把展示流交给渲染层重绘(条目/展开状态由本类提供,渲染逻辑在 chat_view)。
         t13 防御:仅主线程调用(worker 走 system_msg/reply/tool_called 等队列信号);
-        QTextBrowser 部件销毁中(关闭窗口竞态)迟到调用直接忽略。"""
-        try:
-            self.history.clear()
-        except RuntimeError:
-            return
-        for idx, e in enumerate(self._entries):
-            kind = e[0]
-            if kind == "system":
-                self.history.append(f'<p style="color:{muted_color()};">{_esc(e[1])}</p>')
-            elif kind == "user":
-                self.history.append(
-                    f'<p style="background:{current_color("sel_bg")}; padding:7px 9px; border-radius:8px;">'
-                    f'<b style="color:{accent_color()};">你</b><br>{_esc(e[1])}</p>')
-            elif kind == "ai":
-                body = e[1]
-                if self._is_long_ai(body):
-                    # 对用户的 AI 正文默认完整展开；只有用户手动点“收起”才折叠。
-                    if idx in self._expanded_ai:
-                        self.history.append(
-                            f'<p style="background:{current_color("bg1")}; padding:7px 9px; border-radius:8px;">'
-                            f'<b style="color:{success_color()};">AI</b><br>{_esc(self._ai_summary(body))}… '
-                            f'<a href="ai:{idx}" style="color:{accent_color()};">[展开]</a></p>')
-                    else:
-                        self.history.append(
-                            f'<p style="background:{current_color("bg1")}; padding:7px 9px; border-radius:8px;">'
-                            f'<b style="color:{success_color()};">AI</b><br>{_esc(body)} '
-                            f'<a href="ai:{idx}" style="color:{accent_color()};">[收起]</a></p>')
-                else:
-                    self.history.append(
-                        f'<p style="background:{current_color("bg1")}; padding:7px 9px; border-radius:8px;">'
-                        f'<b style="color:{success_color()};">AI</b><br>{_esc(body)}</p>')
-            elif kind == "tool":
-                # 两级折叠:默认仅显示工具名；第一次查看参数/结果摘要；第二次才显示完整结果。
-                _k, tid, name, args, result = e
-                args_text = ", ".join(f"{k}={v}" for k, v in args.items())[:60] or "(无参数)"
-                full = (result or "").strip()
-                level = self._tool_expand_levels.get(tid, 0)
-                if level >= 2:
-                    self.history.append(
-                        f'<p style="color:{muted_color()};">🔧 工具 {name}({_esc(args_text)})'
-                        f'<br>&nbsp;&nbsp;→ {_esc(full)} '
-                        f'<a href="tool:{tid}">[收起]</a></p>')
-                elif level == 1:
-                    preview = (full[:60].replace("\n", " ") + "…") if len(full) > 60 else full
-                    self.history.append(
-                        f'<p style="color:{muted_color()};">🔧 工具 {name}({_esc(args_text)})'
-                        f'<br>&nbsp;&nbsp;→ {_esc(preview)} '
-                        f'<a href="tool:{tid}">[完整结果]</a></p>')
-                else:
-                    self.history.append(
-                        f'<p style="color:{muted_color()};">🔧 工具 {name} '
-                        f'<a href="tool:{tid}">[查看]</a></p>')
+        控件销毁中(关闭窗口竞态)的迟到调用由 ChatView 内部忽略。"""
+        self.history.set_entries(
+            self._entries,
+            tool_level=self._tool_expand_levels.get,
+            expanded_ai=self._expanded_ai)
         self._update_ctx_ring()
 
     def _update_ctx_ring(self):
@@ -2117,7 +2071,8 @@ class AIChatDock(QDockWidget):
     def _show_tool(self, name: str, args: dict, result: str):
         """把一次工具调用记入历史。结果太长默认折叠,点 [展开] 看全文。"""
         self._tool_id += 1
-        self._entries.append(("tool", self._tool_id, name, args, result))
+        self._entries.append(ChatEntry(kind="tool", tool_id=self._tool_id,
+                                       name=name, args=args or {}, result=result))
         self._render_all()
 
     # ---- 图片输入 ----

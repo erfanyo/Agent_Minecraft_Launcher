@@ -74,7 +74,8 @@ def list_sessions() -> list:
 def load_session(path: str) -> dict:
     """读取一份会话。返回 {ok, title, chat_messages, entries} 或 {ok:False,error}。"""
     try:
-        d = json.load(open(path, encoding="utf-8"))
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
         return {"ok": True, "title": d.get("title", ""),
                 "chat_messages": d.get("chat_messages", []),
                 "entries": _deserialize_entries(d.get("entries", []))}
@@ -93,10 +94,13 @@ def delete_session(path: str) -> bool:
 
 
 def _default_title(chat_messages, entries) -> str:
-    """取第一条用户消息前 20 字做标题。"""
+    """取第一条用户消息前 20 字做标题。兼容 ChatEntry 与旧元组。"""
     for e in entries or []:
-        if e and e[0] == "user":
-            return (e[1] or "对话")[:20]
+        kind = getattr(e, "kind", None) if not isinstance(e, tuple) else (
+            e[0] if e else None)
+        if kind == "user":
+            text = e.text if hasattr(e, "text") else (e[1] or "")
+            return (text or "对话")[:20]
     for m in chat_messages or []:
         if m.get("role") == "user":
             return (m.get("content", "") or "对话")[:20]
@@ -104,28 +108,21 @@ def _default_title(chat_messages, entries) -> str:
 
 
 def _serialize_entries(entries: list) -> list:
-    """把展示流条目转成可 JSON 的结构(丢弃不便序列化的对象)。"""
+    """把展示流条目转成可 JSON 的结构。
+
+    接受 ``chat_view.ChatEntry``(当前格式)与旧的裸元组(历史归档),统一输出
+    ``{"kind": ...}`` 字典,因此新写入的归档不再依赖元组位置。
+    """
+    from chat_view import ChatEntry
     out = []
-    for e in entries:
-        if not isinstance(e, tuple) or not e:
-            continue
-        kind = e[0]
-        if kind in ("system", "user", "ai"):
-            out.append({"kind": kind, "text": str(e[1])})
-        elif kind == "tool" and len(e) == 5:
-            # ("tool", id, name, args, result)
-            out.append({"kind": "tool", "id": e[1], "name": e[2],
-                        "args": e[3], "result": e[4]})
+    for e in entries or []:
+        entry = ChatEntry.from_any(e)
+        if entry is not None:
+            out.append(entry.to_dict())
     return out
 
 
 def _deserialize_entries(data: list) -> list:
-    out = []
-    for it in data or []:
-        kind = it.get("kind")
-        if kind in ("system", "user", "ai"):
-            out.append((kind, it.get("text", "")))
-        elif kind == "tool":
-            out.append(("tool", it.get("id", 0), it.get("name", ""),
-                        it.get("args", {}), it.get("result", "")))
-    return out
+    """读回归档条目,统一成 ``chat_view.ChatEntry``(渲染层直接可用)。"""
+    from chat_view import coerce_entries
+    return coerce_entries(data or [])
