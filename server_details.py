@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QListWidget, QPushButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QListWidget, QPushButton, QVBoxLayout, QWidget)
 
 from center_shell import CenterShell
 from server_packs import (list_servers, read_candidate_report,
@@ -33,6 +33,7 @@ def server_sections():
     return [
         ('概览', None),
         ('Mod', None),
+        ('玩家名单', None),
         ('运行配置', None),
         ('备份·存档', None),
         ('高级选项', '__group__'),
@@ -117,6 +118,7 @@ class ServerDetailsView(QWidget):
         return {
             '概览': self._build_overview,
             'Mod': self._build_mods,
+            '玩家名单': self._build_players,
             '运行配置': self._build_runtime,
             '备份·存档': self._build_backups,
             'server.properties': self._build_properties,
@@ -171,22 +173,157 @@ class ServerDetailsView(QWidget):
         layout.addWidget(listing, 1)
         return tab
 
+    def _build_players(self) -> QWidget:
+        """白名单 / OP / 封禁:在同一个页面里分类管理。"""
+        import server_players as spl
+        tab, layout = self._panel(
+            '玩家名单',
+            '管理白名单、OP 与封禁。文件格式错误时启动器会拒绝写入，'
+            '以免把整份名单覆盖掉；服务端运行时也拒绝修改。')
+        self._player_lists = {}
+        for kind in ('whitelist', 'ops', 'banned-players', 'banned-ips'):
+            box = QGroupBox(spl.label_for(kind) + f'（{spl.filename_for(kind)}）')
+            column = QVBoxLayout(box)
+            status = QLabel('')
+            status.setWordWrap(True)
+            listing = QListWidget()
+
+            add_row = QHBoxLayout()
+            name_edit = QLineEdit()
+            name_edit.setPlaceholderText('玩家名（封禁 IP 时填 IP）')
+            add_btn = QPushButton('添加')
+            remove_btn = QPushButton('移除选中')
+            add_row.addWidget(name_edit, 1)
+            add_row.addWidget(add_btn)
+            add_row.addWidget(remove_btn)
+
+            def refresh(kind=kind, listing=listing, status=status):
+                entries, error = spl.read_entries(self.server_dir, kind)
+                listing.clear()
+                if error:
+                    status.setText('⛔ ' + error)
+                    return
+                for entry in entries:
+                    extra = ''
+                    if kind == 'ops':
+                        extra = f"  Lv{entry.get('level', '?')}"
+                    elif entry.get('reason'):
+                        extra = f"  （{entry['reason']}）"
+                    listing.addItem(spl.entry_name(entry) + extra)
+                status.setText(f'共 {len(entries)} 条。')
+
+            def do_add(kind=kind, edit=name_edit, refresh=refresh, status=status):
+                name = edit.text().strip()
+                if not name:
+                    return
+                entries, error = spl.read_entries(self.server_dir, kind)
+                if error:
+                    status.setText('⛔ ' + error)
+                    return
+                try:
+                    updated = spl.add_entry(entries, kind, name=name)
+                except ValueError as exc:
+                    status.setText(f'⛔ {exc}')
+                    return
+                result = spl.apply_entries(self.server_dir, kind, updated)
+                status.setText(('✅ ' if result['ok'] else '⛔ ') + result['message'])
+                if result['ok']:
+                    edit.clear()
+                    refresh()
+
+            def do_remove(kind=kind, listing=listing, refresh=refresh, status=status):
+                item = listing.currentItem()
+                if item is None:
+                    return
+                # 列表里带了后缀(Lv/原因),只取显示名部分
+                name = item.text().split('  ')[0].strip()
+                entries, error = spl.read_entries(self.server_dir, kind)
+                if error:
+                    status.setText('⛔ ' + error)
+                    return
+                result = spl.apply_entries(
+                    self.server_dir, kind, spl.remove_entry(entries, name))
+                status.setText(('✅ ' if result['ok'] else '⛔ ') + result['message'])
+                if result['ok']:
+                    refresh()
+
+            add_btn.clicked.connect(do_add)
+            remove_btn.clicked.connect(do_remove)
+            column.addWidget(listing)
+            column.addLayout(add_row)
+            column.addWidget(status)
+            refresh()
+            self._player_lists[kind] = refresh
+            layout.addWidget(box)
+        return tab
+
     def _build_runtime(self) -> QWidget:
         tab, layout = self._panel(
             '运行配置', '内存、Java、启动参数等运行期设置。')
-        layout.addWidget(QLabel('服务端运行配置沿用客户端的「启动设置」体系，'
-                                '后续在此集中展示。'))
+        report = (self.server or {}).get('report') or {}
+        rows = [
+            ('加载器', f"{report.get('loader', 'unknown')} "
+                       f"{report.get('loaderVersion') or ''}".strip()),
+            ('Minecraft', report.get('minecraftVersion') or '未确认'),
+            ('需要 Java', str(report.get('requiredJava') or '未记录')),
+            ('启动入口', (report.get('verification') or {}).get('entry') or '未静态验证'),
+            ('EULA', '已接受' if report.get('eulaAccepted') else '未接受（首次启动需确认）'),
+        ]
+        for name, value in rows:
+            label = QLabel(f'<b>{name}</b>：{value}')
+            label.setWordWrap(True)
+            layout.addWidget(label)
+        note = QLabel('这些值来自转换时生成的报告。内存与 JVM 参数的逐项修改'
+                      '会接到客户端同一套「启动设置」体系上（尚未接线）。')
+        note.setWordWrap(True)
+        note.setStyleSheet(hint_style())
+        layout.addWidget(note)
         layout.addStretch()
         return tab
 
     def _build_backups(self) -> QWidget:
         tab, layout = self._panel(
             '备份·存档', '服务端的存档与备份。')
-        world = os.path.join(self.server_dir, 'world')
-        layout.addWidget(QLabel(f"世界目录：{'存在' if os.path.isdir(world) else '不存在'}"
-                                f'（{world}）'))
+        rows = [
+            ('世界目录', os.path.join(self.server_dir, 'world')),
+            ('mods', os.path.join(self.server_dir, 'mods')),
+            ('crash-reports', os.path.join(self.server_dir, 'crash-reports')),
+        ]
+        for name, path in rows:
+            exists = os.path.isdir(path)
+            count = ''
+            if exists:
+                try:
+                    count = f'（{len(os.listdir(path))} 项）'
+                except OSError:
+                    count = ''
+            state = '存在' if exists else '不存在'
+            label = QLabel(f'<b>{name}</b>：{state}{count}')
+            label.setWordWrap(True)
+            layout.addWidget(label)
+        world_size = self._dir_size(os.path.join(self.server_dir, 'world'))
+        size_label = QLabel(f'<b>世界占用</b>：{world_size}')
+        layout.addWidget(size_label)
         layout.addStretch()
         return tab
+
+    @staticmethod
+    def _dir_size(path: str) -> str:
+        """世界目录大小(人类可读);失败返回「未知」。"""
+        if not os.path.isdir(path):
+            return '未知'
+        total = 0
+        for base, _dirs, files in os.walk(path):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(base, name))
+                except OSError:
+                    continue
+        for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+            if total < 1024 or unit == 'TB':
+                return f'{total:.1f} {unit}' if unit != 'B' else f'{total} B'
+            total /= 1024.0
+        return '未知'
 
     def _build_properties(self) -> QWidget:
         from server_properties_io import properties_path, server_running

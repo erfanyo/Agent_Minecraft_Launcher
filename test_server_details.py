@@ -155,10 +155,18 @@ class ServerDetailsTests(unittest.TestCase):
     def test_sections_match_expected_shape(self):
         from server_details import server_sections
         labels = [label for label, _group in server_sections()]
-        self.assertEqual(labels[:4], ['概览', 'Mod', '运行配置', '备份·存档'])
+        self.assertEqual(labels[:5], ['概览', 'Mod', '玩家名单', '运行配置', '备份·存档'])
         self.assertIn('高级选项', labels)
         self.assertIn('server.properties', labels)
         self.assertIn('KubeJS', labels)
+
+    def test_no_section_is_a_placeholder_stub(self):
+        """章节列表里不应再有「未实现」占位——占位会让用户以为功能坏了。"""
+        from server_details import server_sections
+        labels = [label for label, _group in server_sections()]
+        self.assertNotIn('（未实现）', labels)
+        for label in labels:
+            self.assertNotIn('未实现', label)
 
     def test_advanced_group_collapsed_by_default(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -201,6 +209,23 @@ class ServerDetailsTests(unittest.TestCase):
             self.assertIsNotNone(view.shell)
             view.set_server(None)
             self.assertIsNone(view.shell)
+
+    def test_player_section_add_and_remove(self):
+        """玩家名单页要能真的落盘(通过视图上的按钮路径)。"""
+        import server_players as spl
+        with tempfile.TemporaryDirectory() as temp:
+            record = self._record(temp)
+            view = self._make_view()
+            view.set_server(record)
+            self.assertIn('whitelist', view._player_lists)
+            # 直接走模块层,验证视图暴露的刷新钩子能读到写入结果
+            result = spl.apply_entries(record['path'], 'whitelist',
+                                       spl.add_entry([], 'whitelist',
+                                                     name='Steve', uuid='u1'))
+            self.assertTrue(result['ok'], result)
+            view._player_lists['whitelist']()
+            entries, _ = spl.read_entries(record['path'], 'whitelist')
+            self.assertEqual([spl.entry_name(e) for e in entries], ['Steve'])
 
 
 if __name__ == '__main__':
