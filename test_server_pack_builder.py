@@ -55,6 +55,52 @@ class ServerPackBuilderTests(unittest.TestCase):
             self.assertEqual(report['secretPaths'], ['config/bridge.toml'])
             self.assertNotIn('do-not-copy-this-value-into-report', json.dumps(report))
 
+    def test_custom_top_level_folder_is_kept_not_filtered(self):
+        """A hand-written integration folder must survive conversion.
+
+        Regression for the real-world case where ``hotai/`` (patch data that
+        makes a server-side API exist) was dropped by a fixed whitelist, so the
+        candidate server booted but failed at runtime.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp, 'instance')
+            root.joinpath('mods').mkdir(parents=True)
+            root.joinpath('hotai', 'com', 'example').mkdir(parents=True)
+            root.joinpath('hotai', 'com', 'example', 'Patch.badiff').write_bytes(b'patch')
+            root.joinpath('tlm_custom_pack', 'models').mkdir(parents=True)
+            root.joinpath('tlm_custom_pack', 'models', 'maid.json').write_text(
+                '{}', encoding='utf-8')
+            # Personal launcher data must still be dropped.
+            root.joinpath('saves', 'world').mkdir(parents=True)
+            root.joinpath('saves', 'world', 'level.dat').write_bytes(b'personal')
+            root.joinpath('logs').mkdir()
+            root.joinpath('logs', 'latest.log').write_text('noise', encoding='utf-8')
+            report = inspect_client_instance(root)
+            targets = {item['target'] for item in report['files']}
+            self.assertIn('hotai/com/example/Patch.badiff', targets)
+            self.assertIn('tlm_custom_pack/models/maid.json', targets)
+            self.assertNotIn('saves/world/level.dat', targets)
+            self.assertNotIn('logs/latest.log', targets)
+
+    def test_mod_manifest_pins_original_names_without_renaming(self):
+        """Mod filenames keep their Chinese prefixes; the manifest maps ids."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp, 'instance')
+            root.joinpath('mods').mkdir(parents=True)
+            display = '[机械动力] create-1.20.1-6.0.8.jar'
+            _jar(root / 'mods' / display, 'META-INF/mods.toml',
+                 'modLoader="javafml"\nloaderVersion="[47,)"\n'
+                 '[[mods]]\nmodId="create"\ndisplayName="Create"\n')
+            report = inspect_client_instance(root)
+            entry = next(item for item in report['modManifest']
+                         if item['file'] == display)
+            self.assertEqual(entry['file'], display)
+            self.assertFalse(entry['renamed'])
+            self.assertEqual(entry['modId'], 'create')
+            self.assertTrue(entry['fileAscii'].isascii())
+            targets = {item['target'] for item in report['files']}
+            self.assertIn(f'mods/{display}', targets)
+
     def test_build_is_read_only_and_emits_reviewable_candidate(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp, 'instance')
@@ -82,6 +128,10 @@ class ServerPackBuilderTests(unittest.TestCase):
                 self.assertNotIn('server/mods/client.jar', names)
                 self.assertNotIn('server/eula.txt', names)
                 self.assertIn('amcl-build-report.json', names)
+                self.assertIn('amcl-mod-manifest.json', names)
+                pinned = json.loads(archive.read('amcl-mod-manifest.json').decode('utf-8'))
+                self.assertEqual(pinned['schemaVersion'], 1)
+                self.assertEqual([item['file'] for item in pinned['mods']], ['keep.jar'])
                 report_text = archive.read('amcl-build-report.json').decode('utf-8')
                 self.assertNotIn(str(root), report_text)
             scan = inspect_archive(output)

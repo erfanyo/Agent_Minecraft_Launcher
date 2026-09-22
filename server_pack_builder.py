@@ -94,6 +94,13 @@ def _archive(stage, destination, manifest, report, status, progress):
                          json.dumps(manifest, ensure_ascii=False, indent=2))
         archive.writestr('amcl-build-report.json', report_json(report))
         archive.writestr('AMCL-候选服务端审核报告.txt', report_text(report))
+        # Pinned Mod naming: lets later tooling identify a Mod by id instead of
+        # by filename, so no transliteration is ever needed on the pack side.
+        archive.writestr('amcl-mod-manifest.json', json.dumps({
+            'schemaVersion': 1,
+            'note': 'Mod 文件保持原命名（含中文前缀），本清单用于按 id 反查。',
+            'mods': report.get('modManifest') or [],
+        }, ensure_ascii=False, indent=2))
     status('候选服务端包已生成。')
 
 
@@ -143,6 +150,7 @@ def build_candidate_server_pack(instance_dir, destination, *, name, minecraft,
                        'sourcePathStored': False, 'readOnly': True},
             'selectedWorld': selected_world,
             'mods': source_report['mods'],
+            'modManifest': source_report.get('modManifest') or [],
             'secretPaths': source_report['secretPaths'],
             'warnings': source_report['warnings'],
             'verification': {
