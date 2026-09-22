@@ -650,6 +650,11 @@ class SettingsCenter(QWidget):
         if p is not None and hasattr(p, "open_guide_demo"):
             p.open_guide_demo()
 
+    def _open_changelog(self):
+        """更新日志对话框(从首页标签页搬来;首次打开时才拉取)。"""
+        from changelog_dialog import ChangelogDialog
+        ChangelogDialog(self).exec()
+
     # ================= 系统 =================
     def _build_system(self) -> QWidget:
         """与视觉外观无关的维护项集中在这里，避免“个性化”页变成杂物间。"""
@@ -664,11 +669,16 @@ class SettingsCenter(QWidget):
 
         update_btn = QPushButton(t("CHECK_FOR_UPDATES"))
         tutorial_btn = QPushButton(t("REPLAY_GUIDED_TUTORIAL"))
-        for btn in (update_btn, tutorial_btn):
+        # 更新日志从首页标签页搬到这里:与「检查更新」同属「关于启动器自身」的动作。
+        changelog_btn = QPushButton("更新日志")
+        for btn in (update_btn, tutorial_btn, changelog_btn):
             btn.setMinimumHeight(34); set_style(btn, card_btn_style)
         update_btn.clicked.connect(self._open_update)
         tutorial_btn.clicked.connect(self._open_guide)
-        actions = QHBoxLayout(); actions.addWidget(update_btn); actions.addWidget(tutorial_btn); actions.addStretch()
+        changelog_btn.clicked.connect(self._open_changelog)
+        actions = QHBoxLayout()
+        actions.addWidget(update_btn); actions.addWidget(changelog_btn)
+        actions.addWidget(tutorial_btn); actions.addStretch()
         l.addLayout(actions)
 
         cache_title = QLabel("缓存")

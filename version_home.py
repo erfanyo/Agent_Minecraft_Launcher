@@ -40,13 +40,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QTabWidget,
-    QTextBrowser,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from changelog import changelog_html, load_changelog
 from i18n import t
 from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
@@ -621,8 +619,8 @@ class VersionHome(QWidget):
     instance_selected = Signal(object)       # 选中实例(或 None)→ 主窗口 显示/隐藏「实例详情」标签页
     refresh_requested = Signal()             # 切回「实例」标签页请求刷新(无刷新按钮,自动刷)
     launch_requested = Signal(object)        # 键盘回车启动选中实例(遥控器式导航)
-    _changelog_loaded = Signal(list)   # 后台拉取完成 → 主线程渲染(跨线程安全)
-    _changelog_failed = Signal(str)    # 拉取失败(GitHub + 本地都不可用)→ 主线程提示
+    instance_details_requested = Signal()    # 左侧「实例详情」→ 主窗口切到详情页
+    smart_import_requested = Signal(str)     # 指定路径的智能导入
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -630,10 +628,8 @@ class VersionHome(QWidget):
         self._smart_import_enabled = False
         self._build_ui()
         self._on_selection_changed(None, None)
-        # 更新日志:后台线程拉取 GitHub CHANGELOG.md,完成后主线程渲染
-        self._changelog_loaded.connect(self._on_changelog_loaded)
-        self._changelog_failed.connect(self._on_changelog_failed)
-        self._load_changelog_async()
+        # 更新日志已搬到「设置 → 系统 → 更新日志」按需打开(见 changelog_dialog),
+        # 因此这里不再启动时预拉取:省一次网络请求,也少一个后台线程。
 
     # ---------- UI 搭建 ----------
     def _build_ui(self):
@@ -671,6 +667,19 @@ class VersionHome(QWidget):
 
         lay.addStretch(1)
 
+        # 「实例详情」大入口:紧贴启动按钮上方。
+        # 原先详情藏在主标签页里(选中实例才冒出来),用户根本找不到;这里改成
+        # 与「启动」同一视觉层级的主入口。它占据原来第一行两个按钮的位置
+        # (客户端原为 新建游戏/下载Mod,服务端原为 导入服务端/打开目录),
+        # 因此按钮总数不变、也不需要新加按钮。
+        self.details_btn = QPushButton("实例详情")
+        self.details_btn.setToolTip("查看当前实例/服务端的详细信息、Mod、配置与日志")
+        self.details_btn.setMinimumHeight(44)
+        self.details_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_style(self.details_btn, card_btn_style)
+        self.details_btn.clicked.connect(self.instance_details_requested.emit)
+        lay.addWidget(self.details_btn)
+
         # 高频入口始终可见：不依赖 AI，也不用到多层菜单里找。
         quick_row = QHBoxLayout()
         quick_row.setSpacing(10)
@@ -696,7 +705,6 @@ class VersionHome(QWidget):
         set_style(self.import_btn, card_btn_style)
         self.import_btn.clicked.connect(lambda: self._run_left_action('third'))
         tool_row.addWidget(self.import_btn, 1)
-
         self.config_btn = QToolButton()
         self.config_btn.setText(t("VERSION_HOME_ONE_CLICK"))
         self.config_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
@@ -805,7 +813,11 @@ class VersionHome(QWidget):
             pass
 
     def _build_right(self) -> QWidget:
-        """右列:标签页(版本 / 更新日志 / MC 动态)。"""
+        """右列:标签页(版本 / 服务端 / 启动器日志)。
+
+        更新日志已挪到「设置 → 系统 → 更新日志」(与「检查更新」相邻);MC 动态
+        不再做(原先就是占位页,没有实际内容)。
+        """
         right = QWidget()
         lay = QVBoxLayout(right)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -823,9 +835,7 @@ class VersionHome(QWidget):
             lambda count: self.tabs.setTabText(self._server_tab_index, f"服务端(共{count}个)"))
         self.server_center.selection_changed.connect(self._on_server_selection_changed)
         self.server_center.running_changed.connect(lambda _: self._update_server_launch_button())
-        self.tabs.addTab(self._build_changelog_tab(), t("VERSION_HOME_CHANGELOG"))
-        self.tabs.addTab(self._build_community_tab(), t("VERSION_HOME_COMMUNITY"))
-        # 启动器日志:作为「MC 动态」同级的子标签页(游戏运行输出/命令)
+        # 启动器日志:游戏运行输出/命令(与「版本」同级)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.tabs.addTab(self.log_view, t("VERSION_HOME_LAUNCHER_LOG"))
@@ -867,20 +877,57 @@ class VersionHome(QWidget):
         self._server_mode = True
         self.login_card.set_server_mode(server)
         self.inst_card.set_server(server)
-        self.new_game_btn.setText('导入服务端')
-        self.new_game_btn.setToolTip('扫描并安全导入服务端压缩包')
-        self.find_mod_btn.setText('打开目录')
-        self.find_mod_btn.setToolTip('打开当前服务端目录')
-        self.import_btn.setText('查看 Mod')
-        self.import_btn.setToolTip('查看服务端 Mod 及适用端信息')
-        self.config_btn.setText('服务端管理')
-        self.config_btn.setMenu(self._server_manage_menu())
+        # 行2:打开目录 / 查看 Mod(与客户端「新建游戏 / 下载 Mod」同一位置)
+        self.new_game_btn.setText('打开目录')
+        self.new_game_btn.setToolTip('打开当前服务端目录')
+        self.find_mod_btn.setText('查看 Mod')
+        self.find_mod_btn.setToolTip('查看服务端 Mod 及适用端信息')
+        # 行3:服务端管理(下拉) / 导入服务端 —— 即「查看 Mod」腾出来的位置
+        self.import_btn.setText('服务端管理')
+        self.import_btn.setToolTip('启动入口 / 运行库 / 审核报告 / 导出')
+        self.import_btn.setMenu(self._server_manage_menu())
+        self.config_btn.setText('导入服务端')
+        self.config_btn.setMenu(self._import_menu())
         has_server = server is not None
         self.find_mod_btn.setEnabled(has_server)
         self.import_btn.setEnabled(has_server)
-        self.config_btn.setEnabled(has_server)
+        self.config_btn.setEnabled(True)
         self.launch_btn.setEnabled(has_server)
         self._update_server_launch_button()
+
+    def _import_menu(self):
+        """「导入服务端」的下拉:严格扫描 / 智能导入。"""
+        menu = getattr(self, '_import_menu_obj', None)
+        if menu is not None:
+            return menu
+        menu = QMenu(self.config_btn)
+        menu.addAction('导入服务端压缩包…', self._import_server)
+        menu.addAction('智能导入(识别作者资料与服务端)…',
+                       lambda: self._import_server(smart=True))
+        self._import_menu_obj = menu
+        return menu
+
+    def _import_server(self, smart: bool = False):
+        """选择服务端压缩包并交给服务端中心导入。"""
+        import os
+        from PySide6.QtWidgets import QFileDialog
+        start = ''
+        try:
+            from paths import GAME_DIR
+            candidate = os.path.join(GAME_DIR, 'downloads')
+            if os.path.isdir(candidate):
+                start = candidate
+        except Exception:
+            pass
+        path, _f = QFileDialog.getOpenFileName(
+            self, '选择服务端压缩包', start,
+            '压缩包 (*.zip *.tar.gz);;所有文件 (*)')
+        if not path:
+            return
+        if smart:
+            self.smart_import_requested.emit(path)
+            return
+        self.server_center.scan_import(path)
 
     def _set_client_mode(self):
         self._server_mode = False
@@ -895,6 +942,7 @@ class VersionHome(QWidget):
         self.import_btn.setToolTip(
             '智能识别客户端、服务端和作者资料；严格扫描仍然生效。'
             if self._smart_import_enabled else '')
+        self.import_btn.setMenu(None)
         self.config_btn.setText(t("VERSION_HOME_ONE_CLICK"))
         self.config_btn.setMenu(self._client_config_menu)
         for button in (self.new_game_btn, self.find_mod_btn, self.import_btn, self.config_btn):
@@ -924,20 +972,30 @@ class VersionHome(QWidget):
              ((server or {}).get('name') or '请先选择一个服务端')))
 
     def _run_left_action(self, slot):
+        """左侧按钮动作。
+
+        每个按钮有**固定职责**(不再按模式互换语义),这样信号槽不会串:
+        - first  : 客户端=新建游戏  / 服务端=打开目录
+        - second : 客户端=下载 Mod / 服务端=查看 Mod
+        - third  : 导入整合包(客户端)
+        - fourth : 导入服务端(两种模式都是同一个导入入口)
+        """
         if self._server_mode:
-            actions = {
-                'first': self.server_center.choose_import,
-                'second': self.server_center.open_folder,
-                'third': self.server_center.show_mods,
-            }
-            actions[slot]()
+            if slot == 'first':
+                self.server_center.open_folder()
+            elif slot == 'second':
+                self.server_center.show_mods()
+            # 'third'/'fourth' 在服务端模式是下拉菜单(服务端管理 / 导入服务端),
+            # 由 QMenu 自己处理,不走这里。
             return
         if slot == 'first':
             self.open_resources_requested.emit(1)
         elif slot == 'second':
             self.open_resources_requested.emit(3)
-        else:
+        elif slot == 'third':
             self.import_modpack_requested.emit()
+        elif slot == 'fourth':
+            self._import_server()
 
     def _on_primary_launch(self):
         if self._server_mode:
@@ -985,85 +1043,18 @@ class VersionHome(QWidget):
         return w
 
     def _build_changelog_tab(self) -> QWidget:
+        """已废弃:更新日志搬到「设置 → 系统 → 更新日志」(:mod:`changelog_dialog`)。
+
+        保留这个空实现是为了兼容可能仍在调用它的旧代码/插件;新代码请直接用
+        ``changelog_dialog.ChangelogDialog``。
+        """
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setSpacing(8)
-        self.changelog_view = QTextBrowser()
-        self.changelog_view.setOpenExternalLinks(True)
-        self.changelog_view.setStyleSheet(
-            f"QTextBrowser {{ background: transparent; border: none; color: {text_color()}; }}")
-        self.changelog_status = QLabel()
-        self.changelog_status.setStyleSheet(f"color: {muted_color()};")
-        self.changelog_status.setWordWrap(True)
-        self.changelog_refresh_btn = QPushButton(t("VERSION_HOME_REFRESH"))
-        set_style(self.changelog_refresh_btn, card_btn_style)
-        self.changelog_refresh_btn.setMinimumHeight(30)
-        self.changelog_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.changelog_refresh_btn.clicked.connect(self._load_changelog_async)
-
-        # 标题行:更新日志 + 来源说明 + 刷新按钮
-        header = QHBoxLayout()
-        title = QLabel(t("VERSION_HOME_CHANGELOG"))
-        title.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
-        header.addWidget(title)
-        header.addStretch(1)
-        header.addWidget(self.changelog_refresh_btn)
-        lay.addLayout(header)
-        lay.addWidget(self.changelog_view, 1)
-
-        # 初始态:显示"正在拉取",加载完成后替换
-        self.changelog_view.setHtml(
-            f"<p style='color:{muted_color()}'>🔄 正在从 GitHub 拉取更新日志…</p>")
-        self.changelog_status.setText(
-            t("VERSION_HOME_SOURCE_URL"))
-        return w
-
-    def _load_changelog_async(self):
-        """后台线程从 GitHub 拉取更新日志,避免卡 UI。"""
-        self.changelog_status.setText(
-            t("VERSION_HOME_FETCHING_GH"))
-        self.changelog_view.setHtml(
-            f"<p style='color:{muted_color()}'>🔄 正在从 GitHub 拉取更新日志…</p>")
-
-        def worker():
-            try:
-                entries = load_changelog()
-                if entries:
-                    self._changelog_loaded.emit(entries)
-                else:
-                    self._changelog_failed.emit("empty")
-            except Exception as e:
-                self._changelog_failed.emit(str(e))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_changelog_loaded(self, entries: list):
-        """更新日志拉取成功 → 渲染 HTML。"""
-        self.changelog_view.setHtml(changelog_html(entries))
-        self.changelog_status.setText(
-            t("VERSION_HOME_SOURCE_URL"))
-
-    def _on_changelog_failed(self, err: str):
-        """从 GitHub 拉取失败 → 显示友好提示 + 重试入口。"""
-        self.changelog_view.setHtml(
-            f"<p style='color:{muted_color()}'>暂时拉不到更新日志(网络或 GitHub 不可用)。"
-            "<br>可点击右上角「刷新」重试,或检查网络。</p>")
-        self.changelog_status.setText(t("VERSION_HOME_FETCH_FAILED"))
-
-    def _build_community_tab(self) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 12, 12, 12)
-        placeholder = QLabel(
-            t("VERSION_HOME_COMMUNITY_FEED_PLANNED"))
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setWordWrap(True)
-        placeholder.setStyleSheet(f"color: {muted_color()};")
-        lay.addWidget(placeholder)
-        return w
-
-    # ---------- 对外接口 ----------
+        hint = QLabel('更新日志已移到「设置 → 系统 → 更新日志」。')
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f'color:{muted_color()};')
+        lay.addWidget(hint)
+        return w    # ---------- 对外接口 ----------
     def refresh_login(self):
         """重新读取设置刷新登录卡片(昵称/头像)。"""
         self.login_card.refresh()

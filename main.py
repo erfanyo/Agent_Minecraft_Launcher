@@ -260,6 +260,9 @@ class MainWindow(QMainWindow):
         tab_a.import_modpack_requested.connect(self.import_modpack)
         tab_a.open_resources_requested.connect(self._open_resource_page)
         tab_a.tutorial_requested.connect(self.open_tutorial)
+        # 左侧「实例详情」大按钮:客户端实例 → 实例详情页;服务端 → 服务端详情页
+        tab_a.instance_details_requested.connect(self._open_details_for_current)
+        tab_a.smart_import_requested.connect(self._smart_import_path)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
         from resource_center import ResourceCenter
@@ -2234,6 +2237,31 @@ class MainWindow(QMainWindow):
 
     def _hide_server_details(self):
         self.main_tabs.setTabVisible(self._server_details_tab_idx, False)
+
+    def _open_details_for_current(self):
+        """左侧「实例详情」按钮:按当前左侧面板所处模式决定打开哪个详情页。
+
+        客户端模式未选实例时给出提示,而不是默默什么都不做——那是上一次
+        「点了没反应」的问题来源。
+        """
+        home = self.home_panel
+        if getattr(home, '_server_mode', False):
+            server = home.server_center.selected()
+            if server is None:
+                QMessageBox.information(self, '实例详情', '请先在右侧选中一个服务端。')
+                return
+            self._show_server_details(server, switch=True)
+            return
+        inst = home.current_instance()
+        if inst is None:
+            QMessageBox.information(self, '实例详情', '请先在右侧选中一个实例。')
+            return
+        self._show_instance_details(inst, switch=True)
+
+    def _smart_import_path(self, path: str):
+        """「导入服务端 → 智能导入」:交给既有的智能导入流程。"""
+        from smart_import_ui import start_smart_import
+        start_smart_import(self, path)
 
     def _animate_instance_details_in(self):
         """标签页出现动画:淡入(320ms OutCubic,走 ui_anim 统一封装;关闭动画则直接显示)。"""
