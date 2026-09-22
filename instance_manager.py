@@ -576,13 +576,24 @@ class InstanceManagerDialog(QWidget):
         return tab
 
     def _refresh_mods(self):
+        """刷新 Mod 列表。
+
+        **这里刻意不用圆点**(与服务端详情不同):本页由 ``load_cards`` 安装
+        ``CardDelegate`` 卡片视图,它把 DecorationRole 固定画在 48×48 的框里——
+        塞一个 12px 的小圆点进去会被放大成一坨大色块。卡片本身已经用
+        「已禁用 · 名称」+ 灰色标题表达停用状态,再叠一个点属于重复。
+
+        UserRole 始终存**磁盘上的真实文件名**(含 .disabled):卡片加载
+        (installed_resource_cards)、AI 钉选(ai_pin_provider)与启用/禁用/删除都靠它
+        定位文件。
+        """
         self.mods_list.clear()
         for f in self._mod_files():
-            disabled = f.lower().endswith(".disabled")
+            disabled = str(f).lower().endswith(".disabled")
             display = f[:-len(".disabled")] if disabled else f
             item = QListWidgetItem(("[已禁用] " if disabled else "") + display)
             item.setData(Qt.ItemDataRole.UserRole, f)
-            # 深色模式下用主题文字色(启用=text_color,禁用=muted);不再硬编码黑
+            # 深色模式下用主题文字色(启用=text_color,禁用=muted);不硬编码黑
             from ui_style import text_color, muted_color
             item.setForeground(QColor(muted_color()) if disabled else QColor(text_color()))
             self.mods_list.addItem(item)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QPushButton, QVBoxLayout, QWidget)
 
@@ -159,17 +160,20 @@ class ServerDetailsView(QWidget):
         return tab
 
     def _build_mods(self) -> QWidget:
+        from mod_list_ui import fill
+
         tab, layout = self._panel(
-            'Mod', '列出服务端 mods 目录。停用/启用请用「诊断」页或让 AI 助手处理(会先取证)。')
+            'Mod', '列出服务端 mods 目录(绿点=启用、红点=已停用)。'
+                   '停用/启用请用「诊断」页或让 AI 助手处理(会先取证)。')
         listing = QListWidget()
-        mods_dir = os.path.join(self.server_dir, 'mods')
-        if os.path.isdir(mods_dir):
-            for name in sorted(os.listdir(mods_dir)):
-                if name.lower().endswith(('.jar', '.jar.disabled')):
-                    state = '已停用' if name.lower().endswith('.disabled') else '启用'
-                    listing.addItem(f'[{state}] {name}')
-        else:
-            listing.addItem('(没有 mods 目录)')
+        count = fill(listing, os.path.join(self.server_dir, 'mods'))
+        if count:
+            enabled = sum(1 for i in range(listing.count())
+                          if not str(listing.item(i).data(
+                              Qt.ItemDataRole.UserRole) or '').lower()
+                          .endswith('.disabled'))
+            layout.addWidget(QLabel(f'共 {count} 个：启用 {enabled} · '
+                                    f'已停用 {count - enabled}'))
         layout.addWidget(listing, 1)
         return tab
 

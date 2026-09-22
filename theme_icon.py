@@ -132,6 +132,38 @@ def _tint(svg_bytes: bytes, color: str, size: int) -> QPixmap:
     return out
 
 
+def status_dot(color: str, size: int = 12) -> QIcon:
+    """一个纯色圆点图标(用于「启用/停用」这类二态标记)。
+
+    **为什么不用 emoji**:🟢/🔴 依赖系统 emoji 字体,深浅底与不同平台观感不一,
+    而且在部分环境下会渲染成方框。这里自绘一个圆点 + 描边,颜色由调用方按语义
+    取主题色(如 success / danger),因此能跟随主题与色盲模板。
+
+    按 (color,size) 缓存——列表里每个 Mod 都要一个,不缓存会重复绘制上百次。
+    """
+    key = ('dot', int(size), color)
+    with _cache_lock:
+        cached = _cache.get(key)
+        if cached is not None:
+            return cached
+    from PySide6.QtGui import QBrush, QPen
+    pix = QPixmap(int(size), int(size))
+    pix.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    # 留 1px 给描边,避免圆被裁掉;描边用同色略深,浅底上也能看清边界
+    inset = max(1, int(size) // 8)
+    rect = pix.rect().adjusted(inset, inset, -inset, -inset)
+    painter.setBrush(QBrush(QColor(color)))
+    painter.setPen(QPen(QColor(color).darker(140), max(1, inset)))
+    painter.drawEllipse(rect)
+    painter.end()
+    icon = QIcon(pix)
+    with _cache_lock:
+        _cache[key] = icon
+    return icon
+
+
 def theme_icon(name: str, size: int = 20, color: str | None = None) -> QIcon:
     """主题化图标:按 (name,size,color) 缓存。color 缺省取 current_color('accent')。"""
     if color is None:
