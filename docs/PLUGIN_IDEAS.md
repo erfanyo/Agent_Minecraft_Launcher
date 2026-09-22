@@ -1,5 +1,16 @@
 # 插件方向待办
 
+## 冲正式版(1.0)先丢包袱
+
+正式版前先减负，而不是加功能。判断标准：**这个功能是不是「大多数玩家每次都用」**。
+不是的，就是包袱——要么转插件，要么先摘掉。
+
+- 待转插件：KubeJS 查看（见下）、魔改类工具。
+- 转插件后的核心只保留：**装/管/启动实例、下载资源、服务端基础管理、AI 助手、设置**。
+
+理由：核心每次发版都要为这些功能做兼容与回归；插件可以各自走，作者按需装。
+**这不是砍功能，是换承载方式**——能力还在，只是不再默认压在所有人身上。
+
 ## 翻译 API 插件
 
 核心内置的 Mod 描述翻译支持本地模型（默认）与用户已配置的云端 OpenAI 兼容模型。
@@ -24,6 +35,20 @@
 所以**能力边界定在「作者能自己装插件、自己配」**，核心只负责提供稳定的注册点
 （AI 工具 / 页面 / 中心页 / 设置页 / 技能）。以后遇到魔改类需求，先问「能不能插件化」，
 再问「要不要进核心」。
+
+## KubeJS 查看/编辑 → 插件
+
+核心里的 KubeJS 页（服务端详情的脚本查看器）应当**整体转为插件**。它天然满足上面那条：
+只有整合包作者会打开，普通玩家不会关心 `server_scripts` 里有什么。
+
+需要注意的两点：
+
+- **保留「只读查看」的能力**，而且它不只是编辑的附带品：脚本报错会让服务端直接起不来，
+  那时读脚本是唯一的排查手段。转插件后这个能力也要一起带走，不能因为「编辑器插件」
+  没装就看不了。
+- 插件应当顺带做**报错定位**（把日志里的 KubeJS 报错关联到具体文件与行），
+  这比编辑本身更有价值——现存脚本里的问题往往不是「写错了」，而是缺补丁/缺依赖
+  （本项目就踩过：`counter.js#501` 的 `getIngredients` 报错，根因是缺 `hotai` 补丁数据）。
 
 ## 配方可视化编辑器（插件）
 
@@ -74,4 +99,91 @@
 - 保存前**必须**先能力校验（字段是否合法、物品 ID 是否存在），不能让作者生成一段
   会让 KubeJS 报错的脚本；
 - 入口挂在服务端详情的 KubeJS 区域，或注册成插件自己的主标签页。
+
+## mod 专属文件管理 → 插件 + 「检测到 mod 就提示安装」
+
+很多 mod 的用法就是「往某个目录里丢文件」：投影原理图、枪包、皮肤、蓝图……这类
+**文件管理界面非常适合插件**，而且是插件的**发现性问题**的解法：没人会主动逛插件列表，
+但**装了这个 mod 的人一定需要它对应的管理页**。
+
+### 机制：检测到 mod → 问用户装不装插件
+
+核心已经**实际在用这个思路**，只是写死在 `instance_manager.py`：
+
+```python
+if self._has_mod("ysm", "yes_steve_model", "yesstevemodel", "yes-steve-model"):
+    self.shell.add_section("皮肤(YSM)", self._build_ysm_tab)
+if self._has_mod("tacz", "timeless_and_classics", "timeless", "tac_z"):
+    self.shell.add_section("枪包(TACZ)", self._build_tacz_tab)
+if self._has_mod("create"):
+    self.shell.add_section("投影原理图", self._build_create_schematics_tab)
+if self._has_mod("kubejs"):
+    self.shell.add_section("KubeJS", self._build_kubejs_tab)
+```
+
+要做的就是把这段从**硬编码**改成**插件声明 + 提示安装**：
+
+1. 插件在元数据里声明它关心的 mod（如 `WATCH_MODS = ("tacz", "timeless_and_classics")`）；
+2. 核心扫到实例装了该 mod、而对应插件**未安装/未启用**时，**问一次**用户；
+3. 用户同意 → 装/启用插件；拒绝 → **记住选择，不再打扰**。
+
+设计红线（不做就会变成骚扰）：
+
+- **只问一次**，按「实例 + 插件」记住用户的选择（含明确的「不要」）；
+- **绝不静默安装**、绝不静默启用插件；
+- 只在**真的检测到 mod** 时才问，不预先推荐；
+- 没有对应插件时**不要**硬塞一个残缺的内置页——宁可什么都不显示。
+
+### 主流「需要文件管理」的 mod
+
+按用途分组。**★ = 本项目已确认在用**（有自己的目录或已在代码里硬编码）；
+其余为常见主流项，**实现时必须先核实该 mod 的目录与文件格式**（版本间可能变），
+不要照抄下表当规格。
+
+**投影 / 蓝图 / 结构**
+
+| mod | 管理的东西 | 目录（待核实时以实测为准） |
+|---|---|---|
+| ★ Create（机械动力） | 蓝图 schematic | `schematics/`（`.nbt`） |
+| Litematica | 投影 | `schematics/` |
+| WorldEdit | 原理图 | `schematics/` 与 `config/worldedit/` |
+| Axiom | 蓝图 | 各自工作目录 |
+| MTS / Immersive Vehicles | 载具包 | 各 pack 目录 |
+| Immersive Engineering | 工程师蓝图 | 需要核实现代版本是否仍是 `blueprints/` |
+| MineColonies | 建筑蓝图 | `.blueprint` / 扫描工具产物 |
+| Chisels & Bits、LittleTiles | 自定义结构 | 游戏内保存，目录待核实 |
+
+**模型 / 皮肤 / 外观**
+
+| mod | 管理的东西 | 目录 |
+|---|---|---|
+| ★ Yes Steve Model (YSM) | 皮肤（`.png` 贴图 + `.model` 绑定） | `ysm/` |
+| Armourer's Workshop | 盔甲/模型 | 有导入导出流程 |
+| Custom Player Models (CPM) | 玩家模型 | `config/` 下的模型目录 |
+| CustomNPCs | NPC、皮肤、脚本 | `customnpcs/`、`config/CustomNpcs.cfg` |
+| ★ Touhou Little Maid（车万女仆） | 自定义模型包 | `tlm_custom_pack/`（本项目 1260 个文件） |
+
+**枪械 / 载具 / 其他内容包**
+
+| mod | 管理的东西 | 目录 |
+|---|---|---|
+| ★ TaCZ（永恒枪械工坊） | 枪包（每子文件夹一个包） | `tacz/gunpack/` |
+| Superb Warfare | 内容包 | 待核实 |
+| Create: Gears and Tavern 等附属 | 数据/贴图包 | 各 mod 自定 |
+
+**脚本 / 数据（见上一节）**
+
+| mod | 管理的东西 | 目录 |
+|---|---|---|
+| ★ KubeJS | `.js` 脚本 | `kubejs/`（server_scripts / startup_scripts / client_scripts） |
+| ★ Hotai | 补丁数据 `.badiff` | `hotai/` |
+| ★ Patchouli | 手册内容 | `patchouli_books/` |
+| ★ FTB Quests | 任务 `.snbt` | `config/ftbquests/` |
+
+### 落地顺序建议
+
+先挑**本项目已在用**的那几个（YSM / TACZ / Create / KubeJS，加车万女仆与 Hotai）做成
+插件并跑通「检测→提示→安装」，把机制验证透；再按上面的表逐个补。
+一次把几十个 mod 的目录写死进核心，正是要避免的老路。
+
 
