@@ -1,15 +1,19 @@
 # -*- coding: utf-8 -*-
-"""KubeJS 脚本查看器:树形列目录 + 展开查看脚本内容。
+"""KubeJS 脚本查看器（只读）。
 
-**为什么需要**:原先实例详情里的 KubeJS 页只有一个**文件名列表**,点开看不到内容。
-而 KubeJS 恰恰是最需要「进不去游戏也要改」的东西——脚本语法错会让服务端直接
-启动失败,那时唯一的排查手段就是读脚本。所以这里给一个只读查看器。
+**现状**：本模块已退化为「插件用的界面组件」——入口在插件
+``plugins/kubejs_tools.py``（主标签页「KubeJS 工具」），核心的服务端详情不再自带
+KubeJS 页。保留在核心是因为**插件之间不能互相 import**（插件目录下每个 ``.py``
+都会被插件系统当成一个插件加载），所以插件要用的组件只能放核心。
 
-安全与实用取舍:
+**为什么是插件**：KubeJS 只有整合包作者会看，普通玩家不关心 `server_scripts` 里
+有什么；按项目约定（core 只留大众功能）以插件承载。
 
-- **只读**,不做保存。写脚本属于「改代码」,应该有差异对比与备份,单独做(见后续)。
-- **限制单文件大小**,避免有人把几百 MB 的日志塞进来把界面卡死。
-- **不跟随链接**,与项目其它读目录逻辑一致。
+能力刻意保持「能看就行」：只读浏览（不编辑——编辑在外部编辑器里做更好，不跟
+VS Code 比），外加「从日志跳到报错那一行」。
+
+纯逻辑（目录树 / 文本判定 / 读文件）在核心 :mod:`kubejs_scripts`；报错定位的解析
+在 :mod:`kubejs_errors`。本模块只负责界面与装配。
 """
 from __future__ import annotations
 
@@ -23,65 +27,10 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QListWidget,
                                QSplitter, QTextEdit, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from kubejs_scripts import (MAX_PREVIEW_CHARS, build_script_tree, is_viewable,
+                            read_script)
 from ui_style import (current_color, hint_style, list_style, muted_color,
                       set_style)
-
-#: 单个脚本的显示上限(字符)。超过只显示开头,并明确提示。
-MAX_PREVIEW_CHARS = 200_000
-#: 视为「可查看文本」的后缀。
-TEXT_SUFFIXES = ('.js', '.json', '.txt', '.snbt', '.properties', '.toml',
-                 '.md', '.mcfunction', '.csv', '.yml', '.yaml')
-
-
-def build_script_tree(root: str) -> list:
-    """把 ``kubejs`` 目录扫成 ``[{'name','path','is_dir','children'}]``。
-
-    纯函数式(只读目录),方便单测;不跟随符号链接。
-    """
-    out = []
-    if not root or not os.path.isdir(root):
-        return out
-    try:
-        names = sorted(os.listdir(root))
-    except OSError:
-        return out
-    for name in names:
-        if name.startswith('.'):
-            continue
-        full = os.path.join(root, name)
-        if os.path.islink(full):
-            continue
-        if os.path.isdir(full):
-            out.append({'name': name, 'path': full, 'is_dir': True,
-                        'children': build_script_tree(full)})
-        else:
-            out.append({'name': name, 'path': full, 'is_dir': False,
-                        'children': []})
-    return out
-
-
-def is_viewable(path: str) -> bool:
-    return os.path.splitext(path)[1].lower() in TEXT_SUFFIXES
-
-
-def read_script(path: str):
-    """读脚本 → ``(text, truncated, error)``。任何失败都返回可展示的说明。"""
-    if not path or not os.path.isfile(path):
-        return '', False, '文件不存在'
-    try:
-        size = os.path.getsize(path)
-    except OSError as error:
-        return '', False, f'读取失败：{error}'
-    try:
-        with open(path, encoding='utf-8', errors='replace') as stream:
-            text = stream.read(MAX_PREVIEW_CHARS + 1)
-    except OSError as error:
-        return '', False, f'读取失败：{error}'
-    truncated = len(text) > MAX_PREVIEW_CHARS or size > MAX_PREVIEW_CHARS
-    if truncated:
-        text = text[:MAX_PREVIEW_CHARS]
-    return text, truncated, ''
-
 
 class KubejsViewer(QWidget):
     """左树右内容。``root`` 传 ``kubejs`` 目录(客户端或服务端通用)。"""

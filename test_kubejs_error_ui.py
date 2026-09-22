@@ -12,6 +12,10 @@ from PySide6.QtWidgets import QApplication
 
 _app = QApplication.instance() or QApplication([])
 
+from plugin_test_support import ensure_plugin_path
+
+ensure_plugin_path()
+
 from kubejs_viewer import KubejsViewer
 
 

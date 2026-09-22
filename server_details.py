@@ -40,7 +40,6 @@ def server_sections():
         ('备份·存档', None),
         ('高级选项', '__group__'),
         ('server.properties', 'advanced'),
-        ('KubeJS', 'advanced'),
         ('诊断', 'advanced'),
     ]
 
@@ -124,7 +123,6 @@ class ServerDetailsView(QWidget):
             '运行配置': self._build_runtime,
             '备份·存档': self._build_backups,
             'server.properties': self._build_properties,
-            'KubeJS': self._build_kubejs,
             '诊断': self._build_diagnosis,
         }.get(label, self._build_placeholder)
 
@@ -492,16 +490,6 @@ class ServerDetailsView(QWidget):
         layout.addWidget(state)
         layout.addStretch()
         refresh()
-        return tab
-
-    def _build_kubejs(self) -> QWidget:
-        from kubejs_viewer import KubejsViewer
-        tab, layout = self._panel(
-            'KubeJS', '展开查看脚本内容（只读）。点「报错定位」可从日志跳到出错的那一行。')
-        viewer = KubejsViewer(os.path.join(self.server_dir, 'kubejs'))
-        # 把本实例的日志交给查看器:日志里的 KubeJS 报错点一下就能跳到对应行
-        viewer.set_log(self._collect_log())
-        layout.addWidget(viewer, 1)
         return tab
 
     def _build_diagnosis(self) -> QWidget:
