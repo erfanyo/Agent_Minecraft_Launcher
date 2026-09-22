@@ -332,6 +332,77 @@ def set_server_mod_enabled(server: str, filename: str, enabled: bool,
 
 
 # ---------------- 写操作类(需要工作区写权限) ----------------
+def suggest_server_removals(server: str, include_descriptions: bool = True,
+                            game_dir: str | None = None) -> str:
+    """只读诊断:哪几个服务端 Mod 建议停用,以及它们各自的说明。
+
+    证据分级(确定 / 很可能 / 待复核)。本工具**不改动任何文件**;确认后仍需用
+    set_server_mod_enabled 逐个停用,并由用户确认。
+    """
+    from mod_deps import read_mod_metadata
+    from server_log_diagnosis import build_diagnosis, suggestions_to_markdown
+    from log_privacy import redact_text
+
+    item = _resolve_server(server, game_dir)
+    directory = os.path.join(item['path'], 'mods')
+    if not os.path.isdir(directory):
+        return '(这个服务端没有 mods 目录)'
+
+    mods = []
+    for filename in sorted(os.listdir(directory)):
+        lowered = filename.lower()
+        if not lowered.endswith(('.jar', '.jar.disabled')):
+            continue
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path) or os.path.islink(path):
+            continue
+        info = read_mod_metadata(path) or {}
+        mods.append({
+            'file': filename,
+            'modId': str(info.get('id') or ''),
+            'name': str(info.get('name') or filename),
+            'environment': info.get('environment', 'unknown'),
+            'description': str(info.get('description') or '').strip(),
+            'disabled': lowered.endswith('.disabled'),
+            'path': path,
+        })
+
+    # 日志是主要证据来源:优先本次启动日志,失败再退回 crash-reports 里的最新一份。
+    log_text = ''
+    try:
+        raw = read_server_log(server, tail=1200, game_dir=game_dir)
+        if not str(raw).startswith('('):
+            log_text = str(raw)
+    except Exception:
+        pass
+    if not log_text:
+        try:
+            crashes = os.path.join(item['path'], 'crash-reports')
+            if os.path.isdir(crashes):
+                reports = sorted(f for f in os.listdir(crashes) if f.endswith('.txt'))
+                if reports:
+                    newest = os.path.join(crashes, reports[-1])
+                    with open(newest, encoding='utf-8', errors='replace') as stream:
+                        log_text = stream.read(512 * 1024)
+        except OSError:
+            pass
+
+    result = build_diagnosis(mods, redact_text(log_text) if log_text else '')
+    if include_descriptions and result.get('suggestions'):
+        from mod_description import annotate_mods
+        by_file = {row['file']: row for row in mods}
+        rows = []
+        for row in result['suggestions']:
+            source = by_file.get(row['file']) or {}
+            rows.append({**row, 'modId': source.get('modId') or '',
+                         'path': source.get('path') or ''})
+        rows = annotate_mods(rows)
+        for row in rows:
+            row.pop('path', None)
+        result['suggestions'] = rows
+    return suggestions_to_markdown(result)
+
+
 def install_mod(slug: str, instance: str, version: str = "",
                 game_dir: str | None = None,
                 progress_callback: Callable | None = None) -> str:

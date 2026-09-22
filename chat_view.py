@@ -216,6 +216,106 @@ def table_to_text(title: str, columns: list, rows: list) -> str:
     return '\n'.join(lines)
 
 
+# ---------------- Markdown 表格识别 ----------------
+def _split_md_row(line: str) -> list:
+    """拆一行 ``| a | b |``。两端的空单元格来自首尾竖线,需丢弃。"""
+    return [cell.strip() for cell in line.strip().strip('|').split('|')]
+
+
+def _is_md_separator(line: str) -> bool:
+    """判定 ``|---|---|`` 这种分隔行。"""
+    stripped = line.strip()
+    if not stripped.startswith('|'):
+        return False
+    body = stripped.strip('|').strip()
+    if not body or '-' not in body:
+        return False
+    return all(set(cell.strip()) <= set('-: ') and '-' in cell
+               for cell in body.split('|'))
+
+
+def parse_markdown_tables(text: str) -> list:
+    """从文本里提取 Markdown 表格 → [(title, columns, rows), ...]。
+
+    工具返回结构化清单时用 ``| a | b |`` 这种纯文本表格即可:**模型**看到的是
+    规整文本,便于理解;**用户**看到的是渲染层画出的真实表格。这样「工具返回
+    结构化数据」不需要给每个工具单独加一套 UI 管线,老工具也自动受益。
+    识别失败时返回空列表,由调用方回退成纯文本,不会丢内容。
+    """
+    lines = (text or '').split('\n')
+    found = []
+    index = 0
+    while index < len(lines) - 1:
+        header, separator = lines[index], lines[index + 1]
+        if '|' not in header or not _is_md_separator(separator):
+            index += 1
+            continue
+        columns = _split_md_row(header)
+        if not columns:
+            index += 1
+            continue
+        body = []
+        cursor = index + 2
+        while cursor < len(lines) and '|' in lines[cursor] and lines[cursor].strip():
+            cells = _split_md_row(lines[cursor])
+            if len(cells) < len(columns):
+                cells += [''] * (len(columns) - len(cells))
+            body.append(cells[:len(columns)])
+            cursor += 1
+        title = ''
+        if index > 0:
+            previous = lines[index - 1].strip()
+            if previous and '|' not in previous:
+                title = previous
+        found.append((title, columns, body))
+        index = cursor
+    return found
+
+
+def render_text_with_tables(text: str, tokens: dict) -> str:
+    """普通文本 + 内嵌 Markdown 表格 → HTML:表格画成真表,其余保持转义文本。
+
+    按行扫描,遇到表格区域就整块替换,因此表格前后的说明文字都会被保留。
+    """
+    lines = (text or '').split('\n')
+    tables = parse_markdown_tables(text)
+    if not tables:
+        return esc(text) if text else ''
+
+    # 标记每个表格占用的行区间:表头 + 分隔 + 数据行。
+    spans = []
+    consumed = set()
+    for title, columns, rows in tables:
+        for start in range(len(lines) - 1):
+            if start in consumed or '|' not in lines[start]:
+                continue
+            if _split_md_row(lines[start]) != columns:
+                continue
+            if not _is_md_separator(lines[start + 1]):
+                continue
+            end = start + 2 + len(rows)
+            spans.append((start, end, title, columns, rows))
+            consumed.update(range(start, min(end, len(lines))))
+            break
+
+    parts = []
+    buffer = []
+    position = 0
+    for start, end, title, columns, rows in sorted(spans):
+        buffer.extend(lines[position:start])
+        body = '\n'.join(buffer).strip('\n')
+        if body.strip():
+            parts.append(esc(body))
+        buffer = []
+        parts.append(render_table(title, columns, rows, tokens))
+        position = end
+    buffer.extend(lines[position:])
+    tail = '\n'.join(buffer).strip('\n')
+    if tail.strip():
+        parts.append(esc(tail))
+    return ''.join(parts)
+
+
 def render_entry(entry: ChatEntry, index: int, tokens: dict, *,
                  tool_level: Callable[[int], int] | None = None,
                  ai_expanded: bool = False) -> str:
@@ -230,16 +330,17 @@ def render_entry(entry: ChatEntry, index: int, tokens: dict, *,
                        tokens["accent"], tokens)
 
     if entry.kind == "ai":
+        body = render_text_with_tables(entry.text, tokens)
         if not is_long_ai(entry.text):
-            return _bubble(esc(entry.text), tokens["ai_bg"], "AI",
-                           tokens["success"], tokens)
+            return _bubble(body, tokens["ai_bg"], "AI", tokens["success"], tokens)
         if ai_expanded:
-            return _bubble(esc(ai_summary(entry.text)), tokens["ai_bg"], "AI",
-                           tokens["success"], tokens,
+            # 折叠态只取首行,不可能构成完整表格 → 按纯文本处理,避免露出半截表头。
+            summary = ai_summary(entry.text)
+            return _bubble(esc(summary), tokens["ai_bg"], "AI", tokens["success"],
+                           tokens,
                            suffix=f'… <a href="ai:{index}" '
                                   f'style="color:{tokens["accent"]};">[展开]</a>')
-        return _bubble(esc(entry.text), tokens["ai_bg"], "AI",
-                       tokens["success"], tokens,
+        return _bubble(body, tokens["ai_bg"], "AI", tokens["success"], tokens,
                        suffix=f' <a href="ai:{index}" '
                               f'style="color:{tokens["accent"]};">[收起]</a>')
 
@@ -247,10 +348,12 @@ def render_entry(entry: ChatEntry, index: int, tokens: dict, *,
         args_text = ", ".join(f"{k}={v}" for k, v in (entry.args or {}).items())[:60]
         args_text = args_text or "(无参数)"
         full = (entry.result or "").strip()
+        # 工具结果里若含 Markdown 表格,直接画成真表(QTextBrowser 认的富文本表格)。
+        rendered = render_text_with_tables(full, tokens)
         level = level_of(entry.tool_id)
         if level >= 2:
             return (f'<p style="color:{tokens["muted"]};">🔧 工具 {esc(entry.name)}'
-                    f'({esc(args_text)})<br>&nbsp;&nbsp;→ {esc(full)} '
+                    f'({esc(args_text)})<br>&nbsp;&nbsp;→ {rendered} '
                     f'<a href="tool:{entry.tool_id}">[收起]</a></p>')
         if level == 1:
             preview = (full[:60].replace("\n", " ") + "…") if len(full) > 60 else full

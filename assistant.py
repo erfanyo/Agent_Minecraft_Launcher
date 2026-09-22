@@ -263,6 +263,14 @@ TOOLS.extend([
            'enabled': {'type': 'boolean'},
            'reason': {'type': 'string', 'enum': ['client_only', 'dependency_conflict', 'wrong_version', 'diagnostic_only']}},
           ['server', 'filename', 'enabled', 'reason']),
+    _tool('suggest_server_removals',
+          '只读诊断：结合本次服务端日志与 Mod 元数据，列出建议停用的 Mod 及各自说明，'
+          '按证据强度分为「确定/很可能/待复核」。它只给建议、不改动任何文件；'
+          '用户确认后再用 set_server_mod_enabled 逐个停用。',
+          {'server': {'type': 'string', 'description': '服务端名称或 id'},
+           'include_descriptions': {'type': 'boolean',
+                                    'description': '是否联网补全描述，默认 true'}},
+          ['server']),
 ])
 for _schema in TOOLS:
     if _schema['function']['name'] == 'inspect_mod_jar':
@@ -331,7 +339,8 @@ TOOL_GROUPS = {
     "crashrepair": ['repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "set_setting", "backup_instance", "install_instance"],
     "keybind": ["get_key_bindings"],
     "server": ["list_server_instances", "read_server_candidate_report",
-               "list_server_mods", "read_server_log", "set_server_mod_enabled"],
+               "list_server_mods", "read_server_log", "set_server_mod_enabled",
+               "suggest_server_removals"],
 }
 
 TOOL_GROUPS['crashrepair'].extend(["snapshot_instance","restore_instance_snapshot","list_instance_snapshots","inspect_mod_jar","inspect_instance_core","set_mod_enabled","observe_game","find_compatible_mod_replacement","replace_mod_version","launch_game","read_instance_log","read_crash_report"])
@@ -365,7 +374,13 @@ TOOL_GROUP_KEYWORDS = {
     "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因", "wiki", "维基", "百科", "查一下", "叫什么", "物品", "生物", "实体", "名词", "名称", "名字", "配料"],
     "crashrepair": ["崩溃", "崩了", "崩", "闪退", "报错", "诊断", "修", "修复", "解决", "重装", "装不上", "crash", "fix", "地狱", "测试", "快照", "benchmark"],
     "keybind": ["按键", "绑定", "键位", "keybind", "空格"],
-    "server": ["服务端", "服务器", "候选服务端", "开服", "server"],
+    "server": ["服务端", "服务器", "候选服务端", "开服", "server",
+               # 服务端特有的「跑起来但功能不对」症状 => 需要日志诊断。
+               # 刻意不写泛化的「崩溃/报错」:那是 crashrepair 组的词,写这里会把
+               # 整套服务端工具挂到普通客户端崩溃问题上。
+               "上不了酒", "上酒", "上菜", "服务端崩溃", "服务端报错",
+               "删mod", "删 mod", "哪些mod", "哪些 mod", "多余的mod", "多余mod",
+               "清理mod", "清理 mod", "建议删", "停用mod", "停用 mod"],
 }
 
 
@@ -406,7 +421,7 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
         core = {"resolve_mod_concept", "search_mods", "search_modpacks", "list_instances",
                 "get_settings", "get_recipe_path", "read_instance_log", "read_crash_report",
                 "list_server_instances", "read_server_candidate_report", "list_server_mods",
-                "read_server_log", "set_server_mod_enabled"}
+                "read_server_log", "set_server_mod_enabled", "suggest_server_removals"}
         keep = []
         for t in mounted:
             if t["function"]["name"] in core:

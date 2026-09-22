@@ -11,8 +11,8 @@
 import unittest
 
 from chat_view import (ChatEntry, ai_summary, coerce_entries, esc, is_long_ai,
-                       render_entries, render_entry, render_table,
-                       table_to_text)
+                       parse_markdown_tables, render_entries, render_entry,
+                       render_table, render_text_with_tables, table_to_text)
 
 
 TOKENS = {
@@ -140,6 +140,72 @@ class RenderEntryTests(unittest.TestCase):
                                      rows=[["a", "A"]]), 0, TOKENS)
         self.assertIn("<table", out)
         self.assertIn("清单", out)
+
+
+class MarkdownTableTests(unittest.TestCase):
+    """工具/模型返回纯文本表格时,渲染层要画成真表。"""
+
+    SAMPLE = ("建议停用以下 Mod：\n"
+              "| Mod | 描述 |\n"
+              "| --- | --- |\n"
+              "| [机械动力] create.jar | 机械动力,工业向核心 |\n"
+              "| client.jar | 纯客户端,服务端会崩 |\n"
+              "\n以上仅供参考。")
+
+    def test_parse_finds_table_with_title(self):
+        tables = parse_markdown_tables(self.SAMPLE)
+        self.assertEqual(len(tables), 1)
+        title, columns, rows = tables[0]
+        self.assertEqual(columns, ["Mod", "描述"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0][0], "[机械动力] create.jar")
+        self.assertEqual(title, "建议停用以下 Mod：")
+
+    def test_text_outside_table_is_preserved(self):
+        html = render_text_with_tables(self.SAMPLE, TOKENS)
+        self.assertIn("<table", html)
+        self.assertIn("建议停用以下 Mod", html)
+        self.assertIn("以上仅供参考", html)
+        # 表格行不应再以原文竖线形式出现
+        self.assertNotIn("| --- |", html)
+
+    def test_rows_render_inside_table(self):
+        html = render_text_with_tables(self.SAMPLE, TOKENS)
+        self.assertEqual(html.count("<td"), 4)
+        self.assertIn("纯客户端", html)
+
+    def test_ragged_row_is_padded(self):
+        text = "| A | B |\n| --- | --- |\n| only-one |\n"
+        tables = parse_markdown_tables(text)
+        self.assertEqual(tables[0][2], [["only-one", ""]])
+
+    def test_separator_without_dashes_is_not_a_table(self):
+        text = "| A | B |\n| x | y |\n"
+        self.assertEqual(parse_markdown_tables(text), [])
+
+    def test_plain_text_without_table_is_escaped(self):
+        html = render_text_with_tables("没有表格 <b>粗体</b>", TOKENS)
+        self.assertIn("&lt;b&gt;", html)
+        self.assertNotIn("<table", html)
+
+    def test_table_cells_are_escaped(self):
+        text = "| A |\n| --- |\n| <script>alert(1)</script> |\n"
+        html = render_text_with_tables(text, TOKENS)
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_tool_entry_level2_renders_table(self):
+        entry = ChatEntry(kind="tool", tool_id=1, name="suggest_server_removals",
+                          args={"server": "s"}, result=self.SAMPLE)
+        out = render_entry(entry, 0, TOKENS, tool_level=lambda _i: 2)
+        self.assertIn("<table", out)
+        self.assertIn("纯客户端", out)
+
+    def test_tool_entry_level1_stays_compact(self):
+        entry = ChatEntry(kind="tool", tool_id=1, name="t", result=self.SAMPLE)
+        out = render_entry(entry, 0, TOKENS, tool_level=lambda _i: 1)
+        self.assertNotIn("<table", out)
+        self.assertIn("[完整结果]", out)
 
 
 class HelperTests(unittest.TestCase):

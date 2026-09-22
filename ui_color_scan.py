@@ -79,6 +79,9 @@ DATA_PALETTE_WHITELIST = {
     "#eeeeff": "chat_view 单测注入 token(user_bg)",
     "#f5f5f5": "chat_view 单测注入 token(ai_bg)",
     "#fafafa": "chat_view 单测注入 token(row_alt)",
+    # 已知误报:这里是 KubeJS 日志的「文件#行号」格式,不是色值。测试样例必须与真实
+    # 日志一致(server_log_diagnosis 要靠它验证脚本报错不被误判成 Mod 停用建议)。
+    "#501": "test_server_log_diagnosis 样例里的 KubeJS 行号(counter.js#501),非色值",
     "rgba(128,128,128,90)": "assistant_ui 语音/截图按钮半透明灰悬停底",
     "rgba(128,128,128,160)": "assistant_ui 语音/截图按钮半透明灰按下底",
     "#2e5a85": "assistant_ui 发送按钮按下蓝(独立蓝系)",
