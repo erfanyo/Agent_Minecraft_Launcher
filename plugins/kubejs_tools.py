@@ -9,6 +9,9 @@
 - 报错定位:从日志跳到出错那一行并高亮。
 
 原来的核心实现(服务端详情里的 KubeJS 页)已整体搬到这里,核心不再自带该页。
+
+**默认不启用**:装了 ``kubejs`` 的用户会收到一次「要不要启用」的提示(见
+:mod:`plugin_prompt`),拒绝后不再打扰;也可以在「设置 → 插件」里手动打开。
 """
 PLUGIN_ID = "kubejs_tools"
 PLUGIN_NAME = "KubeJS 工具"
@@ -16,7 +19,9 @@ PLUGIN_DESCRIPTION = ("浏览 KubeJS 脚本并定位报错(只读)。"
                       "脚本报错会让服务端直接启动失败,这里可以跳到出错的那一行。")
 PLUGIN_VERSION = "1.0.0"
 PLUGIN_API_VERSION = 1
-PLUGIN_DEFAULT_ENABLED = True
+#: 默认关闭:只有整合包作者才需要它,普通玩家开着只是多一个空标签页。
+#: 装了 KubeJS 的用户由核心的「检测到 mod → 问一次」机制发现(WATCH_MODS)。
+PLUGIN_DEFAULT_ENABLED = False
 
 #: 本插件关心的 mod(自动检测用:装了它才提示安装本插件)。
 #: KubeJS 自身的 mod id 就是 kubejs。

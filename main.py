@@ -615,6 +615,12 @@ class MainWindow(QMainWindow):
         if getattr(self, "_wallpaper_source", None) is not None:
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, self._recompute_wallpaper)
+        # 「检测到 mod → 问要不要装插件」放在窗口真正显示之后:一来不挡启动,
+        # 二来窗口还没露脸就弹模态框很奇怪(未显示的窗口不提示,见该方法)。
+        if not getattr(self, "_plugin_prompt_scheduled", False):
+            self._plugin_prompt_scheduled = True
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(1200, self.maybe_prompt_plugin_for_mods)
 
     # ---- 窗口几何:记住大小与位置 ----
     def _restore_window_geometry(self):
@@ -658,6 +664,45 @@ class MainWindow(QMainWindow):
         # 立刻落盘,用户不必再关一次窗口才生效
         self._save_window_geometry()
         self.statusBar().showMessage('窗口已恢复默认尺寸', 3000)
+
+    def maybe_prompt_plugin_for_mods(self):
+        """检测到某 mod 装了、而对应插件没启用时,问用户一次(核心的插件发现机制)。
+
+        见 ``plugin_prompt`` 与 docs/PLUGIN_IDEAS.md 的红线:**只问一次**、把拒绝也
+        记住、绝不静默启用。这里仅在启动后调用一次。
+        """
+        try:
+            import plugin_prompt as pp
+            installed = pp.installed_mod_names(paths.GAME_DIR)
+            if not installed:
+                return
+            pending = pp.pending_prompts(self.settings, installed,
+                                         pp.missing_candidates(self.settings))
+        except Exception:
+            return                       # 探测失败不该影响启动
+        if not pending or not self.isVisible():
+            return                       # 窗口没露脸就不弹模态框(测试/后台场景)
+        for item in pending:
+            mods = '、'.join(item['mods'])
+            answer = QMessageBox.question(
+                self, '发现可用的插件',
+                f"检测到你装了 {mods}。\n\n"
+                f"插件「{item['name']}」可以提供对应的管理界面。要启用它吗?\n"
+                f"(启用后下次启动生效;也可以在「设置 → 插件」里改)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes)
+            declined = answer != QMessageBox.StandardButton.Yes
+            data = dict(self.settings)
+            data = pp.remember(data, item['id'], declined=declined)
+            if not declined:
+                enabled = set(data.get('plugins_enabled', []) or [])
+                enabled.add(item['id'])
+                data['plugins_enabled'] = sorted(enabled)
+                disabled = set(data.get('plugins_disabled', []) or [])
+                disabled.discard(item['id'])
+                data['plugins_disabled'] = sorted(disabled)
+            self.settings = data
+            save_settings(data)
 
     def closeEvent(self, event):
         if getattr(self.home_panel.server_center, '_busy', False):
