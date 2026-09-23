@@ -235,6 +235,8 @@ class MainWindow(QMainWindow):
         self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
         self.title_bar = FramelessTitleBar(self, "AMCL",
                                            trailing_widget=self._running_label)
+        # 边缘缩放手柄(Linux 无边框窗口专用;Windows 走 WM_NCHITTEST,手柄不影响)
+        self._setup_resize_handles()
         # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
         # - 导入整合包 → 下载新资源 → 实例 →「导入整合包」按钮
         # - 检查更新 / 引导教程(重播) → 放到 设置 → 系统
@@ -603,108 +605,125 @@ class MainWindow(QMainWindow):
         return super().nativeEvent(eventType, message)
 
     # ---- 跨平台边缘拉拽缩放(Linux/macOS/Windows 均生效) ----
-    # Windows:优先走 nativeEvent + WM_NCHITTEST(已覆盖);下面的逻辑作为兜底。
-    # Linux:FramelessWindowHint 窗口被窗口管理器无视 startSystemResize,
-    #   所以用 setGeometry 手动拖拽四边/四角(纯 Qt,不依赖 WM 行为)。
-    _RESIZE_MARGIN = 8  # 边缘命中范围(px)
-    _resize_active: bool = False
-    _resize_edge: int = 0           # Qt.Edge 组合(int)，0 表示无拖拽
-    _resize_start_geo: object = None   # QRect
-    _resize_start_mouse: object = None # QPoint(屏幕坐标)
-
-    def _edge_hit(self, pos) -> int | None:
-        """返回鼠标位置对应的窗口边缘(角返回两条边的组合);不在边缘返回 None。
-        返回值是 Qt.Edge 的 int 组合(可 OR),None 表示不在边缘。"""
-        if self.isMaximized() or self.isFullScreen():
-            return None
-        m = self._RESIZE_MARGIN
-        geo = self.geometry()
-        w, h = geo.width(), geo.height()
-        # pos 是窗口局部坐标,转换为屏幕坐标再判断
-        global_pt = self.mapToGlobal(pos)
-        gx, gy = global_pt.x(), global_pt.y()
-        left = gx < geo.left() + m
-        right = gx > geo.right() - m
-        top = gy < geo.top() + m
-        bottom = gy > geo.bottom() - m
-        if not (left or right or top or bottom):
-            return None
-        edge = 0
-        if top:
-            edge |= Qt.Edge.TopEdge
-        if bottom:
-            edge |= Qt.Edge.BottomEdge
-        if left:
-            edge |= Qt.Edge.LeftEdge
-        if right:
-            edge |= Qt.Edge.RightEdge
-        return edge
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            edge = self._edge_hit(e.pos())
-            if edge is not None:
-                self._resize_active = True
-                self._resize_edge = edge
-                self._resize_start_geo = self.geometry()
-                self._resize_start_mouse = e.globalPosition().toPoint()
-                e.accept()
+    # Windows:优先走 nativeEvent + WM_NCHITTEST(已覆盖);下面的逻辑不干预。
+    # Linux/macOS:FramelessWindowHint 窗口被窗口管理器无视 startSystemResize,
+    #   用边缘透明手柄控件实现拖拽缩放(直接接收鼠标事件,不被子控件吃掉)。
+    class _ResizeHandle(QWidget):
+        """透明边缘手柄：覆盖在窗口某条边上，接收鼠标事件实现拖拽缩放。"""
+        def __init__(self, edge, main_win):
+            super().__init__(main_win)
+            self._edge = edge          # Qt.Edge
+            self._win = main_win
+            self._drag_origin = None   # QPoint(屏幕坐标)
+            self._geo_origin = None
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        def mousePressEvent(self, e):
+            if e.button() == Qt.MouseButton.LeftButton and not self._win.isMaximized():
+                self._drag_origin = e.globalPosition().toPoint()
+                self._geo_origin  = self._win.geometry()
+        def mouseMoveEvent(self, e):
+            if self._drag_origin is None:
                 return
-        super().mousePressEvent(e)
+            mp  = e.globalPosition().toPoint()
+            d   = mp - self._drag_origin
+            g   = self._geo_origin
+            edge = self._edge
+            minw = self._win.minimumWidth()
+            minh = self._win.minimumHeight()
+            nx, ny, nw, nh = g.x(), g.y(), g.width(), g.height()
+            if edge & Qt.Edge.RightEdge:
+                nw = max(minw, g.width()  + d.x())
+            if edge & Qt.Edge.BottomEdge:
+                nh = max(minh, g.height() + d.y())
+            if edge & Qt.Edge.LeftEdge:
+                nw = max(minw, g.width()  - d.x())
+                nx = g.x() + (g.width() - nw)
+            if edge & Qt.Edge.TopEdge:
+                nh = max(minh, g.height() - d.y())
+                ny = g.y() + (g.height() - nh)
+            # 防止重入
+            if hasattr(self._win, '_resize_guard') and self._win._resize_guard:
+                return
+            self._win._resize_guard = True
+            self._win.setGeometry(nx, ny, nw, nh)
+            self._win._resize_guard = False
+        def mouseReleaseEvent(self, e):
+            self._drag_origin = None
+            self._geo_origin  = None
+
+    def _setup_resize_handles(self):
+        """在窗口四边/四角各放一个透明手柄，始终保持在内容之上。"""
+        m = 6   # 边缘手柄宽/高
+        C = self._ResizeHandle
+        self._resize_handles = {
+            # 角(先放，四边在上面裁剪)
+            'tl': C(Qt.Edge.TopEdge | Qt.Edge.LeftEdge,   self),
+            'tr': C(Qt.Edge.TopEdge | Qt.Edge.RightEdge,  self),
+            'bl': C(Qt.Edge.BottomEdge | Qt.Edge.LeftEdge, self),
+            'br': C(Qt.Edge.BottomEdge | Qt.Edge.RightEdge, self),
+            # 边
+            't': C(Qt.Edge.TopEdge,    self),
+            'b': C(Qt.Edge.BottomEdge, self),
+            'l': C(Qt.Edge.LeftEdge,   self),
+            'r': C(Qt.Edge.RightEdge,  self),
+        }
+        self._resize_guard = False
+        self._position_resize_handles()
+        # 光标样式
+        cursor_map = {
+            'l': Qt.CursorShape.SizeHorCursor, 'r': Qt.CursorShape.SizeHorCursor,
+            't': Qt.CursorShape.SizeVerCursor, 'b': Qt.CursorShape.SizeVerCursor,
+            'tl': Qt.CursorShape.SizeFDiagCursor, 'br': Qt.CursorShape.SizeFDiagCursor,
+            'tr': Qt.CursorShape.SizeBDiagCursor, 'bl': Qt.CursorShape.SizeBDiagCursor,
+        }
+        for k, w in self._resize_handles.items():
+            w.setCursor(cursor_map[k])
+            w.show()
+            w.raise_()
+
+    def _position_resize_handles(self):
+        """根据当前窗口尺寸，定位所有边缘手柄。"""
+        if not hasattr(self, '_resize_handles'):
+            return
+        m = 6
+        W, H = self.width(), self.height()
+        h = self._resize_handles
+        # 四角 6x6
+        h['tl'].setGeometry(0, 0, m, m)
+        h['tr'].setGeometry(W - m, 0, m, m)
+        h['bl'].setGeometry(0, H - m, m, m)
+        h['br'].setGeometry(W - m, H - m, m, m)
+        # 四边(缩进角落)
+        h['t'].setGeometry(m, 0, W - 2*m, m)
+        h['b'].setGeometry(m, H - m, W - 2*m, m)
+        h['l'].setGeometry(0, m, m, H - 2*m)
+        h['r'].setGeometry(W - m, m, m, H - 2*m)
 
     def mouseMoveEvent(self, e):
-        if self._resize_active and (e.buttons() & Qt.MouseButton.LeftButton):
-            geo = self._resize_start_geo
-            mouse_now = e.globalPosition().toPoint()
-            dx = mouse_now.x() - self._resize_start_mouse.x()
-            dy = mouse_now.y() - self._resize_start_mouse.y()
-            new_x, new_y = geo.x(), geo.y()
-            new_w, new_h = geo.width(), geo.height()
-            edge = self._resize_edge
-            min_w = self.minimumWidth()
-            min_h = self.minimumHeight()
-            # 右边/下边：直接改大小
-            if edge & Qt.Edge.RightEdge:
-                new_w = max(min_w, geo.width() + dx)
-            if edge & Qt.Edge.BottomEdge:
-                new_h = max(min_h, geo.height() + dy)
-            # 左边/上边：改大小的同时移位置
-            if edge & Qt.Edge.LeftEdge:
-                new_w = max(min_w, geo.width() - dx)
-                new_x = geo.x() + (geo.width() - new_w)
-            if edge & Qt.Edge.TopEdge:
-                new_h = max(min_h, geo.height() - dy)
-                new_y = geo.y() + (geo.height() - new_h)
-            self._resize_active = False  # 临时禁用，防止 setGeometry 再触发本事件
-            self.setGeometry(new_x, new_y, new_w, new_h)
-            self._resize_active = True
-            e.accept()
-            return
-        # 未在拖拽时：根据边缘悬停更新光标
-        if not e.buttons():
-            edge = self._edge_hit(e.pos())
-            cursor_map = {
-                Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
-                Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
-                Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
-                Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
-                Qt.Edge.TopEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeFDiagCursor,
-                Qt.Edge.BottomEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeFDiagCursor,
-                Qt.Edge.TopEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeBDiagCursor,
-                Qt.Edge.BottomEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeBDiagCursor,
-            }
-            self.setCursor(cursor_map.get(edge, Qt.CursorShape.ArrowCursor))
+        # 未拖拽时：根据边缘悬停更新光标(覆盖子控件的光标)
+        if not getattr(self, '_resize_guard', False) and not e.buttons():
+            pos = e.globalPosition().toPoint()
+            geo = self.geometry()
+            m = 8
+            left = pos.x() < geo.left() + m
+            right = pos.x() > geo.right() - m
+            top = pos.y() < geo.top() + m
+            bottom = pos.y() > geo.bottom() - m
+            cursor = Qt.CursorShape.ArrowCursor
+            if top and left:
+                cursor = Qt.CursorShape.SizeFDiagCursor
+            elif top and right:
+                cursor = Qt.CursorShape.SizeBDiagCursor
+            elif bottom and left:
+                cursor = Qt.CursorShape.SizeBDiagCursor
+            elif bottom and right:
+                cursor = Qt.CursorShape.SizeFDiagCursor
+            elif left or right:
+                cursor = Qt.CursorShape.SizeHorCursor
+            elif top or bottom:
+                cursor = Qt.CursorShape.SizeVerCursor
+            self.setCursor(cursor)
         super().mouseMoveEvent(e)
-
-    def mouseReleaseEvent(self, e):
-        if self._resize_active:
-            self._resize_active = False
-            self._resize_edge = None
-            self._resize_start_geo = None
-            self._resize_start_mouse = None
-            e.accept()
-            return
-        super().mouseReleaseEvent(e)
 
     def showEvent(self, ev):
         super().showEvent(ev)
@@ -1414,6 +1433,7 @@ class MainWindow(QMainWindow):
             self._place_download_ball()
         if getattr(self, "_wallpaper_source", None) is not None:
             self._recompute_wallpaper()
+        self._position_resize_handles()
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
