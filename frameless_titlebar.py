@@ -109,14 +109,23 @@ class FramelessTitleBar(QWidget):
             fn()
 
     # ---- 拖动移动 + 双击最大化 ----
+    # 用 QWindow.startSystemMove() 代替手动 move():跨平台委托给窗口管理器
+    # (X11/Wayland/DWM 都支持;手动 move+globalPosition 在 Wayland 行为不一致)
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             if self._win.isMaximized():
                 return
-            self._drag_offset = e.globalPosition().toPoint() - self._win.frameGeometry().topLeft()
+            # startSystemMove:Qt 6 跨平台拖拽,Windows/Linux/Mac 都能用
+            wh = self._win.windowHandle()
+            if wh is not None:
+                wh.startSystemMove()
+            else:
+                # fallback(极少数情况 windowHandle 为 None)
+                self._drag_offset = e.globalPosition().toPoint() - self._win.frameGeometry().topLeft()
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):
+        # startSystemMove 模式下 Qt 管理移动,此处仅 fallback
         if self._drag_offset is not None and (e.buttons() & Qt.MouseButton.LeftButton):
             self._win.move(e.globalPosition().toPoint() - self._drag_offset)
         super().mouseMoveEvent(e)

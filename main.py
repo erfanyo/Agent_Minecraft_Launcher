@@ -602,6 +602,57 @@ class MainWindow(QMainWindow):
                         return True, hit
         return super().nativeEvent(eventType, message)
 
+    # ---- 跨平台边缘拉拽缩放(Linux/macOS/Windows 均生效) ----
+    # nativeEvent + WM_NCHITTEST 只在 Windows 生效。
+    # 非 Windows 用 QWindow.startSystemResize() 委托给窗口管理器处理缩放。
+    # startSystemResize 是 Qt 6 跨平台 API，X11/Wayland/DWM 都支持。
+    _RESIZE_MARGIN = 6  # 边缘命中范围(px)
+
+    def _edge_hit(self, pos) -> Qt.Edge | None:
+        """返回鼠标位置对应的窗口边缘(角返回两条边的组合);不在边缘返回 None。"""
+        if self.isMaximized() or self.isFullScreen():
+            return None
+        r = self.rect()
+        m = self._RESIZE_MARGIN
+        pt = pos  # pos 已是窗口坐标(QPoint)
+        x, y = pt.x(), pt.y()
+        w, h = r.width(), r.height()
+        left = x < m
+        right = x > w - m
+        top = y < m
+        bottom = y > h - m
+        if not (left or right or top or bottom):
+            return None
+        # 组合角
+        if top and left:
+            return Qt.Edge.TopEdge | Qt.Edge.LeftEdge
+        if top and right:
+            return Qt.Edge.TopEdge | Qt.Edge.RightEdge
+        if bottom and left:
+            return Qt.Edge.BottomEdge | Qt.Edge.LeftEdge
+        if bottom and right:
+            return Qt.Edge.BottomEdge | Qt.Edge.RightEdge
+        if left:
+            return Qt.Edge.LeftEdge
+        if right:
+            return Qt.Edge.RightEdge
+        if top:
+            return Qt.Edge.TopEdge
+        if bottom:
+            return Qt.Edge.BottomEdge
+        return None
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            edge = self._edge_hit(e.pos())
+            if edge is not None:
+                wh = self.windowHandle()
+                if wh is not None:
+                    # 委托给窗口管理器处理缩放(Qt 6 跨平台 API)
+                    wh.startSystemResize(edge)
+                    return
+        super().mousePressEvent(e)
+
     def showEvent(self, ev):
         super().showEvent(ev)
         if sys.platform == "win32" and getattr(self, "_win_patched", False) is False:
