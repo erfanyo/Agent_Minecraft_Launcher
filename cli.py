@@ -125,6 +125,45 @@ def main(argv=None):
     srv_launch.add_argument("--accept-eula", action="store_true",
                             help="自动同意 Minecraft EULA(无需交互确认)")
 
+    # ---- MCSManager 联动(opt-in) ----
+    mcsm = srv.add_parser("mcsm", help="MCSManager 联动(需安装 mcsmapi 包)")
+    mcsm.add_argument("--url", default="", help="MCSManager 面板 URL(不填则从 settings 读)")
+    mcsm.add_argument("--apikey", default="", help="API Key(不填则从 settings 读)")
+    mcsm_sub = mcsm.add_subparsers(dest="mcsm_action", required=True)
+
+    mcsm_sub.add_parser("test", help="测试 MCSManager 连接")
+    mcsm_sub.add_parser("daemons", help="列出 MCSManager 节点")
+
+    mcsm_inst = mcsm_sub.add_parser("instances", help="列出实例")
+    mcsm_inst.add_argument("--daemon", default="", help="节点 UUID(不填则查全部)")
+    mcsm_inst.add_argument("--json", action="store_true")
+
+    mcsm_status = mcsm_sub.add_parser("status", help="查看实例状态")
+    mcsm_status.add_argument("daemon_id", help="节点 UUID")
+    mcsm_status.add_argument("uuid", help="实例 UUID")
+
+    mcsm_op = mcsm_sub.add_parser("start", help="启动实例")
+    mcsm_op.add_argument("daemon_id")
+    mcsm_op.add_argument("uuid")
+
+    mcsm_op = mcsm_sub.add_parser("stop", help="停止实例")
+    mcsm_op.add_argument("daemon_id")
+    mcsm_op.add_argument("uuid")
+
+    mcsm_op = mcsm_sub.add_parser("restart", help="重启实例")
+    mcsm_op.add_argument("daemon_id")
+    mcsm_op.add_argument("uuid")
+
+    mcsm_cmd = mcsm_sub.add_parser("command", help="发送控制台指令")
+    mcsm_cmd.add_argument("daemon_id")
+    mcsm_cmd.add_argument("uuid")
+    mcsm_cmd.add_argument("command", nargs="+")
+
+    mcsm_log = mcsm_sub.add_parser("output", help="获取实例日志/输出")
+    mcsm_log.add_argument("daemon_id")
+    mcsm_log.add_argument("uuid")
+    mcsm_log.add_argument("--size", type=int, default=0, help="获取大小(KiB,0=全部)")
+
     args = p.parse_args(argv)
     return _dispatch(args)
 
@@ -278,6 +317,9 @@ def _dispatch_server(args) -> int:
         _cmd_server_launch(args)
         return 0
 
+    if action == "mcsm":
+        return _dispatch_mcsm(args)
+
     print(f"未知服务端子命令: {action}", file=sys.stderr)
     return 1
 
@@ -417,6 +459,124 @@ def _cmd_ai(args):
 def _tools():
     from assistant import TOOLS
     return TOOLS
+
+
+# ================= MCSManager CLI =================
+def _get_mcsm_client(args) -> "MCSManagerClient":
+    """从 args(--url/--apikey)或 settings 构建 MCSManagerClient。"""
+    from mcsmanager_adapter import MCSManagerClient
+    url = args.url
+    apikey = args.apikey
+    if not url or not apikey:
+        try:
+            from settings import load_settings
+            s = load_settings()
+            url = url or s.get("mcsmanager_url", "")
+            apikey = apikey or s.get("mcsmanager_apikey", "")
+        except Exception:
+            pass
+    return MCSManagerClient(url=url, apikey=apikey)
+
+
+def _dispatch_mcsm(args) -> int:
+    action = args.mcsm_action
+
+    if action == "test":
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            daemons = client.list_daemons()
+            online = sum(1 for d in daemons if d.get("available"))
+            print(f"连接成功: {len(daemons)} 个节点({online} 在线)")
+            for d in daemons:
+                tag = "✓" if d.get("available") else "✗"
+                print(f"  [{tag}] {d['uuid'][:8]}... {d.get('ip','')}:{d.get('port','')} {d.get('remarks','')}")
+        except Exception as e:
+            print(f"连接失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "daemons":
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            daemons = client.list_daemons()
+            for d in daemons:
+                tag = "在线" if d.get("available") else "离线"
+                print(f"  {d['uuid']}  [{tag}]  {d.get('ip','')}:{d.get('port','')}  {d.get('remarks','')}")
+        except Exception as e:
+            print(f"失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "instances":
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            instances = client.list_instances(daemon_id=args.daemon)
+            if args.json:
+                print(json.dumps(instances, ensure_ascii=False, indent=2))
+            else:
+                if not instances:
+                    print("没有实例。")
+                for inst in instances:
+                    print(f"  {inst['uuid'][:12]}...  [{inst['status']}]  {inst['name']}  "
+                          f"(node={inst['daemon_id'][:8]}..., 启动 {inst['started_count']} 次)")
+        except Exception as e:
+            print(f"失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "status":
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            inst = client.instance_status(args.daemon_id, args.uuid)
+            print(json.dumps(inst, ensure_ascii=False, indent=2))
+        except Exception as e:
+            print(f"失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action in ("start", "stop", "restart"):
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            fn = {"start": client.start_instance, "stop": client.stop_instance,
+                  "restart": client.restart_instance}[action]
+            uuid = fn(args.daemon_id, args.uuid)
+            print(f"已{action}: {uuid}")
+        except Exception as e:
+            print(f"失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "command":
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            cmd = " ".join(args.command)
+            client.send_command(args.daemon_id, args.uuid, cmd)
+            print(f"> {cmd}")
+        except Exception as e:
+            print(f"失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    if action == "output":
+        try:
+            client = _get_mcsm_client(args)
+            client.connect()
+            size = args.size if args.size > 0 else None
+            output = client.get_output(args.daemon_id, args.uuid, size=size)
+            print(output)
+        except Exception as e:
+            print(f"失败: {e}", file=sys.stderr)
+            return 1
+        return 0
+
+    print(f"未知 mcsm 子命令: {action}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

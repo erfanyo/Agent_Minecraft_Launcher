@@ -77,9 +77,113 @@ _SERVER_TOOL_DESC = {
     "export_start_command": "把启动计划导出为可复制的 java 命令行(用于 start.bat / MCSManager 等面板)",
 }
 
+
+# ---- MCSManager 联动工具(opt-in,需 mcsmapi 包 + settings 配置) ----
+def _mcsm_client():
+    """从 settings 构建 MCSManagerClient(每次调用都重新建,保证用最新配置)。"""
+    from mcsmanager_adapter import MCSManagerClient
+    try:
+        from settings import load_settings
+        s = load_settings()
+    except Exception:
+        s = url = apikey = ""
+        return MCSManagerClient()
+    url = (s.get("mcsmanager_url") or "").strip()
+    apikey = (s.get("mcsmanager_apikey") or "").strip()
+    username = (s.get("mcsmanager_username") or "").strip()
+    password = (s.get("mcsmanager_password") or "").strip()
+    if not url:
+        raise ValueError("未配置 MCSManager URL(settings → mcsmanager_url)")
+    client = MCSManagerClient(url=url, apikey=apikey, username=username, password=password)
+    client.connect()
+    return client
+
+
+def _mcsm_test_connection() -> str:
+    from mcsmanager_adapter import test_connection
+    try:
+        from settings import load_settings
+        s = load_settings()
+    except Exception:
+        return "无法加载启动器设置。"
+    return test_connection(s)
+
+
+def _mcsm_list_daemons() -> str:
+    client = _mcsm_client()
+    daemons = client.list_daemons()
+    lines = [f"共 {len(daemons)} 个节点:"]
+    for d in daemons:
+        tag = "在线" if d.get("available") else "离线"
+        lines.append(f"  [{tag}] {d['uuid']}  {d.get('ip','')}:{d.get('port','')}  {d.get('remarks','')}")
+    return "\n".join(lines)
+
+
+def _mcsm_list_instances(daemon: str = "") -> str:
+    client = _mcsm_client()
+    instances = client.list_instances(daemon_id=daemon)
+    if not instances:
+        return "没有实例。"
+    lines = [f"共 {len(instances)} 个实例:"]
+    for inst in instances:
+        lines.append(f"  {inst['uuid']}  [{inst['status']}]  {inst['name']}  (node={inst['daemon_id'][:8]}...)")
+    return "\n".join(lines)
+
+
+def _mcsm_instance_status(daemon_id: str, uuid: str) -> str:
+    client = _mcsm_client()
+    inst = client.instance_status(daemon_id, uuid)
+    import json
+    return json.dumps(inst, ensure_ascii=False, indent=2)
+
+
+def _mcsm_start_instance(daemon_id: str, uuid: str) -> str:
+    client = _mcsm_client()
+    return f"已启动: {client.start_instance(daemon_id, uuid)}"
+
+
+def _mcsm_stop_instance(daemon_id: str, uuid: str) -> str:
+    client = _mcsm_client()
+    return f"已停止: {client.stop_instance(daemon_id, uuid)}"
+
+
+def _mcsm_send_command(daemon_id: str, uuid: str, command: str) -> str:
+    client = _mcsm_client()
+    client.send_command(daemon_id, uuid, command)
+    return f"> {command}"
+
+
+def _mcsm_get_output(daemon_id: str, uuid: str, size: int = 0) -> str:
+    client = _mcsm_client()
+    return client.get_output(daemon_id, uuid, size=size if size > 0 else None)
+
+
+_MCSM_TOOL_FUNCS = {
+    "mcsm_test_connection": _mcsm_test_connection,
+    "mcsm_list_daemons": _mcsm_list_daemons,
+    "mcsm_list_instances": _mcsm_list_instances,
+    "mcsm_instance_status": _mcsm_instance_status,
+    "mcsm_start_instance": _mcsm_start_instance,
+    "mcsm_stop_instance": _mcsm_stop_instance,
+    "mcsm_send_command": _mcsm_send_command,
+    "mcsm_get_output": _mcsm_get_output,
+}
+
+_MCSM_TOOL_DESC = {
+    "mcsm_test_connection": "测试与 MCSManager 面板的连接(settings 中配置 URL 和 API Key)",
+    "mcsm_list_daemons": "列出 MCSManager 的所有节点(在线/离线/地址)",
+    "mcsm_list_instances": "列出 MCSManager 管理的所有实例(可按节点过滤)",
+    "mcsm_instance_status": "查看 MCSManager 上某个实例的详细状态",
+    "mcsm_start_instance": "通过 MCSManager 启动一个实例",
+    "mcsm_stop_instance": "通过 MCSManager 停止一个实例",
+    "mcsm_send_command": "通过 MCSManager 向实例发送控制台指令",
+    "mcsm_get_output": "通过 MCSManager 获取实例的控制台输出/日志",
+}
+
 # 合并:调用方不需要关心来源,统一用名字查
 _ALL_TOOL_FUNCS = {**{name: getattr(agent_tools, name) for name in agent_tools.TOOL_FUNCS},
-                   **_SERVER_TOOL_FUNCS}
+                   **_SERVER_TOOL_FUNCS,
+                   **_MCSM_TOOL_FUNCS}
 
 
 def _type_name(t):
@@ -113,7 +217,8 @@ def _schema_for(fn):
 def _tool_list():
     out = []
     for name, fn in _ALL_TOOL_FUNCS.items():
-        desc = _TOOL_DESC.get(name) or _SERVER_TOOL_DESC.get(name) or f"调用启动器工具 {name}"
+        desc = (_TOOL_DESC.get(name) or _SERVER_TOOL_DESC.get(name)
+                or _MCSM_TOOL_DESC.get(name) or f"调用启动器工具 {name}")
         out.append({
             "name": name,
             "description": desc,
