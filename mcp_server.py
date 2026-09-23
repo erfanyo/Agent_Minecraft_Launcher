@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MCP Server(轻量,零第三方依赖):把启动器的工具(agent_tools)暴露成 MCP 工具。
+MCP Server(轻量,零第三方依赖):把启动器的工具(agent_tools + server_service)暴露成 MCP 工具。
 
 **MCP = Model Context Protocol**(Anthropic 提出),让外部 AI 宿主(Claude Desktop / VS Code /
 其它 MCP 客户端 / 启动器自己的 AI)能远程调用启动器的能力(列实例/装 Mod/查日志/启动等)。
@@ -9,17 +9,20 @@ MCP Server(轻量,零第三方依赖):把启动器的工具(agent_tools)暴露�
 - 走 stdin/stdout:宿主 `/path/python main.py --mcp` 拉起本进程,一行一个 JSON-RPC 消息。
 - 支持:initialize / notifications/initialized / tools/list / tools/call / ping。
 
-工具来源 = `agent_tools`(和启动器 AI 内置工具同一套,"文本进→文本出"),
-schema 由函数签名 + 描述表生成;调用时按签名过滤参数(与 assistant 执行器一致)。
+工具来源:
+- `agent_tools`(客户端侧:列实例/装 Mod/查配方/发指令等,"文本进→文本出")。
+- `server_service`(服务端侧:列服务端/启停/发指令/读配置/导入/诊断等,Qt-free)。
+- 两者 schema 均由函数签名 + 描述表生成;调用时按签名过滤参数。
 """
 import inspect
 import json
 import sys
 
 import agent_tools
+import server_service
 
 
-# 简短描述(没有描述用签名兜底);后续可换成 assistant.TOOLS 里的完整描述
+# ---- 客户端工具描述 ----
 _TOOL_DESC = {
     "list_instances": "列出已安装的实例(加载器/基础版本)",
     "list_mods": "列出某实例已安装的 Mod 文件",
@@ -43,41 +46,84 @@ _TOOL_DESC = {
     "translate_mod_desc": "翻译 Mod 描述(英→中)",
 }
 
+# ---- 服务端工具(来自 server_service,Qt-free) ----
+_SERVER_TOOL_FUNCS = {
+    "list_servers": server_service.list_servers,
+    "server_status": server_service.server_status,
+    "start_server": server_service.start_server,
+    "stop_server": server_service.stop_server,
+    "send_server_command": server_service.send_server_command,
+    "inspect_pack": server_service.inspect_pack,
+    "import_server": server_service.import_server,
+    "install_runtime": server_service.install_runtime,
+    "read_server_properties": server_service.read_server_properties,
+    "apply_server_properties": server_service.apply_server_properties,
+    "diagnose_server_log": server_service.diagnose_server_log,
+    "export_start_command": server_service.export_start_command,
+}
+
+_SERVER_TOOL_DESC = {
+    "list_servers": "列出已管理的服务端(名称/加载器/MC 版本/运行状态)",
+    "server_status": "查看某个服务端的运行状态(PID/端口/是否在线)",
+    "start_server": "启动一个已安装的服务端(需要 Java 路径 + 启动参数)",
+    "stop_server": "安全停止运行中的服务端(等世界保存后退出)",
+    "send_server_command": "向运行中的服务端发送控制台指令(如 say/whitelist/op/ban)",
+    "inspect_pack": "扫描 ZIP/MRPACK 服务端包,返回版本/加载器/Java/文件清单等报告(不导入)",
+    "import_server": "导入一个已扫描确认的服务端包到游戏目录",
+    "install_runtime": "为服务端补全运行库(运行官方安装器,补 libraries 等)",
+    "read_server_properties": "读取服务端 server.properties 当前键值",
+    "apply_server_properties": "原子修改服务端 server.properties(带备份+校验+运行中拒写)",
+    "diagnose_server_log": "解析服务端日志/崩溃报告,诊断崩溃原因并建议修复(纯函数,不改文件)",
+    "export_start_command": "把启动计划导出为可复制的 java 命令行(用于 start.bat / MCSManager 等面板)",
+}
+
+# 合并:调用方不需要关心来源,统一用名字查
+_ALL_TOOL_FUNCS = {**{name: getattr(agent_tools, name) for name in agent_tools.TOOL_FUNCS},
+                   **_SERVER_TOOL_FUNCS}
+
 
 def _type_name(t):
     return {"str": "string", "int": "integer", "float": "number", "bool": "boolean"}.get(
         getattr(t, "__name__", "str"), "string")
 
 
-def _schema_for(name):
+# 这些参数是内部回调/自动填充的,不暴露给 MCP 客户端
+_EXCLUDE_PARAMS = frozenset({"status", "status_callback", "progress_callback"})
+
+
+def _schema_for(fn):
     """由函数签名生成 inputSchema:参数名→类型;有默认值的可选。"""
-    fn = agent_tools.TOOL_FUNCS.get(name)
     if fn is None:
         return {"type": "object", "properties": {}, "required": []}
     props = {}
     required = []
     for pname, p in inspect.signature(fn).parameters.items():
-        if pname in ("status", "status_callback", "progress_callback", "game_dir"):
-            continue   # 内部回调/缺省目录,不暴露
+        if pname in _EXCLUDE_PARAMS or pname.startswith("_"):
+            continue
+        if pname == "game_dir" and fn not in _SERVER_TOOL_FUNCS.values():
+            continue   # 客户端 tool 的 game_dir 由启动器自动填;服务端 tool 暴露它
+        if p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+            continue   # *args / **kwargs 不暴露
         props[pname] = {"type": _type_name(p.annotation)}
         if p.default is inspect.Parameter.empty:
-            required.append(pname)   # 有默认值=可选
+            required.append(pname)
     return {"type": "object", "properties": props, "required": required}
 
 
 def _tool_list():
     out = []
-    for name in agent_tools.TOOL_FUNCS:
+    for name, fn in _ALL_TOOL_FUNCS.items():
+        desc = _TOOL_DESC.get(name) or _SERVER_TOOL_DESC.get(name) or f"调用启动器工具 {name}"
         out.append({
             "name": name,
-            "description": _TOOL_DESC.get(name, f"调用启动器工具 {name}"),
-            "inputSchema": _schema_for(name),
+            "description": desc,
+            "inputSchema": _schema_for(fn),
         })
     return out
 
 
 def _call(name, args):
-    fn = getattr(agent_tools, name, None)
+    fn = _ALL_TOOL_FUNCS.get(name)
     if fn is None:
         return f"错误:未知工具 {name}"
     try:
