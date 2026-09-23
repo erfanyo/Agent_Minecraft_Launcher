@@ -20,6 +20,7 @@ import time
 import ctypes  # Windows 专属模拟按键用;wintypes 在用到时延迟导入(非 Windows 无此子模块)
 
 import paths
+import server_properties_io as _sp_io
 
 
 def _is_windows() -> bool:
@@ -71,18 +72,8 @@ def rcon_execute(host: str, port: int, password: str, command: str,
 def read_rcon_config(inst_dir: str) -> dict | None:
     """读实例目录的 server.properties,返回 rcon 配置;
     未开启 enable-rcon 或文件不存在返回 None。"""
-    path = os.path.join(inst_dir, "server.properties")
-    if not os.path.isfile(path):
-        return None
-    props = {}
-    try:
-        for line in open(path, encoding="utf-8", errors="replace"):
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            props[k.strip()] = v.strip()
-    except Exception:
+    props = _sp_io.read_values(inst_dir)
+    if not props:
         return None
     if props.get("enable-rcon", "").lower() != "true":
         return None
@@ -208,48 +199,45 @@ def has_lan_server_properties(inst_dir: str) -> bool:
 
 def ensure_rcon_config(inst_dir: str, port: int = 25575) -> str:
     """检测到 Lan Server Properties → 自动写好 server.properties 开 RCON。
-    幂等:已有配置不动(密码保留)。返回状态文本,供提示用户。"""
+    幂等:已有配置不动(密码保留)。返回状态文本,供提示用户。
+
+    统一走 server_properties_io.apply_update:备份 + 原子写 + 编码感知。
+    (之前直接 open(path,'w') 会丢注释、非原子、无备份,已修复。)"""
     if not has_lan_server_properties(inst_dir):
         return ("未检测到 Lan Server Properties mod。\n"
                 "装上它(Modrinth 搜 lan-server-properties,支持 Forge/NeoForge/Fabric)后,\n"
                 "启动器就能自动开 RCON,单人世界免手动'对局域网开放'。")
-    path = os.path.join(inst_dir, "server.properties")
-    props = {}
-    if os.path.isfile(path):
-        try:
-            for line in open(path, encoding="utf-8", errors="replace"):
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    props[k.strip()] = v.strip()
-        except Exception:
-            pass
-
-    changed = []
+    import secrets
+    props = _sp_io.read_values(inst_dir)
+    changes = {}
     if props.get("enable-rcon") != "true":
-        props["enable-rcon"] = "true"
-        changed.append("enable-rcon=true")
+        changes["enable-rcon"] = "true"
     if props.get("rcon.port") != str(port):
-        props["rcon.port"] = str(port)
-        changed.append(f"rcon.port={port}")
+        changes["rcon.port"] = str(port)
     if not props.get("rcon.password"):
-        import secrets
-        props["rcon.password"] = secrets.token_hex(8)
-        changed.append("rcon.password=已生成随机密码")
+        changes["rcon.password"] = secrets.token_hex(8)
 
-    if changed or not os.path.isfile(path):
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                for k, v in props.items():
-                    f.write(f"{k}={v}\n")
-        except Exception as e:
-            return f"写 server.properties 失败:{e}"
-        return ("已自动配置 RCON(Lan Server Properties 生效):\n"
-                + "\n".join(changed)
-                + "\n\n接下来(必做):重启游戏 → 进世界后按 ESC → 点「对局域网开放」。\n"
-                "Lan Server Properties 会在这一步自动应用配置并开启 RCON,之后发指令即直连。")
-    return ("RCON 已配置好(Lan Server Properties):\n"
-            "重启游戏 → 进世界按 ESC → 点「对局域网开放」后即可直接发指令。")
+    if not changes and os.path.isfile(_sp_io.properties_path(inst_dir)):
+        return ("RCON 已配置好(Lan Server Properties):\n"
+                "重启游戏 → 进世界按 ESC → 点「对局域网开放」后即可直接发指令。")
+
+    # allow_running=True:此函数在游戏运行中调用(配合 Lan Server Properties 自动开 RCON),
+    # 不经过 AMCL 托管进程检测;原子写保证不会留半截文件。
+    result = _sp_io.apply_update(inst_dir, changes, allow_running=True)
+    if not result["ok"]:
+        return f"写 server.properties 失败: {result['message']}"
+
+    labels = []
+    if "enable-rcon" in changes:
+        labels.append("enable-rcon=true")
+    if "rcon.port" in changes:
+        labels.append(f"rcon.port={port}")
+    if "rcon.password" in changes:
+        labels.append("rcon.password=已生成随机密码")
+    return ("已自动配置 RCON(Lan Server Properties 生效):\n"
+            + "\n".join(labels)
+            + "\n\n接下来(必做):重启游戏 → 进世界后按 ESC → 点「对局域网开放」。\n"
+            "Lan Server Properties 会在这一步自动应用配置并开启 RCON,之后发指令即直连。")
 
 
 # ================= 智能发送(启动器 GUI 用) =================
