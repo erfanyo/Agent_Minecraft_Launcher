@@ -603,55 +603,108 @@ class MainWindow(QMainWindow):
         return super().nativeEvent(eventType, message)
 
     # ---- 跨平台边缘拉拽缩放(Linux/macOS/Windows 均生效) ----
-    # nativeEvent + WM_NCHITTEST 只在 Windows 生效。
-    # 非 Windows 用 QWindow.startSystemResize() 委托给窗口管理器处理缩放。
-    # startSystemResize 是 Qt 6 跨平台 API，X11/Wayland/DWM 都支持。
-    _RESIZE_MARGIN = 6  # 边缘命中范围(px)
+    # Windows:优先走 nativeEvent + WM_NCHITTEST(已覆盖);下面的逻辑作为兜底。
+    # Linux:FramelessWindowHint 窗口被窗口管理器无视 startSystemResize,
+    #   所以用 setGeometry 手动拖拽四边/四角(纯 Qt,不依赖 WM 行为)。
+    _RESIZE_MARGIN = 8  # 边缘命中范围(px)
+    _resize_active: bool = False
+    _resize_edge: int = 0           # Qt.Edge 组合(int)，0 表示无拖拽
+    _resize_start_geo: object = None   # QRect
+    _resize_start_mouse: object = None # QPoint(屏幕坐标)
 
-    def _edge_hit(self, pos) -> Qt.Edge | None:
-        """返回鼠标位置对应的窗口边缘(角返回两条边的组合);不在边缘返回 None。"""
+    def _edge_hit(self, pos) -> int | None:
+        """返回鼠标位置对应的窗口边缘(角返回两条边的组合);不在边缘返回 None。
+        返回值是 Qt.Edge 的 int 组合(可 OR),None 表示不在边缘。"""
         if self.isMaximized() or self.isFullScreen():
             return None
-        r = self.rect()
         m = self._RESIZE_MARGIN
-        pt = pos  # pos 已是窗口坐标(QPoint)
-        x, y = pt.x(), pt.y()
-        w, h = r.width(), r.height()
-        left = x < m
-        right = x > w - m
-        top = y < m
-        bottom = y > h - m
+        geo = self.geometry()
+        w, h = geo.width(), geo.height()
+        # pos 是窗口局部坐标,转换为屏幕坐标再判断
+        global_pt = self.mapToGlobal(pos)
+        gx, gy = global_pt.x(), global_pt.y()
+        left = gx < geo.left() + m
+        right = gx > geo.right() - m
+        top = gy < geo.top() + m
+        bottom = gy > geo.bottom() - m
         if not (left or right or top or bottom):
             return None
-        # 组合角
-        if top and left:
-            return Qt.Edge.TopEdge | Qt.Edge.LeftEdge
-        if top and right:
-            return Qt.Edge.TopEdge | Qt.Edge.RightEdge
-        if bottom and left:
-            return Qt.Edge.BottomEdge | Qt.Edge.LeftEdge
-        if bottom and right:
-            return Qt.Edge.BottomEdge | Qt.Edge.RightEdge
-        if left:
-            return Qt.Edge.LeftEdge
-        if right:
-            return Qt.Edge.RightEdge
+        edge = 0
         if top:
-            return Qt.Edge.TopEdge
+            edge |= Qt.Edge.TopEdge
         if bottom:
-            return Qt.Edge.BottomEdge
-        return None
+            edge |= Qt.Edge.BottomEdge
+        if left:
+            edge |= Qt.Edge.LeftEdge
+        if right:
+            edge |= Qt.Edge.RightEdge
+        return edge
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             edge = self._edge_hit(e.pos())
             if edge is not None:
-                wh = self.windowHandle()
-                if wh is not None:
-                    # 委托给窗口管理器处理缩放(Qt 6 跨平台 API)
-                    wh.startSystemResize(edge)
-                    return
+                self._resize_active = True
+                self._resize_edge = edge
+                self._resize_start_geo = self.geometry()
+                self._resize_start_mouse = e.globalPosition().toPoint()
+                e.accept()
+                return
         super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._resize_active and (e.buttons() & Qt.MouseButton.LeftButton):
+            geo = self._resize_start_geo
+            mouse_now = e.globalPosition().toPoint()
+            dx = mouse_now.x() - self._resize_start_mouse.x()
+            dy = mouse_now.y() - self._resize_start_mouse.y()
+            new_x, new_y = geo.x(), geo.y()
+            new_w, new_h = geo.width(), geo.height()
+            edge = self._resize_edge
+            min_w = self.minimumWidth()
+            min_h = self.minimumHeight()
+            # 右边/下边：直接改大小
+            if edge & Qt.Edge.RightEdge:
+                new_w = max(min_w, geo.width() + dx)
+            if edge & Qt.Edge.BottomEdge:
+                new_h = max(min_h, geo.height() + dy)
+            # 左边/上边：改大小的同时移位置
+            if edge & Qt.Edge.LeftEdge:
+                new_w = max(min_w, geo.width() - dx)
+                new_x = geo.x() + (geo.width() - new_w)
+            if edge & Qt.Edge.TopEdge:
+                new_h = max(min_h, geo.height() - dy)
+                new_y = geo.y() + (geo.height() - new_h)
+            self._resize_active = False  # 临时禁用，防止 setGeometry 再触发本事件
+            self.setGeometry(new_x, new_y, new_w, new_h)
+            self._resize_active = True
+            e.accept()
+            return
+        # 未在拖拽时：根据边缘悬停更新光标
+        if not e.buttons():
+            edge = self._edge_hit(e.pos())
+            cursor_map = {
+                Qt.Edge.LeftEdge: Qt.CursorShape.SizeHorCursor,
+                Qt.Edge.RightEdge: Qt.CursorShape.SizeHorCursor,
+                Qt.Edge.TopEdge: Qt.CursorShape.SizeVerCursor,
+                Qt.Edge.BottomEdge: Qt.CursorShape.SizeVerCursor,
+                Qt.Edge.TopEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeFDiagCursor,
+                Qt.Edge.BottomEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeFDiagCursor,
+                Qt.Edge.TopEdge | Qt.Edge.RightEdge: Qt.CursorShape.SizeBDiagCursor,
+                Qt.Edge.BottomEdge | Qt.Edge.LeftEdge: Qt.CursorShape.SizeBDiagCursor,
+            }
+            self.setCursor(cursor_map.get(edge, Qt.CursorShape.ArrowCursor))
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._resize_active:
+            self._resize_active = False
+            self._resize_edge = None
+            self._resize_start_geo = None
+            self._resize_start_mouse = None
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
 
     def showEvent(self, ev):
         super().showEvent(ev)
