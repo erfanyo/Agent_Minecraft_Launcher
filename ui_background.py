@@ -276,7 +276,8 @@ def scroll_surface_qss() -> str:
         f'QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {{'
         f' background: {hover}; }}'
         'QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; }'
-        'QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }'
+        f'QScrollBar::add-page, QScrollBar::sub-page {{ background: {groove}; }}'
+        f'QAbstractScrollArea::corner {{ background: {groove}; }}'
     )
 
 

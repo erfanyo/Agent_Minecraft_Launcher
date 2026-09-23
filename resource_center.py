@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (
 from i18n import t
 from background_tasks import BackgroundTask
 from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
-                      muted_color, panel_style, text_color, set_style,
+                      muted_color, panel_style, popup_panel_style, text_color, set_style,
                       accent_color, warning_color, current_color)
 from version_tree import GameVersionTree
 
@@ -577,7 +577,7 @@ class ResourceBrowser(QWidget):
         # 手动下载悬浮层(装 游戏版本树 + 加载器 + mod版本)
         self.manual_popup = PopupCard(self)
         self.manual_popup.setObjectName("manual_popup")
-        set_style(self.manual_popup, panel_style)
+        set_style(self.manual_popup, popup_panel_style)
         mp = QVBoxLayout(self.manual_popup)
         mp.setContentsMargins(10, 8, 10, 8)
         mp.setSpacing(6)
@@ -616,7 +616,7 @@ class ResourceBrowser(QWidget):
         # 目标实例悬浮层(装 实例卡片 + 自定义目录提示)
         self.inst_popup = PopupCard(self)
         self.inst_popup.setObjectName("inst_popup")
-        set_style(self.inst_popup, panel_style)
+        set_style(self.inst_popup, popup_panel_style)
         pp = QVBoxLayout(self.inst_popup)
         pp.setContentsMargins(10, 8, 10, 8)
         pp.setSpacing(4)

@@ -300,6 +300,16 @@ def panel_style() -> str:
     return f"border: 1px solid {border}; border-radius: 12px; background: {bg};"
 
 
+def popup_panel_style() -> str:
+    """Popup windows need their own opaque base, unlike panels over the main window.
+
+    A translucent top-level Qt.Popup can expose the compositor's black backing
+    on GNOME/Wayland. PopupCard paints its own wallpaper over this base when set.
+    """
+    return (f"border: 1px solid {current_color('panel_border')};"
+            f" border-radius: 12px; background: {current_color('bg1')};")
+
+
 def card_btn_style() -> str:
     """卡片感按钮(启动器设置/管理/刷新/实例卡片等):圆角 + 悬停蓝框。"""
     bg = current_color("btn_bg")
