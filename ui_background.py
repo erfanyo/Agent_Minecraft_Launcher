@@ -257,6 +257,29 @@ def input_style_qss() -> str:
     )
 
 
+def scroll_surface_qss() -> str:
+    """Style the native scrollbar track and the QScrollArea viewport separately.
+
+    On some Linux Qt styles the viewport/track otherwise paints an opaque black
+    rectangle even when the content widget itself has a transparent stylesheet.
+    """
+    from ui_tokens import current_token
+    groove = current_token('bg1')
+    handle = current_token('btn_border')
+    hover = current_token('accent')
+    return (
+        'QScrollArea > QWidget { background: transparent; }'
+        f'QScrollBar:vertical {{ background: {groove}; width: 10px; margin: 0; }}'
+        f'QScrollBar:horizontal {{ background: {groove}; height: 10px; margin: 0; }}'
+        f'QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{'
+        f' background: {handle}; border-radius: 4px; min-height: 24px; min-width: 24px; }}'
+        f'QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {{'
+        f' background: {hover}; }}'
+        'QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; border: none; }'
+        'QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }'
+    )
+
+
 class BackgroundWidget(QWidget):
     """内容区背景:画壁纸 + 遮罩。两种模式:
     - cover 模式(set_wallpaper):壁纸 cover 缩放到自身(独立窗口用)。

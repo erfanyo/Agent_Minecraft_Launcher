@@ -15,7 +15,9 @@ def report_text(report):
         '',
         '边界：',
         '- 原客户端实例仅以只读方式扫描，未在原目录写入或删除文件。',
-        '- AMCL 未接受 EULA，也未启动或部署正式服务器。',
+        ('- AMCL 未替你接受 EULA；已使用隔离测试实例尝试启动，未部署正式服务器。'
+         if report['verification'].get('level') in ('startup-tested', 'startup-attempted')
+         else '- AMCL 未接受 EULA，也未启动或部署正式服务器。'),
         '- 仅排除有明确本地证据的客户端 Mod；未知项继续保留。',
         '- 顶层目录采用“宁多不少”：白名单之外的自定义目录（如 hotai、'
         'tlm_custom_pack）会被完整复制，只跳过启动器/个人数据。',
@@ -46,4 +48,3 @@ def report_text(report):
 
 def report_json(report):
     return json.dumps(report, ensure_ascii=False, indent=2)
-

@@ -1,5 +1,7 @@
 """Server pack management, separate from client profiles and account login."""
 from pathlib import Path
+import shutil
+import uuid
 from PySide6.QtCore import Qt, QUrl, QTimer, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -62,6 +64,7 @@ class ServerCenter(QWidget):
     count_changed = Signal(int)
     selection_changed = Signal(object)
     running_changed = Signal(bool)
+    repair_finished = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -69,6 +72,8 @@ class ServerCenter(QWidget):
         self._log_path = None
         self._log_offset = 0
         self._last_running = False
+        self._repair = None
+        self._last_repair = None
         layout = QVBoxLayout(self)
         hint = QLabel('选择服务端后，启动、目录、Mod 和管理操作会出现在左侧；这里保留列表、任务进度和控制台。')
         hint.setWordWrap(True)
@@ -133,6 +138,9 @@ class ServerCenter(QWidget):
         self.selection_changed.emit(self.selected())
 
     def _selection_changed(self, current, _previous):
+        if (self._repair and current is not None
+                and current.data(Qt.ItemDataRole.UserRole)['id'] != self._repair['id']):
+            self._finish_repair('cancelled')
         self._attach_selected()
         self.selection_changed.emit(
             current.data(Qt.ItemDataRole.UserRole) if current is not None else None)
@@ -188,6 +196,193 @@ class ServerCenter(QWidget):
             return
         self._set_running_state(bool(state and state.get('running')))
         self._read_session_log()
+        self._poll_repair(server, state)
+
+    def _poll_repair(self, server, state):
+        repair = self._repair
+        if not repair or repair['id'] != server['id'] or repair['processing']:
+            return
+        if not state or state.get('sessionId') != repair.get('session'):
+            return
+        if repair.get('ready'):
+            self._finish_repair('ready')
+            message = f"服务端已启动完成；本轮停用了 {len(repair['disabled'])} 个 Mod。"
+            self.task_status.setText(message)
+            self.log.appendPlainText('[AMCL 修复测试] ' + message)
+            QMessageBox.information(self, '服务端测试通过', message + '\n请再进服检查整合包玩法是否正常。')
+            return
+        if state.get('exitCode') is None:
+            return
+        if state.get('exitCode') == 0:
+            self._finish_repair('inconclusive')
+            self.task_status.setText('服务端正常退出，但未确认进入就绪状态；本轮未继续调整 Mod。')
+            return
+        repair['processing'] = True
+        self.log.appendPlainText('[AMCL 修复测试] 本轮未启动完成，正在分析本次日志…')
+        self._run(lambda _task: self._diagnose_repair(server),
+                  lambda result: self._offer_repair(server, result),
+                  '正在分析服务端启动失败…')
+
+    @staticmethod
+    def _diagnose_repair(server):
+        from agent_tools import diagnose_server_mods
+        return diagnose_server_mods(server['id'], game_dir=paths.GAME_DIR)
+
+    def _offer_repair(self, server, diagnosis):
+        repair = self._repair
+        if not repair or repair['id'] != server['id']:
+            return
+        candidates = [row for row in diagnosis.get('suggestions', [])
+                      if row.get('level') in ('high', 'medium')
+                      and ('客户端类' in row.get('reason', '')
+                           or '仅客户端' in row.get('reason', ''))
+                      and row.get('file') not in repair['attempted']]
+        if not candidates:
+            self._finish_repair('unresolved')
+            self.task_status.setText('自动诊断没有找到足够可靠的下一项，已停止。')
+            self.log.appendPlainText('[AMCL 修复测试] 没有足够证据指向仅客户端 Mod。'
+                                     '不用AI的用户应该看得懂日志，对吧？原始日志在下方，'
+                                     '也可以交给 AI 分析依赖或版本问题。')
+            return
+        row = candidates[0]
+        repair['attempted'].add(row['file'])
+        message = (f"本轮日志指向：{row['name']}\n文件：{row['file']}\n"
+                   f"证据：{row['reason']}\n{row.get('evidence') or ''}\n\n"
+                   '停用会使该 Mod 在服务端提供的功能暂时不可用，可能影响依赖它的 Mod。'
+                   '原 JAR 不会删除，随时可以恢复。\n\n停用这一项并再试一次？')
+        if QMessageBox.question(self, '服务端逐项修复', message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            self._finish_repair('cancelled')
+            self.task_status.setText('你取消了这项修改，修复测试已停止。')
+            return
+        from agent_tools import set_server_mod_enabled
+        result = set_server_mod_enabled(server['id'], row['file'], False,
+                                        'diagnostic_only', game_dir=paths.GAME_DIR)
+        if not result.startswith('已停用'):
+            self._finish_repair('failed')
+            QMessageBox.warning(self, '未能停用 Mod', result)
+            return
+        repair['disabled'].append(row['file'])
+        self._last_repair = {'id': server['id'], 'disabled': list(repair['disabled'])}
+        repair['processing'] = False
+        self.log.appendPlainText('[AMCL 修复测试] ' + result)
+        self.task_status.setText('已停用一项，正在重新启动验证…')
+        QTimer.singleShot(0, self.launch)
+
+    def start_repair_test(self):
+        server = self.selected()
+        if not server or getattr(self, '_busy', False):
+            return
+        if self.is_running(server):
+            QMessageBox.information(self, '服务端正在运行', '请先正常停止服务端，再开始修复测试。')
+            return
+        self._repair = {'id': server['id'], 'session': None,
+                        'processing': False, 'attempted': set(), 'disabled': [],
+                        'ready': False, 'logTail': ''}
+        self._last_repair = None
+        self.log.appendPlainText('[AMCL 修复测试] 开始启动测试；每次停用 Mod 都会征求你的确认。')
+        self.launch()
+
+    def _finish_repair(self, outcome):
+        repair = self._repair
+        self._repair = None
+        if repair:
+            self.repair_finished.emit({'serverId': repair['id'],
+                'outcome': outcome, 'disabled': list(repair['disabled'])})
+
+    def select_package(self, package_path):
+        self.refresh()
+        target = str(Path(package_path).resolve())
+        for index in range(self.list.count()):
+            item = self.list.item(index)
+            server = item.data(Qt.ItemDataRole.UserRole)
+            if str(Path(server['packagePath']).resolve()) == target:
+                self.list.setCurrentItem(item)
+                return server
+        raise ValueError('导入完成，但服务端列表中找不到测试实例。')
+
+    def offer_test_instance_cleanup(self, server):
+        """Only an explicitly confirmed, freshly imported test copy is moved away."""
+        if QMessageBox.question(self, '保留测试服务端吗？',
+                '测试已经结束。要删除这次创建的测试服务端实例吗？\n'
+                '选“是”会先正常停服，再将实例移到 servers/.trash，'
+                '原始导出 ZIP 不受影响；选“否”则保留实例。',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            root = Path(paths.GAME_DIR, 'servers').resolve(strict=True)
+            folder = Path(server['packagePath']).resolve(strict=True)
+            if (folder.parent != root or folder.name != server['id']
+                    or not folder.name.startswith('server-') or folder.is_symlink()):
+                raise ValueError('测试实例路径不在预期的服务端目录中。')
+            if self.is_running(server):
+                send_server_command(server['path'], 'stop')
+                self.task_status.setText('已发送 stop，等待测试服务端保存世界后移入回收目录…')
+                self._wait_test_stop(server, folder, 0)
+            else:
+                self._move_test_to_trash(server, folder)
+        except (OSError, ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, '未删除测试实例', str(exc))
+
+    def _wait_test_stop(self, server, folder, retries):
+        if self.is_running(server):
+            if retries >= 120:
+                QMessageBox.warning(self, '未删除测试实例',
+                    '等待停服超过两分钟，实例仍在运行；请稍后手动处理。')
+                return
+            QTimer.singleShot(1000, lambda: self._wait_test_stop(server, folder, retries + 1))
+            return
+        self._move_test_to_trash(server, folder)
+
+    def _move_test_to_trash(self, server, folder):
+        try:
+            root = Path(paths.GAME_DIR, 'servers').resolve(strict=True)
+            folder = folder.resolve(strict=True)
+            if folder.parent != root or folder.name != server['id'] or folder.is_symlink():
+                raise ValueError('测试实例路径已变化，未删除。')
+            trash = root / '.trash'
+            trash.mkdir(exist_ok=True)
+            destination = trash / f'{folder.name}-{uuid.uuid4().hex[:8]}'
+            shutil.move(str(folder), str(destination))
+            self.refresh()
+            self.task_status.setText(f'测试实例已移至可恢复目录：{destination}')
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, '未删除测试实例',
+                                f'移动失败；原实例保留：{exc}')
+
+    def restore_repair_mods(self):
+        server = self.selected()
+        previous = self._last_repair
+        if (not server or not previous or server['id'] != previous['id']
+                or not previous['disabled']):
+            QMessageBox.information(self, '没有可恢复的修改',
+                                    '本次启动器会话还没有为这个服务端停用 Mod。')
+            return
+        if self.is_running(server):
+            QMessageBox.information(self, '请先停止服务端', '服务端运行期间不能恢复 Mod。')
+            return
+        names = '\n'.join(previous['disabled'])
+        if QMessageBox.question(self, '恢复本次测试的 Mod',
+                f'将重新启用以下 Mod：\n{names}\n\n恢复后建议重新启动验证。继续？',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        from agent_tools import set_server_mod_enabled
+        failed = []
+        for name in list(previous['disabled']):
+            result = set_server_mod_enabled(server['id'], name, True,
+                                            game_dir=paths.GAME_DIR)
+            self.log.appendPlainText('[AMCL 修复测试] ' + result)
+            if result.startswith(('已启用', '无需修改')):
+                previous['disabled'].remove(name)
+            else:
+                failed.append(name)
+        if failed:
+            QMessageBox.warning(self, '部分 Mod 未恢复', '请检查日志：' + '、'.join(failed))
+        else:
+            self.task_status.setText('本次测试停用的 Mod 已恢复。')
 
     def _read_session_log(self):
         if not self._log_path:
@@ -204,7 +399,14 @@ class ServerCenter(QWidget):
                 data = stream.read(1024 * 1024)
                 self._log_offset = stream.tell()
             if data:
-                self.log.appendPlainText(data.decode('utf-8', errors='replace').rstrip())
+                chunk = data.decode('utf-8', errors='replace')
+                repair = self._repair
+                if repair and repair.get('session') == self._attached_session:
+                    marker = repair.get('logTail', '') + chunk
+                    repair['ready'] = repair.get('ready', False) or (
+                        'Done (' in marker and 'For help, type' in marker)
+                    repair['logTail'] = marker[-160:]
+                self.log.appendPlainText(chunk.rstrip())
                 self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
         except OSError as exc:
             self.task_status.setText(f'读取服务端日志失败：{exc}')
@@ -453,6 +655,8 @@ class ServerCenter(QWidget):
             self.task_progress.hide()
             self.log.appendPlainText(message)
         def failure(message):
+            if self._repair:
+                self._finish_repair('failed')
             finish('处理失败：' + message)
             QMessageBox.warning(self, '服务端任务失败', message)
         def success(result):
@@ -464,7 +668,11 @@ class ServerCenter(QWidget):
         # Reset before success callback, which may start the next task.
         task.succeeded.connect(success)
         task.failed.connect(failure)
-        task.cancelled_signal.connect(lambda: finish('任务已取消，未完成的导入不会加入列表。'))
+        def cancelled():
+            if self._repair:
+                self._finish_repair('cancelled')
+            finish('任务已取消，未完成的导入不会加入列表。')
+        task.cancelled_signal.connect(cancelled)
         self._task = task
         task.start()
 
@@ -515,6 +723,7 @@ class ServerCenter(QWidget):
             plan = build_launch_plan(root, selected_jar=server.get('launchJar'))
             accepted = eula_accepted(root)
         except (ValueError, OSError) as exc:
+            self._finish_repair('failed')
             QMessageBox.warning(self, '服务端尚不能启动', str(exc))
             return
         if not accepted:
@@ -528,6 +737,7 @@ class ServerCenter(QWidget):
     def _show_eula(self, server, root, plan, payload):
         dialog = MinecraftEulaDialog(payload, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._finish_repair('cancelled')
             self.task_status.setText('未同意 EULA，服务端没有启动。')
             return
         try:
@@ -535,6 +745,7 @@ class ServerCenter(QWidget):
                 raise ValueError('启动配置在阅读协议期间发生变化，请重新启动。')
             accept_minecraft_eula(root)
         except (OSError, ValueError) as exc:
+            self._finish_repair('failed')
             QMessageBox.warning(self, '无法保存 EULA 选择', str(exc))
             return
         self.log.appendPlainText('你已明确同意 Minecraft EULA；已为当前服务端写入 eula=true。')
@@ -556,24 +767,30 @@ class ServerCenter(QWidget):
         from java_manager import minecraft_java_warning
         major, error = result
         if error or not major:
+            self._finish_repair('failed')
             QMessageBox.warning(self, 'Java 无法使用', error or '无法识别 Java 版本')
             return
         mc = plan.get('minecraftVersion') or server['report'].get('minecraftVersion')
         warning = minecraft_java_warning(mc, major) if mc else '无法确认 MC 版本，请自行核对 Java 兼容性。'
         required = plan.get('requiredJava') or server['report'].get('requiredJava')
         if required and major < required:
+            self._finish_repair('failed')
             QMessageBox.warning(self, 'Java 版本过低', f'需要至少 Java {required}，当前是 Java {major}。')
             return
-        if QMessageBox.question(self, '启动服务端',
-                f"入口：{plan['entry']}\nJava：{major}\n{warning}\n"
-                '将执行服务端及包内 Mod，请仅运行可信来源的包。继续？',
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
-            return
+        if not (self._repair and self._repair['id'] == server['id']
+                and self._repair.get('session')):
+            if QMessageBox.question(self, '启动服务端',
+                    f"入口：{plan['entry']}\nJava：{major}\n{warning}\n"
+                    '将执行服务端及包内 Mod，请仅运行可信来源的包。继续？',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                self._finish_repair('cancelled')
+                return
         try:
             if build_launch_plan(root, selected_jar=server.get('launchJar')) != plan or not eula_accepted(root):
                 raise ValueError('启动配置在确认期间发生变化，请重新启动。')
         except (ValueError, OSError) as exc:
+            self._finish_repair('failed')
             QMessageBox.warning(self, '启动配置变化', str(exc))
             return
         self._run(
@@ -582,12 +799,17 @@ class ServerCenter(QWidget):
             '正在启动后台服务端…')
 
     def _host_started(self, server, state):
+        if self._repair and self._repair['id'] == server['id']:
+            self._repair['session'] = state.get('sessionId')
+            self._repair['ready'] = False
+            self._repair['logTail'] = ''
         self._attached_session = None
         self._attach_selected()
         self.log.appendPlainText(
             f"服务端已交给后台托管（PID {state.get('pid')}）；关闭 AMCL 不会停止服务端。")
 
     def stop(self):
+        self._finish_repair('cancelled')
         server = self.selected()
         if not server:
             return

@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog,
     QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressDialog,
     QPushButton, QVBoxLayout)
 
@@ -85,10 +85,7 @@ class ServerPackBuilderDialog(QDialog):
         form.addRow('文件名：', self.output_name_edit)
         layout.addLayout(form)
 
-        self.import_check = QCheckBox('完成后加入 AMCL 服务端列表')
-        self.import_check.setChecked(True)
-        self.import_check.setToolTip('加入后仍需由你阅读并确认 EULA，才能首次启动。')
-        layout.addWidget(self.import_check)
+        layout.addWidget(QLabel('导出完成后可选择隔离启动测试；不测试也能直接取得候选 ZIP。'))
         warning = QLabel(
             '注意：无法判断适用端的 Mod 会保留；疑似含 Token、Webhook、RCON 密码的配置只会在报告中标记文件名，'
             '不会读取或显示密钥值。第一次启动仍应查看日志并人工复核。')
@@ -149,8 +146,6 @@ class ServerPackBuilderDialog(QDialog):
             QMessageBox.information(self, '文件已存在', '请选择一个尚不存在的新文件名。')
             return
         selected_world = self.world_combo.currentData()
-        add_to_list = self.import_check.isChecked()
-
         def work(task):
             java = _select_java(self.game_dir, self.minecraft, task)
             result = build_candidate_server_pack(
@@ -159,17 +154,6 @@ class ServerPackBuilderDialog(QDialog):
                 selected_world=selected_world,
                 status_callback=task.report_status,
                 progress_callback=task.report_progress)
-            if add_to_list:
-                from archive_inspection import inspect_archive
-                from server_packs import import_server_pack
-                task.report_status('正在复核候选包并加入服务端列表…')
-                scan = inspect_archive(output, status_callback=task.report_status,
-                                       progress_callback=task.report_progress)
-                result['importedPath'] = import_server_pack(
-                    output, self.game_dir, scan['sha256'],
-                    status_callback=task.report_status,
-                    progress_callback=task.report_progress,
-                    display_name=result['report']['name'])
             return result
 
         progress = QProgressDialog('正在准备转换…', '取消', 0, 1000, self)
@@ -199,14 +183,114 @@ class ServerPackBuilderDialog(QDialog):
         text = (f"候选服务端包已生成：\n{result['path']}\n\n"
                 f"明确排除 {excluded} 个 Mod；保留 {unknown} 个适用端未知的 Mod。\n"
                 '包内附有审核报告和逐文件哈希。')
-        if result.get('importedPath'):
-            text += '\n\n已加入服务端列表；首次启动前仍需由你确认 EULA。'
-            try:
-                self.window().home_panel.server_center.refresh()
-            except (AttributeError, RuntimeError):
-                pass
-        QMessageBox.information(self, '转换完成', text)
+        choice = QMessageBox.question(self, '导出完成 · 要测试吗？',
+            text + '\n\n要导入一个隔离测试实例并尝试启动、逐项诊断吗？'
+                   '每次停用 Mod 都会征求确认；测试后可删除测试实例。'
+                   '选“否”即可直接保留当前包，不保证它能够启动。',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if choice != QMessageBox.StandardButton.Yes:
+            self.accept()
+            return
+        self._import_for_test(result)
+
+    def _find_server_home(self):
+        widget = self.parentWidget()
+        while widget is not None:
+            if hasattr(widget, 'server_center') and hasattr(widget, '_server_tab_index'):
+                return widget
+            if hasattr(widget, 'home_panel'):
+                return widget.home_panel
+            widget = widget.parentWidget()
+        # InstanceManagerDialog is an unparented overlay in the main window.
+        for window in QApplication.topLevelWidgets():
+            home = getattr(window, 'home_panel', None)
+            if home is not None:
+                return home
+        return None
+
+    def _import_for_test(self, result):
+        home = self._find_server_home()
+        if home is None:
+            QMessageBox.warning(self, '无法进入测试',
+                                '已保留导出的 ZIP，但找不到服务端页面，无法自动启动测试。')
+            self.accept()
+            return
+        from server_packs import list_servers
+        existing = {str(Path(row['packagePath']).resolve())
+                    for row in list_servers(self.game_dir)}
+        output = result['path']
+
+        def work(task):
+            from archive_inspection import inspect_archive
+            from server_packs import import_server_pack
+            scan = inspect_archive(output, status_callback=task.report_status,
+                                   progress_callback=task.report_progress)
+            return import_server_pack(output, self.game_dir, scan['sha256'],
+                status_callback=task.report_status,
+                progress_callback=task.report_progress,
+                display_name=result['report']['name'])
+
+        progress = QProgressDialog('正在导入隔离测试实例…', '取消', 0, 0, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        task = BackgroundTask(work, self)
+        self._task = task
+        task.status.connect(progress.setLabelText)
+        progress.canceled.connect(task.cancel)
+        task.failed.connect(lambda message: (progress.close(),
+            QMessageBox.warning(self, '无法导入测试实例',
+                message + '\n原始候选 ZIP 已保留。')))
+        task.cancelled_signal.connect(progress.close)
+        task.succeeded.connect(lambda folder: self._start_imported_test(
+            progress, home, folder, output, existing))
+        task.start()
+
+    def _start_imported_test(self, progress, home, folder, output, existing):
+        progress.close()
+        center = home.server_center
+        try:
+            server = center.select_package(folder)
+        except ValueError as exc:
+            QMessageBox.warning(self, '无法进入测试', str(exc))
+            self.accept()
+            return
+        disposable = str(Path(folder).resolve()) not in existing
+        home.tabs.setCurrentIndex(home._server_tab_index)
+        def on_finished(summary):
+            if summary['serverId'] != server['id']:
+                return
+            center.repair_finished.disconnect(on_finished)
+            self._finalize_test(center, server, output, summary, disposable)
+        center.repair_finished.connect(on_finished)
         self.accept()
+        QTimer.singleShot(0, center.start_repair_test)
+
+    def _finalize_test(self, center, server, output, summary, disposable):
+        from server_pack_builder import apply_test_result_to_pack
+        def work(_task):
+            try:
+                return {'path': apply_test_result_to_pack(output,
+                    summary['disabled'], started=summary['outcome'] == 'ready')}
+            except (OSError, ValueError, RuntimeError) as exc:
+                return {'error': str(exc)}
+        def done(result):
+            if result.get('error'):
+                QMessageBox.warning(center, '未能同步测试结果',
+                    '原始候选 ZIP 和测试实例均已保留；请勿把 ZIP 当作修复后的版本。\n'
+                    + result['error'])
+            else:
+                QMessageBox.information(center, '测试结束 · 导出包已更新',
+                f"结果：{summary['outcome']}\n"
+                f"测试中排除 {len(summary['disabled'])} 个 Mod。\n"
+                f"导出文件：{result['path']}\n\n未通过测试时，它仍是候选包，不能保证可用。")
+            if disposable:
+                center.offer_test_instance_cleanup(server)
+            else:
+                QMessageBox.information(center, '已复用已有实例',
+                    '测试使用的是之前已导入的同一服务端；不会建议删除你已有的实例。')
+        center._run(work, done,
+            '正在把测试结果写入导出包…')
 
 
 def open_server_pack_builder(parent, *, instance_id, instance_dir, game_dir,

@@ -339,14 +339,32 @@ def suggest_server_removals(server: str, include_descriptions: bool = True,
     证据分级(确定 / 很可能 / 待复核)。本工具**不改动任何文件**;确认后仍需用
     set_server_mod_enabled 逐个停用,并由用户确认。
     """
+    from server_log_diagnosis import suggestions_to_markdown
+
+    result = diagnose_server_mods(server, game_dir=game_dir)
+    if include_descriptions and result.get('suggestions'):
+        from mod_description import annotate_mods
+        item = _resolve_server(server, game_dir)
+        rows = [{**row, 'path': os.path.join(item['path'], 'mods', row['file'])}
+                for row in result['suggestions']]
+        rows = annotate_mods(rows)
+        for row in rows:
+            row.pop('path', None)
+        result['suggestions'] = rows
+    return suggestions_to_markdown(result)
+
+
+def diagnose_server_mods(server: str, game_dir: str | None = None) -> dict:
+    """Return structured, local-only evidence for a single server test run."""
+    import zipfile
     from mod_deps import read_mod_metadata
-    from server_log_diagnosis import build_diagnosis, suggestions_to_markdown
+    from server_log_diagnosis import build_diagnosis
     from log_privacy import redact_text
 
     item = _resolve_server(server, game_dir)
     directory = os.path.join(item['path'], 'mods')
     if not os.path.isdir(directory):
-        return '(这个服务端没有 mods 目录)'
+        return {'suggestions': [], 'notes': ['这个服务端没有 mods 目录。']}
 
     mods = []
     for filename in sorted(os.listdir(directory)):
@@ -357,6 +375,13 @@ def suggest_server_removals(server: str, include_descriptions: bool = True,
         if not os.path.isfile(path) or os.path.islink(path):
             continue
         info = read_mod_metadata(path) or {}
+        mixin_configs = []
+        try:
+            with zipfile.ZipFile(path) as archive:
+                mixin_configs = [name.casefold() for name in archive.namelist()
+                                 if name.casefold().endswith('.mixins.json')]
+        except (OSError, ValueError, zipfile.BadZipFile):
+            pass
         mods.append({
             'file': filename,
             'modId': str(info.get('id') or ''),
@@ -365,6 +390,7 @@ def suggest_server_removals(server: str, include_descriptions: bool = True,
             'description': str(info.get('description') or '').strip(),
             'disabled': lowered.endswith('.disabled'),
             'path': path,
+            'mixinConfigs': mixin_configs,
         })
 
     # 日志是主要证据来源:优先本次启动日志,失败再退回 crash-reports 里的最新一份。
@@ -388,19 +414,10 @@ def suggest_server_removals(server: str, include_descriptions: bool = True,
             pass
 
     result = build_diagnosis(mods, redact_text(log_text) if log_text else '')
-    if include_descriptions and result.get('suggestions'):
-        from mod_description import annotate_mods
-        by_file = {row['file']: row for row in mods}
-        rows = []
-        for row in result['suggestions']:
-            source = by_file.get(row['file']) or {}
-            rows.append({**row, 'modId': source.get('modId') or '',
-                         'path': source.get('path') or ''})
-        rows = annotate_mods(rows)
-        for row in rows:
-            row.pop('path', None)
-        result['suggestions'] = rows
-    return suggestions_to_markdown(result)
+    by_file = {row['file']: row for row in mods}
+    for row in result['suggestions']:
+        row['modId'] = by_file.get(row['file'], {}).get('modId') or ''
+    return result
 
 
 def install_mod(slug: str, instance: str, version: str = "",

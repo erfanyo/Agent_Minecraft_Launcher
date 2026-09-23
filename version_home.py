@@ -863,6 +863,8 @@ class VersionHome(QWidget):
         menu.addSeparator()
         menu.addAction('补全运行库…', self.server_center.install_runtime)
         menu.addAction('查看候选审核报告…', self.server_center.show_candidate_report)
+        menu.addAction('启动测试并逐项修复…', self.server_center.start_repair_test)
+        menu.addAction('恢复本次测试停用的 Mod…', self.server_center.restore_repair_mods)
         menu.addAction('导出可启动运行包（含运行库）…', self.server_center.export_runtime)
         menu.addAction('刷新服务端列表', self.server_center.refresh)
         self._server_config_menu = menu

@@ -5,7 +5,8 @@ import unittest
 import zipfile
 
 from archive_inspection import inspect_archive
-from server_pack_builder import build_candidate_server_pack, supported_conversion
+from server_pack_builder import (apply_test_result_to_pack,
+                                 build_candidate_server_pack, supported_conversion)
 from server_pack_rules import inspect_client_instance, sha256_file
 from server_packs import import_server_pack, list_servers, read_candidate_report
 from agent_tools import (list_server_instances, list_server_mods,
@@ -159,6 +160,26 @@ class ServerPackBuilderTests(unittest.TestCase):
             restored = set_server_mod_enabled('Readable candidate', 'keep.jar', True,
                                               'diagnostic_only', game_dir)
             self.assertIn('已启用', restored)
+
+    def test_test_exclusion_updates_zip_manifest_and_report(self):
+        with tempfile.TemporaryDirectory() as temp:
+            instance = Path(temp, 'instance')
+            instance.joinpath('mods').mkdir(parents=True)
+            _jar(instance / 'mods' / 'keep.jar')
+            output = Path(temp, 'candidate.zip')
+            build_candidate_server_pack(instance, output, name='Test',
+                minecraft='1.20.1', loader='forge', loader_version='47.2.0',
+                java='unused-java', runtime_installer=_fake_forge_runtime)
+            apply_test_result_to_pack(output, ['keep.jar'], started=True)
+            with zipfile.ZipFile(output) as archive:
+                self.assertNotIn('server/mods/keep.jar', archive.namelist())
+                report = json.loads(archive.read('amcl-build-report.json'))
+                manifest = json.loads(archive.read('amcl-server-pack.json'))
+                self.assertEqual(report['verification']['level'], 'startup-tested')
+                self.assertEqual(report['mods'][0]['action'], 'excluded')
+                self.assertFalse(any(row['path'] == 'server/mods/keep.jar'
+                                     for row in manifest['files']))
+            self.assertEqual(inspect_archive(output)['kind'], 'server')
 
     def test_unsupported_loader_stops_before_build(self):
         ok, reason = supported_conversion('fabric', '1.20.1')

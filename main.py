@@ -342,6 +342,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.main_tabs)
         self.setCentralWidget(central)
+        self._position_resize_handles()
         self._background = central
         self.apply_background()
 
@@ -506,7 +507,8 @@ class MainWindow(QMainWindow):
 
     def apply_background(self):
         """按设置应用背景壁纸 + 遮罩 + 面板/按钮/文本框透明化(阶段 2 · 决策 2)。"""
-        from ui_background import load_wallpaper, mask_strength, input_style_qss
+        from ui_background import (load_wallpaper, mask_strength,
+                                   input_style_qss, scroll_surface_qss)
         from ui_tokens import set_wallpaper_active, is_wallpaper_active
         pix = load_wallpaper(self.settings)
         mask = mask_strength(self.settings)
@@ -518,7 +520,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
         if app is not None:
-            new_qss = input_style_qss() if active else ""
+            new_qss = scroll_surface_qss() + (input_style_qss() if active else "")
             if app.styleSheet() != new_qss:   # 样式串没变就别重设,避免无谓 re-polish
                 app.setStyleSheet(new_qss)
         # 壁纸激活态变了 → 切换面板/按钮不透明度并全量重刷样式(否则跳过,省成本)
@@ -619,8 +621,13 @@ class MainWindow(QMainWindow):
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         def mousePressEvent(self, e):
             if e.button() == Qt.MouseButton.LeftButton and not self._win.isMaximized():
+                handle = self._win.windowHandle()
+                if handle is not None and handle.startSystemResize(self._edge):
+                    e.accept()
+                    return
                 self._drag_origin = e.globalPosition().toPoint()
                 self._geo_origin  = self._win.geometry()
+                e.accept()
         def mouseMoveEvent(self, e):
             if self._drag_origin is None:
                 return
@@ -647,9 +654,11 @@ class MainWindow(QMainWindow):
             self._win._resize_guard = True
             self._win.setGeometry(nx, ny, nw, nh)
             self._win._resize_guard = False
+            e.accept()
         def mouseReleaseEvent(self, e):
             self._drag_origin = None
             self._geo_origin  = None
+            e.accept()
 
     def _setup_resize_handles(self):
         """在窗口四边/四角各放一个透明手柄，始终保持在内容之上。"""
@@ -685,6 +694,10 @@ class MainWindow(QMainWindow):
         """根据当前窗口尺寸，定位所有边缘手柄。"""
         if not hasattr(self, '_resize_handles'):
             return
+        if self.isMaximized() or self.isFullScreen():
+            for handle in self._resize_handles.values():
+                handle.hide()
+            return
         m = 6
         W, H = self.width(), self.height()
         h = self._resize_handles
@@ -698,6 +711,9 @@ class MainWindow(QMainWindow):
         h['b'].setGeometry(m, H - m, W - 2*m, m)
         h['l'].setGeometry(0, m, m, H - 2*m)
         h['r'].setGeometry(W - m, m, m, H - 2*m)
+        for handle in h.values():
+            handle.show()
+            handle.raise_()
 
     def mouseMoveEvent(self, e):
         # 未拖拽时：根据边缘悬停更新光标(覆盖子控件的光标)
@@ -727,6 +743,7 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, ev):
         super().showEvent(ev)
+        self._position_resize_handles()
         if sys.platform == "win32" and getattr(self, "_win_patched", False) is False:
             try:
                 from win_frameless import apply_win_styles

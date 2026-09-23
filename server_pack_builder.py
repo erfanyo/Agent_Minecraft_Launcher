@@ -177,3 +177,65 @@ def build_candidate_server_pack(instance_dir, destination, *, name, minecraft,
         raise RuntimeError('候选服务端包没有生成。')
     return {'path': str(destination), 'report': report}
 
+
+def apply_test_result_to_pack(destination, disabled_mods, *, started):
+    """Atomically carry confirmed test exclusions into a candidate archive."""
+    destination = Path(destination).resolve(strict=True)
+    disabled = set(disabled_mods)
+    with zipfile.ZipFile(destination) as source:
+        names = {item.filename for item in source.infolist()}
+        excluded = {'server/mods/' + name for name in disabled}
+        if not excluded.issubset(names):
+            raise ValueError('测试中停用的 Mod 与原始导出包不一致，未覆盖导出包。')
+        manifest = json.loads(source.read('amcl-server-pack.json'))
+        report = json.loads(source.read('amcl-build-report.json'))
+        manifest['files'] = [row for row in manifest['files'] if row['path'] not in excluded]
+        for row in report.get('mods', []):
+            if row.get('file') in disabled:
+                row['action'] = 'excluded'
+                row['reason'] = '隔离启动测试中确认并经用户同意停用；原测试实例可恢复。'
+        report['modManifest'] = [row for row in report.get('modManifest', [])
+                                 if row.get('file') not in disabled]
+        report['verification'] = {
+            'level': 'startup-tested' if started else 'startup-attempted',
+            'label': ('隔离启动已进入就绪状态；仍需进服验证玩法' if started else
+                      '已尝试隔离启动，但未确认就绪；请查看测试日志'),
+            'minecraftStarted': bool(started),
+        }
+        report.setdefault('warnings', []).append(
+            f'启动测试期间经用户确认排除 {len(disabled)} 个 Mod。')
+        fd, pending = tempfile.mkstemp(prefix='.amcl-tested-', suffix='.zip',
+                                       dir=destination.parent)
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(pending, 'w', zipfile.ZIP_DEFLATED,
+                                 allowZip64=True) as target:
+                for item in source.infolist():
+                    checkpoint()
+                    name = item.filename
+                    if name in excluded:
+                        continue
+                    if name == 'amcl-server-pack.json':
+                        payload = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
+                    elif name == 'amcl-build-report.json':
+                        payload = report_json(report).encode()
+                    elif name == 'AMCL-候选服务端审核报告.txt':
+                        payload = report_text(report).encode()
+                    elif name == 'amcl-mod-manifest.json':
+                        payload = json.dumps({'schemaVersion': 1,
+                            'note': 'Mod 文件保持原命名（含中文前缀），本清单用于按 id 反查。',
+                            'mods': report['modManifest']}, ensure_ascii=False,
+                            indent=2).encode()
+                    else:
+                        with source.open(item) as stream, target.open(item, 'w') as out:
+                            shutil.copyfileobj(stream, out, 1024 * 1024)
+                        continue
+                    target.writestr(item, payload)
+        except BaseException:
+            Path(pending).unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(pending, destination)
+    finally:
+        Path(pending).unlink(missing_ok=True)
+    return str(destination)

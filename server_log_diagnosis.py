@@ -41,6 +41,7 @@ _CLIENT_TRACE = re.compile(
     r'net[/.]minecraft[/.]client(?:[/.]|$)|'
     r'net[/.]minecraftforge[/.]client|'
     r'onlyClient|client-only|client only', re.I)
+_MIXIN_HANDLER = re.compile(r'handler\$[A-Za-z0-9]+\$([A-Za-z0-9_]+)\$', re.I)
 
 
 def parse_log_evidence(text: str) -> dict:
@@ -136,6 +137,24 @@ def build_diagnosis(mods: list, log_text: str = '') -> dict:
     evidence = parse_log_evidence(log_text)
     matched = match_evidence_to_files(evidence, mods)
     suggestions = []
+    # A Forge crash may name the Mixin handler (e.g. $etf$) without a
+    # "-- MOD ... --" section. Attribute it only when a *single* installed
+    # JAR also owns a matching mixin config. This remains a reviewable hint.
+    handler_matches = {}
+    if ('invalid dist DEDICATED_SERVER' in log_text and evidence['clientOnly']):
+        tokens = {token.casefold() for token in _MIXIN_HANDLER.findall(log_text)}
+        for token in tokens:
+            owners = []
+            for item in mods:
+                mod_id = str(item.get('modId') or '').casefold()
+                acronym = ''.join(part[0] for part in mod_id.split('_') if part)
+                configs = item.get('mixinConfigs') or []
+                if (not item.get('disabled') and mod_id and token in (mod_id, acronym)
+                        and any(str(name).casefold().endswith(mod_id + '.mixins.json')
+                                for name in configs)):
+                    owners.append(item)
+            if len(owners) == 1:
+                handler_matches[owners[0]['file']] = token
 
     for item in mods:
         # 已停用的 Mod 不可能再导致本次崩溃:日志里的条目多是历史遗留,直接跳过。
@@ -160,6 +179,16 @@ def build_diagnosis(mods: list, log_text: str = '') -> dict:
                 'level': 'medium',
                 'reason': 'Mod 元数据声明仅客户端',
                 'evidence': '',
+            })
+            continue
+        if item['file'] in handler_matches:
+            token = handler_matches[item['file']]
+            suggestions.append({
+                'file': item['file'], 'name': item.get('name') or item['file'],
+                'description': item.get('description') or '',
+                'level': 'medium',
+                'reason': '崩溃中的客户端类由该 Mod 的 Mixin 注入标记指向',
+                'evidence': f'Mixin 标记 ${token}$ 与 JAR 内的 Mixin 配置吻合；仍需停用后重测',
             })
             continue
         if detail:

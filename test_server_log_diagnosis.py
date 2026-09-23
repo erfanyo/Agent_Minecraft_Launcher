@@ -92,6 +92,26 @@ class MatchEvidenceTests(unittest.TestCase):
 
 
 class BuildDiagnosisTests(unittest.TestCase):
+    def test_unique_mixin_handler_identifies_etf_without_mod_error_section(self):
+        mods = [_mod('entity_texture_features.jar', 'entity_texture_features'),
+                _mod('other.jar', 'other')]
+        mods[0]['mixinConfigs'] = ['entity_texture_features.mixins.json']
+        log = ('Attempted to load class net/minecraft/client/gui/screens/Screen '
+               'for invalid dist DEDICATED_SERVER\n'
+               'at net.minecraft.resources.ResourceLocation.'
+               'handler$zkc000$etf$illegalPathOverride')
+        result = build_diagnosis(mods, log)
+        self.assertEqual([row['file'] for row in result['suggestions']],
+                         ['entity_texture_features.jar'])
+        self.assertEqual(result['suggestions'][0]['level'], 'medium')
+
+    def test_mixin_handler_needs_unique_jar_config_evidence(self):
+        mods = [_mod('entity_texture_features.jar', 'entity_texture_features')]
+        log = ('Attempted to load class net/minecraft/client/gui/screens/Screen '
+               'for invalid dist DEDICATED_SERVER\n'
+               'at ResourceLocation.handler$zkc000$etf$illegalPathOverride')
+        self.assertEqual(build_diagnosis(mods, log)['suggestions'], [])
+
     def test_high_level_from_log_evidence(self):
         mods = [_mod("[战利品光束] lootbeams-1.20.1-1.2.6.jar", "lootbeams"),
                 _mod("keep.jar", "keep")]
