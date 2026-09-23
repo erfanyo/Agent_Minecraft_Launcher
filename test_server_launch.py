@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import ANY, patch
 from server_launch import build_launch_plan, eula_accepted
-from server_center import select_server_java
+from server_service import select_server_java
 
 
 class ServerLaunchTests(unittest.TestCase):

@@ -12,44 +12,8 @@ from server_launch import build_launch_plan, eula_accepted
 from server_eula import accept_minecraft_eula, fetch_minecraft_eula
 from server_host_client import (managed_status, send_server_command,
                                 start_managed_server)
+from server_service import select_server_java  # Qt-free domain layer
 import paths
-
-
-def select_server_java(plan, report, settings, runtime_dir,
-                       status_callback=None, progress_callback=None):
-    """Choose/download a compatible runtime using the same policy as clients."""
-    from java_manager import (ensure_java, java_version_probe,
-                              minecraft_java_range)
-    status = status_callback or (lambda _: None)
-    mc = plan.get('minecraftVersion') or (report or {}).get('minecraftVersion') or ''
-    declared = plan.get('requiredJava') or (report or {}).get('requiredJava')
-    if mc:
-        minimum, maximum = minecraft_java_range(mc)
-    else:
-        minimum, maximum = int(declared or 17), None
-        status('无法确认 Minecraft 版本，暂按 Java 17 选择运行时。')
-    required = max(minimum, int(declared or minimum))
-    if maximum is not None and required > maximum:
-        raise RuntimeError(
-            f'服务端声明的 Java {required} 与 Minecraft {mc} 的兼容范围冲突。')
-    preferred = str((settings.get('java_paths') or {}).get(str(required)) or '').strip()
-    if preferred and Path(preferred).is_file():
-        major, error = java_version_probe(preferred)
-        if not error and major >= required and (maximum is None or major <= maximum):
-            status(f'使用 Java 管理中设置的 Java {major}。')
-            return preferred, (major, '')
-        status('设置中的 Java 不可用或与该服务端不兼容，改用自动选择。')
-    java = ensure_java(
-        runtime_dir, required,
-        progress_callback=progress_callback,
-        status_callback=status,
-        max_major=maximum,
-        prefer_managed=(maximum == 8),
-    )
-    result = java_version_probe(java)
-    if result[1] or not result[0]:
-        raise RuntimeError(result[1] or '自动选择的 Java 无法运行')
-    return java, result
 
 
 class MinecraftEulaDialog(QDialog):
