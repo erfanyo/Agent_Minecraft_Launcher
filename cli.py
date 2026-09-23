@@ -114,6 +114,11 @@ def main(argv=None):
     srv_export.add_argument("--java", default="", help="Java 路径(不填则自动选择)")
     srv_export.add_argument("--bat", default="", help="同时写入 start.bat/start.sh 文件")
 
+    srv_setup = srv.add_parser("setup-start",
+                               help="在服务端目录生成 start.bat/start.sh(MCSManager/手动启动用)")
+    srv_setup.add_argument("root", help="服务端目录路径")
+    srv_setup.add_argument("--java", default="", help="Java 路径(不填则自动选择)")
+
     srv_launch = srv.add_parser("launch", help="启动服务端(自动选 Java,后台托管)")
     srv_launch.add_argument("root", help="服务端目录路径")
     srv_launch.add_argument("--java", default="", help="Java 路径(不填则自动选择)")
@@ -265,6 +270,10 @@ def _dispatch_server(args) -> int:
         _cmd_server_export(args)
         return 0
 
+    if action == "setup-start":
+        _cmd_server_setup_start(args)
+        return 0
+
     if action == "launch":
         _cmd_server_launch(args)
         return 0
@@ -301,6 +310,46 @@ def _cmd_server_export(args):
     if args.bat:
         path = server_service.export_start_script(plan, java, args.bat)
         print(f"已写入: {path}")
+
+
+def _cmd_server_setup_start(args):
+    """在服务端目录生成 start.bat/start.sh,使目录自包含(可直接导入 MCSManager 等面板)。"""
+    import server_service
+    import os
+    from server_launch import build_launch_plan
+    root = args.root
+    try:
+        plan = build_launch_plan(root)
+    except Exception as e:
+        print(f"无法构建启动计划: {e}", file=sys.stderr)
+        return
+    java = args.java
+    if not java:
+        settings = {}
+        try:
+            from settings import load_settings
+            settings = load_settings()
+        except Exception:
+            pass
+        try:
+            java, (major, _) = server_service.select_server_java(
+                plan, {}, settings, ".",
+                status_callback=lambda m: print(f"  Java: {m}"))
+        except Exception as e:
+            print(f"自动选择 Java 失败(用 --java 手动指定): {e}", file=sys.stderr)
+            return
+    script_name = "start.bat" if os.name == "nt" else "start.sh"
+    dest = os.path.join(root, script_name)
+    path = server_service.export_start_script(plan, java, dest)
+    cmd = server_service.export_start_command(plan, java)
+    print(f"已生成: {path}")
+    print(f"启动命令: {cmd}")
+    print()
+    print("MCSManager 导入方法:")
+    print(f"  1. 打开 MCSManager → 实例管理 → 导入已有实例")
+    print(f"  2. 选择目录: {os.path.abspath(root)}")
+    print(f"  3. 启动命令填: {script_name}")
+    print(f"  (或直接复制上面的启动命令)")
 
 
 def _cmd_server_launch(args):

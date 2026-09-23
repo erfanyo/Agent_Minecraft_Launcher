@@ -77,3 +77,37 @@
 - 导入任务的取消与统一下载球接入；更多恶意 ZIP 测试（加密位、压缩炸弹、损坏 CRC）。
 
 扫描识别是提示，不是可信签名。ZIP 安全检查不是恶意代码检测；运行 JAR/Mod 仍需用户信任来源。扫描结果不能证明 Mod 两端兼容，也不能证明 Java 正确或服务端启动成功。
+
+## MCSManager 兼容（导出 + 联动）
+
+AMCL 管理的服务端目录（`servers/server-<id>/`）本身就是标准 MC 服务端布局，可直接导入
+[MCSManager](https://mcsmanager.com/) 的"导入已有实例"功能。
+
+**兼容契约**（已实现）：
+
+1. **标准目录结构**：`mods/` / `config/` / `libraries/` / `server.jar`（或加载器入口）
+   / `eula.txt` / `server.properties` — 与 MCSManager 期望一致。
+2. **私有状态只进边车**：AMCL 元数据只存 `.amcl-runtime/` 和 `amcl-server-pack.json`；
+   MCSManager 忽略未知文件，互不干扰。
+3. **启动命令可导出**：`aml server export-cmd <root>` 输出纯 `java ...` 命令行，
+   可直接填入 MCSManager 的"启动命令"字段。
+4. **自包含启动脚本**：`aml server setup-start <root>` 在服务端目录生成
+   `start.bat`（Windows）/ `start.sh`（Linux），目录自包含后可直接导入面板。
+
+**导入步骤**：
+
+```bash
+# 1. 先在服务端目录生成启动脚本（自动选 Java）
+aml server setup-start servers/server-abc123
+
+# 2. MCSManager → 实例管理 → 导入已有实例
+#    目录: servers/server-abc123 的绝对路径
+#    启动命令: start.bat（或直接粘贴 aml server export-cmd 输出的命令）
+```
+
+**不嵌入 MCSManager**：AMCL 的定位是本地桌面启动器 + 无头服务端管理器，差异化在 AI
+（客户端实例→服务端转换、NL→server.properties 生成、崩溃诊断、Mod 两端兼容判断）。
+MCSManager 的远程/多节点/Web 面板/Docker 守护是它的强项，两者互补而非替代。
+
+**MCSManager API 适配**（opt-in，待做）：设置里填 MCSManager 地址 + API Key →
+AMCL 内可列/启停/看日志/发指令。用现成 [`mcsmapi`](https://github.com/sokoko-org/mcsmapi) 包起步。
