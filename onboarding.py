@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -157,7 +158,14 @@ class OnboardingDialog(QDialog):
         p2.addWidget(title2)
         p2.addWidget(desc2)
         p2.addSpacing(12)
-        p2.addWidget(self.ai_form)
+        # AI 表单较长,包进滚动区防止裁剪(策略下面的字段被截断)
+        ai_scroll = QScrollArea()
+        ai_scroll.setWidgetResizable(True)
+        ai_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        ai_scroll.setStyleSheet("QScrollArea { background: transparent; }"
+                                "QScrollArea > QWidget > QWidget { background: transparent; }")
+        ai_scroll.setWidget(self.ai_form)
+        p2.addWidget(ai_scroll, 1)
         p2.addWidget(hint)
         p2.addWidget(builtin_hint)
         p2.addStretch()
