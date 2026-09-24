@@ -49,7 +49,8 @@ from i18n import t
 from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
                       accent_color, is_dark_mode, muted_color, panel_style,
-                      success_color, tab_style, text_color, set_style)
+                      success_color, tab_style, text_color, set_style,
+                      apply_card_shadow)
 
 # 登录方式:offline(离线昵称)/ microsoft(微软正版,设备码流)
 LOGIN_OFFLINE = "offline"
@@ -228,6 +229,7 @@ class LoginCard(QWidget):
         self.setObjectName("loginCard")
         self.setMinimumHeight(164)
         set_style(self, lambda: f"#loginCard {{ {panel_style()} }}")
+        apply_card_shadow(self)
 
         self.avatar_label = QLabel()
         self.avatar_label.setFixedSize(self._avatar_size, self._avatar_size)
@@ -579,6 +581,7 @@ class InstanceSettingsCard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setObjectName("instCard")
         set_style(self, lambda: f"#instCard {{ {panel_style()} }}")
+        apply_card_shadow(self)
 
         self.title = QLabel(t("VERSION_HOME_CURRENT_SELECTION"))
         self.title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {muted_color()};")
@@ -830,10 +833,9 @@ class VersionHome(QWidget):
             lambda count: self.tabs.setTabText(self._server_tab_index, f"服务端(共{count}个)"))
         self.server_center.selection_changed.connect(self._on_server_selection_changed)
         self.server_center.running_changed.connect(lambda _: self._update_server_launch_button())
-        # 启动器日志:游戏运行输出/命令(与「版本」同级)
+        # 日志由主窗口状态球详情承载，保留同一个 view 接收实时输出。
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.tabs.addTab(self.log_view, t("VERSION_HOME_LAUNCHER_LOG"))
         # 切回「实例」标签页时自动刷新(不再有刷新按钮)
         self.tabs.currentChanged.connect(self._on_home_tab_changed)
 

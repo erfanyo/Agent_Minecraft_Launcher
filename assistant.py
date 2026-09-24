@@ -17,9 +17,10 @@ import time
 from typing import Any, Callable, cast
 
 import requests
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QMimeData, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
+    QDrag,
     QDesktopServices,
     QIcon,
     QImage,
@@ -29,6 +30,7 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -49,6 +51,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QStyle,
     QToolButton,
     QTabWidget,
     QVBoxLayout,
@@ -77,6 +80,7 @@ from settings import save_settings
 # 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
 LOCAL_PROVIDER = "local_builtin"
 LOCAL_MODEL_ID = "qwen3.5-0.8b-xlam-q4km"
+AI_DOCK_RETURN_MIME = "application/x-amcl-ai-dock-return"
 
 # AI 策略三档(与 AISettingsForm 保持一致):值 → (文案, 生效来源 cloud/local)
 STRATEGY_LABELS = {
@@ -667,13 +671,14 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
 def chat_with_tools(messages: list, settings: dict, tools: list[dict] | None,
                     executor: Callable[[str, dict], str], max_rounds=None,
                     on_tool=None, on_user_ask=None, return_messages=False,
-                    cancel_event=None):
+                    cancel_event=None, stop_after_first_tool=False):
     """Shared progress-bounded loop; max_rounds is a deprecated compatibility argument."""
     from ai_run import run
     return run(messages, settings, tools, executor, max_rounds=max_rounds,
                on_tool=on_tool, on_user_ask=on_user_ask,
                return_messages=return_messages, cancel_event=cancel_event,
-               max_tokens=CLOUD_MAX_TOKENS)
+               max_tokens=CLOUD_MAX_TOKENS,
+               stop_after_first_tool=stop_after_first_tool)
 
 
 def _cloud_available_settings(settings: dict) -> bool:
@@ -1556,13 +1561,195 @@ class AISettingsDialog(QDialog):
         super().accept()
 
 
+class _DockReturnButton(QToolButton):
+    """Click to toggle dock; drag the same icon back into the launcher to dock."""
+
+    def __init__(self, dock, parent=None):
+        super().__init__(parent)
+        self._dock = dock
+        self._press_pos = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dock.isFloating():
+            self._press_pos = event.position().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._press_pos is not None
+                and event.buttons() & Qt.MouseButton.LeftButton
+                and (event.position().toPoint() - self._press_pos).manhattanLength()
+                >= QApplication.startDragDistance()):
+            self._press_pos = None
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setData(AI_DOCK_RETURN_MIME, b"ai-dock")
+            drag.setMimeData(mime)
+            pixmap = QPixmap(190, 40)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(current_color('bg1')))
+            painter.drawRoundedRect(pixmap.rect().adjusted(1, 1, -1, -1), 9, 9)
+            painter.setPen(QColor(text_color()))
+            painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "AI 助手 → 启动器")
+            painter.end()
+            drag.setPixmap(pixmap)
+            drag.setHotSpot(pixmap.rect().center())
+            main = self._dock.parentWidget()
+            if main is not None and hasattr(main, '_show_ai_dock_drop_hint'):
+                main._show_ai_dock_drop_hint()
+            try:
+                drag.exec(Qt.DropAction.MoveAction)
+            finally:
+                if main is not None and hasattr(main, '_hide_ai_dock_drop_hint'):
+                    main._hide_ai_dock_drop_hint()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._press_pos is not None and event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = None
+            self.click()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class _DockHeader(BackgroundWidget):
+    """One compact tab/drag/control row for docked and floating AI panels."""
+
+    def __init__(self, dock, tabs):
+        super().__init__(dock)
+        self.dock = dock
+        self.tabs = tabs
+        self._system_move_active = False
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 3, 4, 3)
+        row.setSpacing(3)
+        self.chat_button = QToolButton(self)
+        self.chat_button.setText('聊天')
+        self.chat_button.setToolTip('AI 聊天')
+        self.chat_button.clicked.connect(lambda: tabs.setCurrentIndex(0))
+        self.archive_button = QToolButton(self)
+        self.archive_button.setText('记录/归档')
+        self.archive_button.setToolTip('聊天记录与归档')
+        self.archive_button.clicked.connect(lambda: tabs.setCurrentIndex(1))
+        row.addWidget(self.chat_button)
+        row.addWidget(self.archive_button)
+        row.addStretch()
+        self.float_button = _DockReturnButton(dock, self)
+        self.float_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarNormalButton))
+        self.float_button.setFixedSize(22, 22)
+        self.float_button.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
+        self.close_button = QToolButton(self)
+        self.close_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TitleBarCloseButton))
+        self.close_button.setToolTip('隐藏 AI 助手')
+        self.close_button.setFixedSize(22, 22)
+        self.close_button.clicked.connect(dock.hide)
+        row.addWidget(self.float_button)
+        row.addWidget(self.close_button)
+        self.setFixedHeight(30)
+        tabs.currentChanged.connect(self.refresh_theme)
+        self.refresh_theme()
+        self.update_floating_state(dock.isFloating())
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        from ui_style import current_color
+        color = QColor(current_color('bg1'))
+        color.setAlpha(45)
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), color)
+        painter.end()
+
+    def refresh_theme(self, *_args):
+        from ui_style import accent_color, current_color, muted_color, text_color
+        for index, button in enumerate((self.chat_button, self.archive_button)):
+            active = self.tabs.currentIndex() == index
+            button.setStyleSheet(
+                f'QToolButton {{ background: {current_color("tab_sel_bg") if active else "transparent"};'
+                f' color: {text_color() if active else muted_color()}; border: none;'
+                f' border-radius: 6px; padding: 3px 8px; font-weight: {"bold" if active else "normal"}; }}'
+                f'QToolButton:hover {{ color: {accent_color()}; }}')
+        for button in (self.float_button, self.close_button):
+            button.setStyleSheet(
+                f'QToolButton {{ background: transparent; color: {muted_color()};'
+                ' border: none; border-radius: 5px; }'
+                f'QToolButton:hover {{ background: {current_color("hover")}; color: {text_color()}; }}')
+        self.update()
+
+    def update_floating_state(self, floating):
+        self.float_button.setToolTip(
+            '点击停靠；或按住拖到启动器窗口后松开；双击顶部空白处停靠'
+            if floating else '浮出 AI 助手')
+
+    def mousePressEvent(self, event):
+        # Floating QDockWidget's own drag uses mouse grabbing, which Wayland
+        # rejects for ordinary windows. The return button handles re-docking.
+        self._system_move_active = False
+        if event.button() == Qt.MouseButton.LeftButton and self.dock.isFloating():
+            window = self.dock.windowHandle()
+            self._system_move_active = bool(window is not None and window.startSystemMove())
+            # Do not pass the same press back to QDockWidget, even if the
+            # compositor declines it: Qt's own floating-dock grab interferes
+            # with subsequent Wayland presses.
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseMoveEvent(self, event):
+        if self._system_move_active:
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseReleaseEvent(self, event):
+        if self._system_move_active:
+            self._system_move_active = False
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.dock.isFloating():
+            self.dock.setFloating(False)
+            event.accept()
+            return
+        event.ignore()
+
+
+class _FloatingDockResizeGrip(QWidget):
+    """Tell the compositor which *left* edge of a floating dock is being dragged."""
+
+    def __init__(self, dock, edges, cursor):
+        super().__init__(dock)
+        self._dock = dock
+        self._edges = edges
+        self.setCursor(cursor)
+        self.hide()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dock.isFloating():
+            window = self._dock.windowHandle()
+            if window is not None and window.startSystemResize(self._edges):
+                event.accept()
+                return
+        event.ignore()
+
+
 class AIChatDock(QDockWidget):
     """右侧停靠的 AI 对话栏"""
 
     def __init__(self, parent, settings: dict):
         super().__init__("AI 助手", parent)
+        self._dock_header = None
         self.main = parent
         self.settings = settings
+
         self.signals = _Signals()
         self.signals.reply.connect(self._on_reply)
         self.signals.error.connect(self._on_error)
@@ -1597,10 +1784,7 @@ class AIChatDock(QDockWidget):
         self.input.imageClicked.connect(self._pick_images)
         self.input.imagePasted.connect(self._add_image_data)
         self.input.recentClicked.connect(self._pick_recent_screenshots)
-        # 浮动/停靠使用 QDockWidget 标题栏右上角自带的浮动按钮(与系统行为整合)
-
-        # 顶部:标题由 dock 边框自带(不再在面板内重复显示 "AI 助手");
-        # 这里直接放 策略切换 + 本地模型状态 + 技能管理。模型策略按钮:可点击切换 AI 策略三档。
+        # 顶部 Dock 标题与标签页合为一行；聊天页内只放策略与技能入口。
         self.strategy_btn = QToolButton()
         self.strategy_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.strategy_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -1731,11 +1915,33 @@ class AIChatDock(QDockWidget):
         # Tab1: 聊天记录·归档
         self.tabs.addTab(self._build_archive_tab(), "🗂 记录/归档")
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.tabBar().hide()
         layout.addWidget(self.tabs, 1)
         self.setWidget(container)
         self._container = container
+        self._dock_header = _DockHeader(self, self.tabs)
+        self.setTitleBarWidget(self._dock_header)
+        self.topLevelChanged.connect(self._on_floating_changed)
         self.setMinimumWidth(320)
         self.setObjectName("AIChatDock")
+        self._left_resize_grips = (
+            _FloatingDockResizeGrip(self, Qt.Edge.LeftEdge | Qt.Edge.TopEdge,
+                                    Qt.CursorShape.SizeFDiagCursor),
+            _FloatingDockResizeGrip(self, Qt.Edge.LeftEdge,
+                                    Qt.CursorShape.SizeHorCursor),
+            _FloatingDockResizeGrip(self, Qt.Edge.LeftEdge | Qt.Edge.BottomEdge,
+                                    Qt.CursorShape.SizeBDiagCursor),
+        )
+        self._other_resize_grips = (
+            _FloatingDockResizeGrip(self, Qt.Edge.RightEdge | Qt.Edge.TopEdge,
+                                    Qt.CursorShape.SizeBDiagCursor),
+            _FloatingDockResizeGrip(self, Qt.Edge.RightEdge,
+                                    Qt.CursorShape.SizeHorCursor),
+            _FloatingDockResizeGrip(self, Qt.Edge.RightEdge | Qt.Edge.BottomEdge,
+                                    Qt.CursorShape.SizeFDiagCursor),
+            _FloatingDockResizeGrip(self, Qt.Edge.BottomEdge,
+                                    Qt.CursorShape.SizeVerCursor),
+        )
 
         self._tool_id = 0              # 工具调用编号
         self._entries = []             # 展示流(ChatEntry);渲染交给 chat_view
@@ -1763,6 +1969,50 @@ class AIChatDock(QDockWidget):
         # §5 性能策略:CPU 采样监控线程(量化提示);daemon,不阻塞退出。见 shutdown() 置停。
         threading.Thread(target=self._infer_monitor_loop, daemon=True).start()
 
+    def _on_floating_changed(self, floating):
+        if self._dock_header is not None:
+            self._dock_header.update_floating_state(floating)
+            self._dock_header._system_move_active = False
+        # The custom title bar moves the floating window via the compositor.
+        # Leave QDockWidgetMovable only while docked, otherwise Qt also tries
+        # its own mouse-grab drag on Wayland. Re-docking remains on the button.
+        movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
+        features = self.features()
+        wanted = features & ~movable if floating else features | movable
+        if wanted != features:
+            self.setFeatures(wanted)
+        self._position_left_resize_grips()
+        # Qt may finish changing QDockWidget's native window after this signal.
+        QTimer.singleShot(0, self._position_left_resize_grips)
+
+    def _position_left_resize_grips(self):
+        grips = getattr(self, '_left_resize_grips', ())
+        others = getattr(self, '_other_resize_grips', ())
+        if not grips and not others:
+            return
+        for grip in (*grips, *others):
+            grip.setVisible(self.isFloating())
+        if not self.isFloating():
+            return
+        # Keep the hit targets flush to the *outer* edge. Top-left is shallow
+        # so the first tab still works; the vertical strip is broad enough to
+        # grab on a touchpad without covering the conversation controls.
+        width, corner = 16, 24
+        height = max(0, self.height())
+        grips[0].setGeometry(0, 0, corner, 8)
+        grips[1].setGeometry(0, 30, width, max(0, height - corner - 30))
+        grips[2].setGeometry(0, max(0, height - corner), corner, corner)
+        if others:
+            right = max(0, self.width() - width)
+            others[0].setGeometry(max(0, self.width() - corner), 0, corner, 8)
+            others[1].setGeometry(right, 30, width, max(0, height - corner - 30))
+            others[2].setGeometry(max(0, self.width() - corner),
+                                  max(0, height - corner), corner, corner)
+            others[3].setGeometry(corner, max(0, height - width),
+                                  max(0, self.width() - 2 * corner), width)
+        for grip in (*grips, *others):
+            grip.raise_()
+
     def _sync_wallpaper_view(self):
         """按与本窗口中央区的相对位置,更新本 dock 显示的壁纸片段(共享模式)。
         效果:AI dock 的壁纸是主窗壁纸的「局部放大/平移」,横向连续;浮动后左右移动
@@ -1770,10 +2020,13 @@ class AIChatDock(QDockWidget):
         main = self.main
         scaled = getattr(main, "_wallpaper_scaled", None)
         c = getattr(self, "_container", None)
+        header = getattr(self, "_dock_header", None)
         if c is None:
             return
         if scaled is None:
             c.clear()
+            if header is not None:
+                header.clear()
             return
         ox = getattr(main, "_wallpaper_ox", 0)
         oy = getattr(main, "_wallpaper_oy", 0)
@@ -1786,6 +2039,10 @@ class AIChatDock(QDockWidget):
         dx = dg.x() - cg.x()
         dy = dg.y() - cg.y()
         c.set_shared_view(scaled, ox + dx, oy + dy, mask)
+        if header is not None:
+            hg = header.mapToGlobal(header.rect().topLeft())
+            header.set_shared_view(scaled, ox + hg.x() - cg.x(),
+                                   oy + hg.y() - cg.y(), mask)
 
     def moveEvent(self, e):
         super().moveEvent(e)
@@ -1793,6 +2050,7 @@ class AIChatDock(QDockWidget):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        self._position_left_resize_grips()
         self._sync_wallpaper_view()
 
     def update_vision_ui(self):
@@ -2837,6 +3095,9 @@ class AIChatDock(QDockWidget):
         event = getattr(self, '_agent_cancel', None)
         if event is not None:
             event.set()
+            dismiss = getattr(self, '_dismiss_action_confirmation', None)
+            if dismiss is not None:
+                dismiss(False)
             self._append_system('已请求停止；等待当前请求或工具安全结束。')
 
     def _open_run_records(self):
@@ -2909,11 +3170,13 @@ class AIChatDock(QDockWidget):
             return True
         result_box = []
         ev = threading.Event()
-        self.signals.system_msg.emit("需要你确认一个处理方案；确认窗口已经打开。")
+        self.signals.system_msg.emit("需要你确认一个处理方案；请看 AI 助手里的操作卡片，也可以停止任务。")
         self.signals.action_confirm.emit(name, preview, result_box, ev)
         while not ev.wait(0.2):
             if getattr(self, '_agent_cancel', threading.Event()).is_set():
                 return False
+        if getattr(self, '_agent_cancel', threading.Event()).is_set():
+            return False
         approved, remember = result_box[0] if result_box else (False, False)
         if approved and remember:
             self._session_action_allow = getattr(self, "_session_action_allow", set()) | {name}
@@ -2924,29 +3187,59 @@ class AIChatDock(QDockWidget):
         self.signals.system_msg.emit("🛟 " + message)
 
     def _on_action_confirm_ui(self, name, preview, result_box, ev):
-        """主线程显示变更清单；默认范围内不另要系统权限，但仍由用户确认动作本身。"""
-        try:
-            from PySide6.QtWidgets import QCheckBox
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Icon.Question)
-            box.setWindowModality(Qt.WindowModality.ApplicationModal)
-            box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            plain = self.settings.get("ai_response_style", "plain") == "plain"
-            box.setWindowTitle("确认处理方案" if plain else "确认 AI 操作")
-            box.setText("为了继续解决问题，AI 打算这样处理：" if plain else "AI 准备执行以下操作：")
-            box.setInformativeText(preview)
-            box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            box.button(QMessageBox.StandardButton.Yes).setText("同意这个方案" if plain else "确认执行")
-            box.button(QMessageBox.StandardButton.No).setText("先不要" if plain else "取消")
-            remember = QCheckBox("这次处理里相同操作直接继续" if plain else "本次对话中，同类操作不再询问")
-            box.setCheckBox(remember)
-            box.show()
-            box.raise_()
-            box.activateWindow()
-            approved = box.exec() == QMessageBox.StandardButton.Yes
-            result_box.append((approved, remember.isChecked()))
-        finally:
+        """Show the pending decision inside AI Dock without blocking the launcher."""
+        if ev.is_set() or getattr(self, '_agent_cancel', threading.Event()).is_set():
+            result_box.append((False, False))
             ev.set()
+            return
+        dismiss = getattr(self, '_dismiss_action_confirmation', None)
+        if dismiss is not None:
+            dismiss(False)
+        plain = self.settings.get('ai_response_style', 'plain') == 'plain'
+        card = QWidget(self)
+        card.setObjectName('aiActionConfirmation')
+        card.setStyleSheet(
+            f'QWidget#aiActionConfirmation {{ background: {current_color("bg1")};'
+            f' border: 1px solid {current_color("btn_border")}; border-radius: 8px; }}')
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
+        heading = QLabel('AI 想执行这一步，请确认：' if plain else '确认 AI 操作：', card)
+        heading.setWordWrap(True)
+        layout.addWidget(heading)
+        details = QPlainTextEdit(card)
+        details.setReadOnly(True)
+        details.setPlainText(preview)
+        details.setFixedHeight(92)
+        layout.addWidget(details)
+        remember = QCheckBox('本次同类操作直接继续', card)
+        layout.addWidget(remember)
+        buttons = QHBoxLayout()
+        approve = QPushButton('同意执行', card)
+        decline = QPushButton('先不要', card)
+        stop = QPushButton('停止任务', card)
+        buttons.addWidget(approve)
+        buttons.addWidget(decline)
+        buttons.addWidget(stop)
+        layout.addLayout(buttons)
+        self.widget().layout().insertWidget(0, card)
+        self._confirm_card = card
+
+        def finish(approved=False):
+            if ev.is_set():
+                return
+            result_box.append((approved, approved and remember.isChecked()))
+            ev.set()
+            self._dismiss_action_confirmation = None
+            self._confirm_card = None
+            card.hide()
+            card.deleteLater()
+
+        self._dismiss_action_confirmation = finish
+        approve.clicked.connect(lambda: finish(True))
+        decline.clicked.connect(lambda: finish(False))
+        stop.clicked.connect(self._stop_agent_run)
+        self.show()
 
     def _undo_last_setting(self):
         from ai_action_log import undo_last_setting
@@ -2981,6 +3274,9 @@ class AIChatDock(QDockWidget):
 
     # ---- 自测工具调用 ----
     def self_test_tools(self):
+        if getattr(self, '_agent_running', False):
+            self._append_system('当前任务还在运行。先点“停止任务”，结束后再自测。')
+            return
         self._append_system("🛠 正在自测:让模型调用 list_instances 工具...")
         messages = [
             {"role": "system", "content": "请调用 list_instances 工具,把结果原样告诉我。不要只描述计划。"},
@@ -2994,12 +3290,19 @@ class AIChatDock(QDockWidget):
 
         def worker():
             try:
-                chat_with_tools(messages, self.settings, TOOLS,
-                                build_executor(self.settings), on_tool=on_tool)
-                self.signals.self_test.emit(bool(tools_called))
+                chat_with_tools(messages, self.settings, TOOLS[:1],
+                                build_executor(self.settings), on_tool=on_tool,
+                                cancel_event=self._agent_cancel,
+                                stop_after_first_tool=True)
+                if not self._agent_cancel.is_set():
+                    self.signals.self_test.emit(bool(tools_called))
             except Exception as e:
                 self.signals.error.emit(str(e))
+            finally:
+                self._agent_running = False
 
+        self._agent_cancel = threading.Event()
+        self._agent_running = True
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_self_test(self, ok: bool):

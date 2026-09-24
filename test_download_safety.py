@@ -76,19 +76,20 @@ class SafetyTests(unittest.TestCase):
                 _download_mods_parallel([{'path': 'mods/a.jar', 'downloads': ['https://example.org']}], root)
 
     def test_controller_and_indicator(self):
-        from PySide6.QtCore import QEventLoop, QTimer
+        import time
         from PySide6.QtWidgets import QApplication
         from task_controllers import DownloadTaskController
         from download_indicator import DownloadIndicator
         app = QApplication.instance() or QApplication([])
         for worker in [lambda s, p: s('❌ 下载失败: timeout'), lambda s, p: False]:
-            loop = QEventLoop()
             controller = DownloadTaskController()
             results = []
-            controller.completed.connect(lambda ok, error: (results.append(ok), loop.quit()))
+            controller.completed.connect(lambda ok, error: results.append(ok))
             controller.start(worker)
-            QTimer.singleShot(2000, loop.quit)
-            loop.exec()
+            deadline = time.monotonic() + 3
+            while not results and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.01)
             self.assertEqual(results, [False])
         ball = DownloadIndicator()
         ball.set_progress(1, 1)

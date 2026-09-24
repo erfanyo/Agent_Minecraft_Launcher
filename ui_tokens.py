@@ -22,9 +22,29 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+_THEME_MODE = 'system'
+_SYSTEM_PALETTE_DARK = None
+
+
+def set_theme_mode(mode: str) -> None:
+    """Select app appearance without changing the operating-system theme."""
+    global _THEME_MODE, _SYSTEM_PALETTE_DARK
+    if mode not in ('system', 'light', 'dark'):
+        mode = 'system'
+    app = QApplication.instance()
+    if app is not None and _SYSTEM_PALETTE_DARK is None:
+        _SYSTEM_PALETTE_DARK = app.palette().window().color().lightness() < 128
+    _THEME_MODE = mode
+
+
+def theme_mode() -> str:
+    return _THEME_MODE
+
 
 def is_dark_mode() -> bool:
     """判断当前系统主题是不是深色"""
+    if _THEME_MODE != 'system':
+        return _THEME_MODE == 'dark'
     app = QApplication.instance()
     if app is None:
         return False
@@ -48,8 +68,9 @@ def is_dark_mode() -> bool:
             return not bool(value)
         except OSError:
             pass
-    win = app.palette().window().color()
-    return win.lightness() < 128
+    if _SYSTEM_PALETTE_DARK is not None:
+        return _SYSTEM_PALETTE_DARK
+    return app.palette().window().color().lightness() < 128
 
 
 # ---------------- 颜色槽(深色默认, 浅色默认) ----------------
@@ -70,7 +91,7 @@ COLOR_SLOTS = {
     "accent_bg_hover": ("#3D80E8", "#2F7FE8"),
     "accent_bg_pressed": ("#265FB8", "#175CB5"),
     "btn_disabled_bg": ("#44506A", "#B9C4D6"),
-    "btn_disabled_text": ("#9AA4B8", "#EEF1F6"),
+    "btn_disabled_text": ("#9AA4B8", "#788397"),
     "sel_bg": ("rgba(91,141,239,0.30)", "rgba(59,142,234,0.20)"),
     "list_hover": ("rgba(255,255,255,0.08)", "rgba(59,142,234,0.08)"),
     "menu_sel": ("rgba(91,141,239,0.20)", "rgba(59,142,234,0.16)"),
@@ -103,7 +124,7 @@ COLOR_TOKENS = {
     "info": ("#5B8DEF", "#3B8EEA"),
     # 强调底上的白字 / 禁用文字
     "text_on_accent": ("#ffffff", "#ffffff"),
-    "text_disabled": ("#9AA4B8", "#EEF1F6"),  # (= btn_disabled_text)
+    "text_disabled": ("#9AA4B8", "#788397"),  # (= btn_disabled_text)
 }
 
 # 全部颜色槽 = COLOR_SLOTS ∪ COLOR_TOKENS(查询用;current_token 只读这两个表)

@@ -95,7 +95,6 @@ def offer_memory_actions(owner, plan, version, launch):
     button('返回调整', cancel)
     dock.setWidget(content)
     owner.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
-    owner.dl_indicator.hide()
     refresh()
     dock.show()
     return True

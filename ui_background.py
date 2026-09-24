@@ -250,10 +250,10 @@ def input_style_qss() -> str:
         sel = "rgba(59,142,234,0.22)"
     return (
         f"QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{"
-        f" background: {bg}; border: 1px solid {border}; border-radius: 6px; }}"
+        f" background: {bg}; border: 1px solid {border}; border-radius: 10px; }}"
         f"QComboBox QAbstractItemView {{ background: {base_bg}; selection-background-color: {sel}; }}"
         f"QListWidget, QTreeWidget, QTableWidget {{ background: {base_bg};"
-        f" border: 1px solid {border}; border-radius: 6px; }}"
+        f" border: 1px solid {border}; border-radius: 10px; }}"
     )
 
 
@@ -268,6 +268,8 @@ def scroll_surface_qss() -> str:
     handle = current_token('btn_border')
     hover = current_token('accent')
     return (
+        'QPlainTextEdit, QTextEdit, QListWidget, QTreeWidget, QTableWidget {'
+        ' border-radius: 10px; }'
         'QScrollArea > QWidget { background: transparent; }'
         f'QScrollBar:vertical {{ background: {groove}; width: 10px; margin: 0; }}'
         f'QScrollBar:horizontal {{ background: {groove}; height: 10px; margin: 0; }}'

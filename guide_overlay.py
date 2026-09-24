@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-引导式教程(演示):spotlight 遮罩 + 箭头 + 说明气泡 + 上一步/下一步/跳过。
+引导式教程:窗口内 spotlight 遮罩 + 箭头 + 说明气泡 + 上一步/下一步/跳过。
 
 **模块化**:步骤数据 = {route, arrow, text}(见 GuideDriver.DEMO/最终放 tutorial_steps)。
 框架只按数据把"遮罩/箭头/气泡"画到目标控件上;UI 改了只改 route(见 ui_route.py)。
@@ -10,25 +10,19 @@ import math
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal, QObject, QPointF
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QBrush, QPolygonF
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget,
+    QApplication, QDialog, QLabel, QPushButton, QTreeWidget, QVBoxLayout, QHBoxLayout, QWidget,
 )
 
 import ui_route
-
-
-def _window_global_geom(w):
-    top_left = w.mapToGlobal(QPoint(0, 0))
-    return QRect(top_left, w.size())
 
 
 class GuideOverlay(QWidget):
     """半透明 spotlight 遮罩:调暗目标窗口,在目标控件处挖洞高亮,画箭头+气泡+控制条。"""
 
     def __init__(self, host_window, parent=None):
-        super().__init__(parent)   # 顶层窗口(无父),定位在 host_window 上方
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint
-                            | Qt.WindowType.Tool
-                            | Qt.WindowType.WindowStaysOnTopHint)
+        # A top-level Tool window cannot be positioned reliably on Wayland.
+        # Keep the overlay inside its host and use host-local coordinates.
+        super().__init__(host_window)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._host = host_window
         self._target_rect = None       # 目标控件在遮罩坐标系内的矩形
@@ -41,7 +35,7 @@ class GuideOverlay(QWidget):
         self._first = True
         self._last = True
         self._build_controls()
-        self.setGeometry(_window_global_geom(host_window))
+        self.setGeometry(host_window.rect())
 
     def _build_controls(self):
         self.skip_btn = QPushButton("跳过", self)
@@ -56,9 +50,8 @@ class GuideOverlay(QWidget):
         self.prev_btn.clicked.connect(lambda: self.on_prev and self.on_prev())
         self.next_btn.clicked.connect(lambda: self.on_next and self.on_next())
 
-    def show_step(self, target_global_rect, arrow, text, first, last):
-        tl = self.geometry().topLeft()
-        self._target_rect = QRect(target_global_rect.topLeft() - tl, target_global_rect.size())
+    def show_step(self, target_local_rect, arrow, text, first, last):
+        self._target_rect = QRect(target_local_rect)
         self._arrow = arrow or "below"
         self._text = text
         self._first, self._last = first, last
@@ -185,6 +178,49 @@ class GuideDriver(QObject):
         self.idx = 0
         self._show()
 
+    def _focus_rect(self, step, target):
+        """Return a host-local rectangle, avoiding Wayland global positions."""
+        host = target.window()
+
+        def mapped(widget, rect=None):
+            rect = rect or widget.rect()
+            return QRect(widget.mapTo(host, rect.topLeft()), rect.size())
+
+        tab_name = step.get('focus_main_tab')
+        if tab_name:
+            tabs = getattr(self.main, 'main_tabs', None)
+            if tabs is not None:
+                for index in range(tabs.count()):
+                    if tabs.tabText(index) == tab_name:
+                        bar = tabs.tabBar()
+                        return mapped(bar, bar.tabRect(index))
+        menu_index = step.get('focus_resource_menu')
+        if menu_index is not None:
+            center = getattr(self.main, 'resource_center', None)
+            buttons = getattr(getattr(center, 'menu', None), '_buttons', ())
+            if 0 <= menu_index < len(buttons):
+                return mapped(buttons[menu_index])
+        item_name = step.get('focus_tree_item')
+        if item_name and isinstance(target, QTreeWidget):
+            for index in range(target.topLevelItemCount()):
+                root = target.topLevelItem(index)
+                if root.text(0).split()[0] == item_name:
+                    item = root
+                else:
+                    item = next((root.child(j) for j in range(root.childCount())
+                                 if isinstance(root.child(j).data(0, Qt.ItemDataRole.UserRole), dict)
+                                 and root.child(j).data(0, Qt.ItemDataRole.UserRole).get('id') == item_name), None)
+                if item is None:
+                    continue
+                if item is not root:
+                    root.setExpanded(True)
+                target.scrollToItem(item)
+                QApplication.processEvents()
+                rect = target.visualItemRect(item)
+                if rect.isValid() and rect.height() > 0:
+                    return mapped(target.viewport(), rect)
+        return mapped(target)
+
     def _show(self):
         if self.idx < 0 or self.idx >= len(self.steps):
             self.finish()
@@ -204,13 +240,13 @@ class GuideDriver(QObject):
         self.overlay.on_prev = self.prev
         self.overlay.on_skip = self.finish
         self.overlay.show()
+        self.overlay.raise_()
         # 目标常位于刚切到的页(如 DownloadTab 内部 stack / 资源浏览器)或其下控件;
         # 先处理布局事件,确保几何已就位,否则遮罩会框到旧位置/隐藏页上(对齐偏移)。
         QApplication.processEvents()
         TOP = self.overlay
         # 目标控件全局矩形 → 遮罩坐标
-        tl = target.mapToGlobal(QPoint(0, 0))
-        grect = QRect(tl, target.size())
+        grect = self._focus_rect(st, target)
         TOP.show_step(grect, st.get("arrow", "below"), st.get("text", ""),
                       first=(self.idx == 0),
                       last=(self.idx == len(self.steps) - 1))
@@ -220,12 +256,18 @@ class GuideDriver(QObject):
 
     def _sync_geom(self):
         if self.overlay is not None:
-            self.overlay.setGeometry(_window_global_geom(self.overlay._host))
+            self.overlay.setGeometry(self.overlay._host.rect())
             self.overlay.update()
 
     def next(self):
         self.idx += 1
         self._show()
+
+    def refresh_current_target(self):
+        """Refocus a row when an asynchronous version manifest arrives."""
+        if self.overlay is not None and 0 <= self.idx < len(self.steps):
+            if self.steps[self.idx].get('focus_tree_item'):
+                self._show()
 
     def prev(self):
         self.idx -= 1

@@ -11,7 +11,7 @@
 - 只在**真的检测到**该 mod 时才问;
 - 没有对应插件时什么都不做,不硬塞残缺的内置页。
 
-本模块只做判断(纯逻辑),弹窗与启用动作在 :mod:`main` 里。
+本模块只做判断(纯逻辑),非模态提示与启用动作在 :mod:`main` 里。
 """
 from __future__ import annotations
 
@@ -151,4 +151,3 @@ def _load_meta_module(name: str):
             except Exception:
                 return None
     return None
-

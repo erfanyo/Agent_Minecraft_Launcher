@@ -23,6 +23,7 @@ class WindowImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             owner = Mock()
             owner._on_my_instances_page.return_value = True
+            owner._is_ai_dock_return_drag.return_value = False
             event = Mock()
             event.mimeData.return_value.urls.return_value = [
                 QUrl.fromLocalFile(root), QUrl.fromLocalFile(root),

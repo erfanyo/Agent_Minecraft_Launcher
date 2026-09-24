@@ -175,7 +175,7 @@ class SettingsCenter(QWidget):
         lay.setSpacing(4)
         lay.addWidget(self.shell, 1)
         bottom = QHBoxLayout()
-        self._autosave_hint = QLabel("颜色、壁纸和动画会自动保存")
+        self._autosave_hint = QLabel("主题、颜色、壁纸和动画会自动保存")
         self._autosave_hint.setStyleSheet(f"color:{muted_color()};")
         bottom.addWidget(self._autosave_hint)
         bottom.addStretch()
@@ -294,6 +294,14 @@ class SettingsCenter(QWidget):
         form = QFormLayout()
         form.addRow("界面模式:", self.ui_mode_combo)
         form.addRow("", mode_hint)
+
+        self.theme_combo = QComboBox()
+        for label, value in (("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")):
+            self.theme_combo.addItem(label, value)
+        self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(
+            self.settings.get('ui_theme', 'system'))))
+        self.theme_combo.currentIndexChanged.connect(self._queue_visual_autosave)
+        form.addRow("外观主题:", self.theme_combo)
 
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
         l.addLayout(form)
@@ -473,6 +481,7 @@ class SettingsCenter(QWidget):
 
     def _save_visual_settings(self):
         """只保存可即时回退的外观项，不触发实例重扫或 AI 重载。"""
+        self.settings['ui_theme'] = self.theme_combo.currentData()
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
         self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
@@ -1384,6 +1393,7 @@ class SettingsCenter(QWidget):
         self.settings["custom_mirrors"] = self._custom_mirrors
         self.settings["curseforge_api_key"] = self.curseforge_key_edit.text().strip()
         # 自定义背景(阶段 2)
+        self.settings['ui_theme'] = self.theme_combo.currentData()
         self.settings['ui_wallpaper_blur'] = self.wallpaper_blur_slider.value()
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()

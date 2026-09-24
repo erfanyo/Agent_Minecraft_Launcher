@@ -34,7 +34,7 @@ class FramelessTitleBar(QWidget):
 
         self.title_label = QLabel(title)
         self.title_label.setObjectName("titleLabel")
-        self.title_label.setStyleSheet("font-weight: bold; color: #e7ecf5; font-size: 13px;")
+        self.refresh_theme()
 
         # 「恢复默认尺寸」:窗口大小/位置会被记住(见 window_geometry),但用户可能
         # 拖到一个别扭的尺寸后自己调不回来,所以给一个一键还原的入口。
@@ -65,8 +65,22 @@ class FramelessTitleBar(QWidget):
 
         # 双击标题栏 → 最大化/还原
         self.setCursor(Qt.CursorShape.ArrowCursor)
+        self.refresh_theme()
 
     # ---- 控件 ----
+    def refresh_theme(self):
+        from ui_style import is_dark_mode, muted_color
+        color = '#e7ecf5' if is_dark_mode() else '#1f2430'
+        self.title_label.setStyleSheet(
+            f'font-weight: bold; color: {color}; font-size: 13px;')
+        for button in self.findChildren(QPushButton):
+            if not button.property('titleControl'):
+                continue
+            button.setStyleSheet(
+                f'QPushButton {{ background: transparent; color: {muted_color()};'
+                ' border: none; border-radius: 8px; font-size: 14px; }'
+                'QPushButton:hover { background: rgba(91,141,239,0.12); }')
+
     def _dot(self, color: str, fn) -> QPushButton:
         b = QPushButton()
         b.setFixedSize(14, 14)
@@ -79,6 +93,7 @@ class FramelessTitleBar(QWidget):
 
     def _btn(self, text: str, fn, tip: str) -> QPushButton:
         b = QPushButton(text)
+        b.setProperty('titleControl', True)
         b.setFixedSize(38, 28)
         b.setCursor(Qt.CursorShape.PointingHandCursor)
         b.setToolTip(tip)

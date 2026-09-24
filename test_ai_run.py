@@ -1,6 +1,7 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -44,6 +45,29 @@ class RunTests(unittest.TestCase):
         with patch('ai_run.requests.post', return_value=response(1)):
             self.assertIn('重复', run([], self.settings, [], lambda n, a: 'same'))
         self.assertEqual(self.events()[-1]['reason'], 'stalled')
+
+    def test_probe_finishes_after_one_real_tool_call(self):
+        execute = Mock(return_value='instances listed')
+        with patch('ai_run.requests.post', return_value=response(1)) as request:
+            self.assertIn('自测', run([], self.settings, [], execute,
+                                   stop_after_first_tool=True))
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(execute.call_count, 1)
+        self.assertEqual(self.events()[-1]['reason'], 'probe_complete')
+
+    def test_repeated_probes_with_changing_results_stop(self):
+        with patch('ai_run.requests.post', return_value=response(1)):
+            reply = run([], self.settings, [], lambda n, a: str(time.monotonic_ns()))
+        self.assertIn('反复测试', reply)
+        self.assertEqual(self.events()[-1]['reason'], 'tool_loop')
+
+    def test_declined_action_does_not_prompt_again(self):
+        execute = Mock(return_value='用户取消了这项操作，未做任何修改。')
+        with patch('ai_run.requests.post', return_value=response(1)) as request:
+            reply = run([], self.settings, [], execute)
+        self.assertIn('不会反复请求', reply)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(self.events()[-1]['reason'], 'action_declined')
 
     def test_empty_response_after_four_tools_retries_without_replaying(self):
         empty = response()

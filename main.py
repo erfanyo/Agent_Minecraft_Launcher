@@ -59,9 +59,9 @@ import requests
 from log_privacy import redact_text
 from downloader import failure_advice
 
-from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher
-from PySide6.QtGui import (QColor, QFont, QIcon, QImageReader, QPainter,
-                           QPalette, QPixmap)
+from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher, QEvent, QRectF, QPoint
+from PySide6.QtGui import (QColor, QCursor, QGuiApplication, QFont, QIcon, QImageReader, QPainter,
+                           QPainterPath, QPalette, QPixmap, QRegion)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -94,7 +94,7 @@ import updater  # 自动更新(检查 GitHub 新版本 / 下载 / 替换)
 from bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
 from task_controllers import DownloadTaskController, VersionManifestController
 from background_tasks import BackgroundTask
-from assistant import AIChatDock, permission_instructions  # AI 助手(右侧停靠对话栏)
+from assistant import AIChatDock, AI_DOCK_RETURN_MIME, permission_instructions  # AI 助手(右侧停靠对话栏)
 from ai_actions import plain_language_instructions
 from download_indicator import DownloadDetailWidget, DownloadIndicator  # 左下角下载指示器
 from updater_dialog import UpdateDialog  # 检查更新对话框(独立模块)
@@ -230,6 +230,8 @@ class MainWindow(QMainWindow):
         # ---- 无边框自定义标题栏(名称位置按平台,见 frameless_titlebar.py) ----
         self.setWindowTitle("AMCL")   # 任务栏/系统标题
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+        if sys.platform.startswith(('linux', 'win')):
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         from frameless_titlebar import FramelessTitleBar
         self._running_instances = set()
         self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
@@ -344,6 +346,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self._position_resize_handles()
         self._background = central
+        central.installEventFilter(self)
         self.apply_background()
 
         # ---- 全局键盘导航(遥控器式):顶部分类标签 左右切换;当前页左菜单 上下切换;Enter 进入分项 ----
@@ -377,6 +380,9 @@ class MainWindow(QMainWindow):
         self.title_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         self.title_dock.setTitleBarWidget(QWidget())   # 隐藏 dock 自带标题栏
         self.title_dock.setWidget(self.title_bar)
+        self.title_dock.setAutoFillBackground(True)
+        self.title_bar.setAutoFillBackground(True)
+        self._paint_title_background()
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.title_dock)
         # 修复 dock"放不回去":允许嵌套/标签 + 动画(拖出后能顺利拖回边缘复原)
         self.setDockOptions(QMainWindow.DockOption.AllowNestedDocks
@@ -397,7 +403,10 @@ class MainWindow(QMainWindow):
                                  | QDockWidget.DockWidgetFeature.DockWidgetFloatable
                                  | QDockWidget.DockWidgetFeature.DockWidgetClosable)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.ai_dock)
+        self.ai_dock.installEventFilter(self)
         self.ai_dock.visibilityChanged.connect(self._on_ai_visibility)
+        self.ai_dock.topLevelChanged.connect(lambda _floating: QTimer.singleShot(0, self._update_window_shape))
+        self.ai_dock.visibilityChanged.connect(lambda _visible: QTimer.singleShot(0, self._update_window_shape))
         self.ai_dock.show()
 
         # 游戏日志已挪进实例详情,不再有独立 dock(AI 助手单独在右侧作标签页)
@@ -439,15 +448,15 @@ class MainWindow(QMainWindow):
         # 监听 versions/ 目录文件变动 → 实例列表自动刷新(如外部新增/删除实例文件夹)
         self._setup_instance_watcher()
 
-        # 左下角下载指示器:下载时显示 ⬇ 圆环进度,点击查看详情
+        # 状态球作为内容区子控件，Wayland 下也能正常定位和拖动。
         self._dl_log = []                      # 本次下载的状态消息流
         self._dl_progress = (0, 1)
         # 下载球 = 悬浮球:置顶、可拖动,默认在内容区右下角(AI 子窗口左侧、主窗口侧外部)
-        self.dl_indicator = DownloadIndicator(self)
-        self.dl_indicator.make_floating()
+        self.dl_indicator = DownloadIndicator(self._background)
         self.dl_indicator.clicked.connect(self.open_download_detail)
         self.dl_indicator.shown.connect(self._place_download_ball)
-        self.dl_indicator.hide()
+        self.dl_indicator.show()
+        self.dl_indicator.raise_()
 
         # 拖放:把文件(整合包)拖进窗口 → 覆盖层提示"松手尝试安装" → 松手导入
         self.setAcceptDrops(True)
@@ -466,6 +475,7 @@ class MainWindow(QMainWindow):
         self._ui_ready = True
         # 窗口大小/位置:放在最后恢复,确保其它控件已建好、不会在显示过程中被挤压
         self._restore_window_geometry()
+        QTimer.singleShot(0, self._place_download_ball)
 
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
@@ -489,15 +499,23 @@ class MainWindow(QMainWindow):
         self.resource_center.set_ui_mode(s.get("ui_mode", "beginner"))
         self.refresh_instances()   # 游戏目录可能被改了,重新扫描
         self._watch_versions_dir()   # 游戏目录若变更,把监听指向新的 versions/
-        self.apply_background()   # 壁纸/遮罩变化 → 立即生效
+        self._on_visual_settings_changed()   # 主题/壁纸/遮罩变化 → 立即生效
         self.statusBar().showMessage("设置已保存")
 
     def _on_visual_settings_changed(self):
         """颜色/壁纸/动画自动保存后只刷新外观，避免重扫实例和重载 AI。"""
         self.settings = self.settings_center.settings
+        from ui_style import set_theme_mode, apply_global_dark_palette, refresh_theme
+        set_theme_mode(self.settings.get('ui_theme', 'system'))
+        apply_global_dark_palette(QApplication.instance())
+        refresh_theme()
+        self.title_bar.refresh_theme()
+        self._paint_title_background()
+        self.ai_dock._dock_header.refresh_theme()
         from ui_anim import set_animations_enabled
         set_animations_enabled(self.settings.get("ui_animations_enabled", True))
         self.apply_background()
+        self._apply_dock_separator_style()
         self.dl_indicator.update()
         self.home_panel.refresh_visual()
 
@@ -528,6 +546,25 @@ class MainWindow(QMainWindow):
             set_wallpaper_active(active)
             from ui_style import refresh_theme
             refresh_theme()
+        self._apply_dock_separator_style()
+
+    def _apply_dock_separator_style(self):
+        """Give the AI dock a visible, generous resize seam."""
+        from ui_style import current_color
+        base = current_color('btn_border')
+        hover = current_color('accent')
+        self.setStyleSheet(
+            f'QMainWindow::separator {{ background: {base}; width: 7px; height: 7px; }}'
+            f'QMainWindow::separator:hover {{ background: {hover}; }}')
+
+    def _paint_title_background(self):
+        """Keep the top dock opaque when the Linux window itself is translucent."""
+        from ui_style import current_color
+        color = QColor(current_color('bg1'))
+        for widget in (self.title_dock, self.title_bar):
+            palette = widget.palette()
+            palette.setColor(QPalette.ColorRole.Window, color)
+            widget.setPalette(palette)
 
     def _recompute_wallpaper(self):
         """按当前中央区尺寸 + 壁纸源,重算共享壁纸(一张画布),并设置中央区与 AI dock 视口。"""
@@ -608,8 +645,7 @@ class MainWindow(QMainWindow):
 
     # ---- 跨平台边缘拉拽缩放(Linux/macOS/Windows 均生效) ----
     # Windows:优先走 nativeEvent + WM_NCHITTEST(已覆盖);下面的逻辑不干预。
-    # Linux/macOS:FramelessWindowHint 窗口被窗口管理器无视 startSystemResize,
-    #   用边缘透明手柄控件实现拖拽缩放(直接接收鼠标事件,不被子控件吃掉)。
+    # Linux/macOS:透明边缘手柄直接接收鼠标事件，优先请求窗口管理器缩放。
     class _ResizeHandle(QWidget):
         """透明边缘手柄：覆盖在窗口某条边上，接收鼠标事件实现拖拽缩放。"""
         def __init__(self, edge, main_win):
@@ -621,17 +657,28 @@ class MainWindow(QMainWindow):
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
         def mousePressEvent(self, e):
             if e.button() == Qt.MouseButton.LeftButton and not self._win.isMaximized():
+                self._drag_origin = None
+                self._geo_origin = None
                 handle = self._win.windowHandle()
                 if handle is not None and handle.startSystemResize(self._edge):
                     e.accept()
                     return
-                self._drag_origin = e.globalPosition().toPoint()
+                if sys.platform.startswith('linux'):
+                    # Even in an XWayland session, changing x and width together
+                    # can apply the left-edge displacement twice. Never use the
+                    # geometry fallback there; only the compositor can anchor it.
+                    self._win.statusBar().showMessage(
+                        f'当前窗口系统（{QGuiApplication.platformName()}）未接管边缘缩放。', 5000)
+                    e.accept()
+                    return
+                # Use one desktop coordinate source throughout the fallback drag.
+                self._drag_origin = QCursor.pos()
                 self._geo_origin  = self._win.geometry()
                 e.accept()
         def mouseMoveEvent(self, e):
             if self._drag_origin is None:
                 return
-            mp  = e.globalPosition().toPoint()
+            mp  = QCursor.pos()
             d   = mp - self._drag_origin
             g   = self._geo_origin
             edge = self._edge
@@ -662,7 +709,6 @@ class MainWindow(QMainWindow):
 
     def _setup_resize_handles(self):
         """在窗口四边/四角各放一个透明手柄，始终保持在内容之上。"""
-        m = 6   # 边缘手柄宽/高
         C = self._ResizeHandle
         self._resize_handles = {
             # 角(先放，四边在上面裁剪)
@@ -698,51 +744,32 @@ class MainWindow(QMainWindow):
             for handle in self._resize_handles.values():
                 handle.hide()
             return
-        m = 6
+        m = 9   # 缩放区贴住窗口外沿，少侵入内容/标题栏按钮
+        c = 22  # 底角保留较大的对角缩放命中区
         W, H = self.width(), self.height()
         h = self._resize_handles
-        # 四角 6x6
-        h['tl'].setGeometry(0, 0, m, m)
-        h['tr'].setGeometry(W - m, 0, m, m)
-        h['bl'].setGeometry(0, H - m, m, m)
-        h['br'].setGeometry(W - m, H - m, m, m)
-        # 四边(缩进角落)
-        h['t'].setGeometry(m, 0, W - 2*m, m)
-        h['b'].setGeometry(m, H - m, W - 2*m, m)
-        h['l'].setGeometry(0, m, m, H - 2*m)
-        h['r'].setGeometry(W - m, m, m, H - 2*m)
+        # 顶部两个角只覆盖最外侧 7px；原来的 24px 方块压住了右上角 X。
+        h['tl'].setGeometry(0, 0, c, 7)
+        h['tr'].setGeometry(W - c, 0, c, 7)
+        h['bl'].setGeometry(0, H - c, c, c)
+        h['br'].setGeometry(W - c, H - c, c, c)
+        # 左右边缘从标题栏下方开始，避免覆盖窗口控制按钮。
+        h['t'].setGeometry(c, 0, max(0, W - 2*c), 7)
+        h['b'].setGeometry(c, H - m, max(0, W - 2*c), m)
+        h['l'].setGeometry(0, 36, m, max(0, H - c - 36))
+        h['r'].setGeometry(W - m, 36, m, max(0, H - c - 36))
         for handle in h.values():
             handle.show()
             handle.raise_()
 
     def mouseMoveEvent(self, e):
-        # 未拖拽时：根据边缘悬停更新光标(覆盖子控件的光标)
-        if not getattr(self, '_resize_guard', False) and not e.buttons():
-            pos = e.globalPosition().toPoint()
-            geo = self.geometry()
-            m = 8
-            left = pos.x() < geo.left() + m
-            right = pos.x() > geo.right() - m
-            top = pos.y() < geo.top() + m
-            bottom = pos.y() > geo.bottom() - m
-            cursor = Qt.CursorShape.ArrowCursor
-            if top and left:
-                cursor = Qt.CursorShape.SizeFDiagCursor
-            elif top and right:
-                cursor = Qt.CursorShape.SizeBDiagCursor
-            elif bottom and left:
-                cursor = Qt.CursorShape.SizeBDiagCursor
-            elif bottom and right:
-                cursor = Qt.CursorShape.SizeFDiagCursor
-            elif left or right:
-                cursor = Qt.CursorShape.SizeHorCursor
-            elif top or bottom:
-                cursor = Qt.CursorShape.SizeVerCursor
-            self.setCursor(cursor)
+        # Only the dedicated 6px handles use resize cursors. Global-position
+        # hit testing here misclassifies empty content on Linux/Wayland.
         super().mouseMoveEvent(e)
 
     def showEvent(self, ev):
         super().showEvent(ev)
+        self._update_window_shape()
         self._position_resize_handles()
         if sys.platform == "win32" and getattr(self, "_win_patched", False) is False:
             try:
@@ -806,7 +833,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('窗口已恢复默认尺寸', 3000)
 
     def maybe_prompt_plugin_for_mods(self):
-        """检测到某 mod 装了、而对应插件没启用时,问用户一次(核心的插件发现机制)。
+        """检测到对应 Mod 后，以不阻断操作的卡片提示可选插件。
 
         见 ``plugin_prompt`` 与 docs/PLUGIN_IDEAS.md 的红线:**只问一次**、把拒绝也
         记住、绝不静默启用。这里仅在启动后调用一次。
@@ -821,19 +848,40 @@ class MainWindow(QMainWindow):
         except Exception:
             return                       # 探测失败不该影响启动
         if not pending or not self.isVisible():
-            return                       # 窗口没露脸就不弹模态框(测试/后台场景)
-        for item in pending:
-            mods = '、'.join(item['mods'])
-            answer = QMessageBox.question(
-                self, '发现可用的插件',
-                f"检测到你装了 {mods}。\n\n"
-                f"插件「{item['name']}」可以提供对应的管理界面。要启用它吗?\n"
-                f"(启用后下次启动生效;也可以在「设置 → 插件」里改)",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes)
-            declined = answer != QMessageBox.StandardButton.Yes
-            data = dict(self.settings)
-            data = pp.remember(data, item['id'], declined=declined)
+            return                       # 测试/后台场景不展示
+        self._plugin_notice_queue = list(pending)
+        self._show_next_plugin_notice()
+
+    def _show_next_plugin_notice(self):
+        """一次只展示一个提示；没有 modal event loop，其他页面始终可操作。"""
+        if getattr(self, '_plugin_notice', None) is not None:
+            return
+        queue = getattr(self, '_plugin_notice_queue', [])
+        if not queue:
+            return
+        item = queue.pop(0)
+        dock = QDockWidget('发现可用插件', self)
+        dock.setObjectName('PluginDiscoveryNotice')
+        dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        content = QWidget(dock)
+        layout = QHBoxLayout(content)
+        layout.setContentsMargins(10, 5, 10, 5)
+        label = QLabel(
+            f"检测到 {', '.join(item['mods'])}；插件「{item['name']}」可提供对应的管理界面。"
+            '启用后下次启动生效，也能在「设置 → 插件」里调整。')
+        label.setWordWrap(True)
+        layout.addWidget(label, 1)
+        enable = QPushButton('启用插件')
+        later = QPushButton('暂不启用')
+        layout.addWidget(enable)
+        layout.addWidget(later)
+        dock.setWidget(content)
+        self._plugin_notice = dock
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
+
+        def finish(*, declined):
+            import plugin_prompt as pp
+            data = pp.remember(load_settings(), item['id'], declined=declined)
             if not declined:
                 enabled = set(data.get('plugins_enabled', []) or [])
                 enabled.add(item['id'])
@@ -841,8 +889,18 @@ class MainWindow(QMainWindow):
                 disabled = set(data.get('plugins_disabled', []) or [])
                 disabled.discard(item['id'])
                 data['plugins_disabled'] = sorted(disabled)
-            self.settings = data
             save_settings(data)
+            self.settings = data
+            self.removeDockWidget(dock)
+            dock.deleteLater()
+            self._plugin_notice = None
+            self.statusBar().showMessage(
+                '已启用插件，下次启动生效' if not declined else '已记住，下次不再提醒该插件', 4000)
+            QTimer.singleShot(0, self._show_next_plugin_notice)
+
+        enable.clicked.connect(lambda: finish(declined=False))
+        later.clicked.connect(lambda: finish(declined=True))
+        dock.show()
 
     def closeEvent(self, event):
         if getattr(self.home_panel.server_center, '_busy', False):
@@ -884,17 +942,12 @@ class MainWindow(QMainWindow):
         self.resource_center.switch_to(int(page_index))
 
     def open_tutorial(self):
-        """打开新手教程(模块化:内容 tutorial_content.py / 渲染 tutorial_gui.py,与 UI 解耦)"""
-        from tutorial_gui import TutorialDialog
-        TutorialDialog(self).exec()
+        """Keep older tutorial entry points on the current spotlight walkthrough."""
+        self.open_guide_demo()
 
-    def open_guide_demo(self, intro: bool = True):
-        """打开引导式新手教程(正式步骤):spctlight + 箭头 + 文本,用 UI 路由指向真实界面。
-
-        intro=True 时先弹「基础知识页」(可跳过),再进正式引导。重播/自动播放都可用。
-        步骤覆盖:新建游戏 → 下载 Mod → 导入整合包 → 启动 → 可选 AI。
-        """
-        # ① 先弹基础知识页(可跳过):MC 版本/阵营/正版 + 版本分类
+    def open_guide_demo(self, intro: bool = False):
+        """用聚光遮罩引导首次下载、选版本/加载器和启动；不执行下载。"""
+        # 兼容显式请求旧基础知识页的调用；首次引导和设置重播均直接进入遮罩。
         if intro:
             try:
                 from tutorial_intro import TutorialIntroDialog
@@ -904,20 +957,8 @@ class MainWindow(QMainWindow):
                 pass
 
         from guide_overlay import GuideDriver
-
-        steps = [
-            {"route": [("maintab", "我的实例"), ("btn", "新建游戏")], "arrow": "below",
-             "text": "① 从这里开始：新建一个游戏。只想直接玩就选原版；想安装 Mod 时，再选择 Fabric 或 NeoForge。"},
-            {"route": [("maintab", "下载新资源"), ("rcswitch", "3"), ("widgetname", "resource_search")], "arrow": "below",
-             "text": "② 想扩展玩法就来下载 Mod。先选目标实例，再搜索、查看说明并下载；不需要 AI 也能完整使用。"},
-            {"route": [("maintab", "我的实例"), ("btn", "导入整合包")], "arrow": "below",
-             "text": "③ 已经下载了整合包？从这里导入。它会成为独立游戏，方便以后备份和管理。"},
-            {"route": [("maintab", "我的实例"), ("btn", "启动游戏")], "arrow": "above",
-             "text": "④ 选中一个实例后点这里启动。启动失败时，先在实例详情中查看日志或崩溃报告。"},
-            {"route": [("maintab", "设置"), ("btn", "AI 助手")], "arrow": "below",
-             "text": "⑤ AI 是可选增强：想让它帮你找 Mod、查配方或分析报错时，再来这里配置。没配置 AI 也不影响前面的所有操作。"},
-        ]
-        self._guide_driver = GuideDriver(self, steps)
+        from tutorial_steps import first_game_steps
+        self._guide_driver = GuideDriver(self, first_game_steps())
         self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))
         self._guide_driver.start()
 
@@ -948,7 +989,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "ai_strip_dock"):
             self.ai_strip_dock.setVisible(not visible)
         if hasattr(self, "dl_indicator"):
-            self._place_download_ball()
+            QTimer.singleShot(0, self._place_download_ball)
         if getattr(self, "_wallpaper_source", None) is not None:
             self._recompute_wallpaper()
 
@@ -1227,6 +1268,7 @@ class MainWindow(QMainWindow):
     def _on_download_cancelled(self):
         self._dl_log.append("已取消下载。已校验的文件会保留，重试时会尽量复用。")
         self.dl_indicator.set_progress(0, 1)
+        self.dl_indicator.set_waiting()
         self.dl_indicator.setToolTip("下载已取消，点击查看详情")
         self._busy_download(False)
 
@@ -1254,25 +1296,29 @@ class MainWindow(QMainWindow):
             return (list(self._dl_log), self._dl_progress[0], self._dl_progress[1])
 
         self._dl_overlay = ContentOverlay(self._background)
-        self._dl_overlay.set_title("下载详情")
+        self._dl_overlay.set_title("状态与日志")
         self._dl_overlay.backRequested.connect(self._on_dl_back)
         self._dl_overlay.set_content(
             DownloadDetailWidget(self._dl_log, self._dl_progress[0], self._dl_progress[1],
                                  live=live, cancel=self._cancel_current_task,
                                  retry=self._retry_download,
                                  running=lambda: self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running),
-                                 retryable=lambda: self.download_tasks.state in {'failed', 'cancelled'}))
+                                 retryable=lambda: self.download_tasks.state in {'failed', 'cancelled'},
+                                 launcher_log_view=self.log_view))
 
     def _on_dl_back(self):
         """下载详情返回:收起覆盖层,恢复主内容。"""
         if getattr(self, "_dl_overlay", None) is not None:
             self._dl_overlay.hide_overlay()
         self.main_tabs.show()
+        self.dl_indicator.show()
+        self.dl_indicator.raise_()
 
     def open_download_detail(self):
         """点击下载球:隐藏主内容,在主窗显示半透明下载详情覆盖层(返回按钮回原页)。"""
         self._ensure_dl_overlay()
         self.main_tabs.hide()   # 隐藏主内容,让半透明覆盖层直接压在壁纸上
+        self.dl_indicator.hide()
         self._dl_overlay.show_overlay()
 
     def _dl_finish(self, _ok):
@@ -1336,11 +1382,48 @@ class MainWindow(QMainWindow):
         ov.hide()
         self._drop_overlay = ov
 
+        # AI 浮窗专用落点；使用 Qt 拖放协议而非顶层窗口坐标，Wayland 也能识别。
+        dock_hint = QLabel("松开，将 AI 助手停靠回右侧", self)
+        dock_hint.setObjectName("aiDockDropHint")
+        dock_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dock_hint.setWordWrap(True)
+        dock_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        dock_hint.setStyleSheet(
+            "QLabel { background: rgba(59,142,234,0.22); color: #1e6fd9;"
+            " border: 2px dashed #3b8eea; border-radius: 12px;"
+            " font-size: 16px; font-weight: bold; padding: 14px; }")
+        dock_hint.hide()
+        self._ai_dock_drop_hint = dock_hint
+
+    def _show_ai_dock_drop_hint(self):
+        hint = getattr(self, '_ai_dock_drop_hint', None)
+        if hint is None:
+            return
+        width = min(300, max(180, self.width() // 4))
+        hint.setGeometry(self.width() - width - 18, 54,
+                         width, max(100, self.height() - 72))
+        hint.raise_()
+        hint.show()
+
+    def _hide_ai_dock_drop_hint(self):
+        hint = getattr(self, '_ai_dock_drop_hint', None)
+        if hint is not None:
+            hint.hide()
+
+    def _is_ai_dock_return_drag(self, event):
+        dock = getattr(self, 'ai_dock', None)
+        return (dock is not None and dock.isFloating()
+                and event.mimeData().hasFormat(AI_DOCK_RETURN_MIME))
+
     def _on_my_instances_page(self) -> bool:
         """当前是否在「我的实例」页(只有在这页,拖入文件才当作整合包安装)。"""
         return getattr(self, "_my_inst_tab_idx", 0) == self.main_tabs.currentIndex()
 
     def dragEnterEvent(self, e):
+        if self._is_ai_dock_return_drag(e):
+            self._show_ai_dock_drop_hint()
+            e.acceptProposedAction()
+            return
         if e.mimeData().hasUrls() and self._on_my_instances_page():
             e.acceptProposedAction()
             if hasattr(self, "_drop_overlay"):
@@ -1351,14 +1434,24 @@ class MainWindow(QMainWindow):
             e.ignore()
 
     def dragMoveEvent(self, e):
+        if self._is_ai_dock_return_drag(e):
+            e.acceptProposedAction()
+            return
         if e.mimeData().hasUrls() and self._on_my_instances_page():
             e.acceptProposedAction()
 
     def dragLeaveEvent(self, e):
+        self._hide_ai_dock_drop_hint()
         if hasattr(self, "_drop_overlay"):
             self._drop_overlay.hide()
 
     def dropEvent(self, e):
+        self._hide_ai_dock_drop_hint()
+        if self._is_ai_dock_return_drag(e):
+            self._expand_ai()
+            e.setDropAction(Qt.DropAction.MoveAction)
+            e.accept()
+            return
         if hasattr(self, "_drop_overlay"):
             self._drop_overlay.hide()
         if e.mimeData().hasUrls() and self._on_my_instances_page():
@@ -1431,26 +1524,109 @@ class MainWindow(QMainWindow):
         self._run_download(worker)
 
     def _place_download_ball(self):
-        """把下载悬浮球摆到内容区右下角:AI 停靠时在 AI dock 左侧(主窗口侧外部),不占底部。
-        随窗口/右侧 dock 变化自动重新定位(窗口缩放、AI 显示/收起)。"""
+        """状态球在内容区右下角；手动拖动后按相对位置随窗口缩放。"""
         if not hasattr(self, "dl_indicator"):
             return
-        central = self.centralWidget()
-        if central is None:
+        if self.dl_indicator._dragging is not None:
             return
-        br = central.mapToGlobal(central.rect().bottomRight())
+        central = self._background
+        if central is None or central.width() <= 0 or central.height() <= 0:
+            return
         margin = 12
-        x = br.x() - self.dl_indicator.width() - margin
-        y = br.y() - self.dl_indicator.height() - margin
+        width = max(0, central.width() - self.dl_indicator.width())
+        height = max(0, central.height() - self.dl_indicator.height())
+        relative = self.dl_indicator._relative_position
+        if relative is None:
+            x, y = max(0, width - margin), max(0, height - margin)
+        else:
+            x, y = round(width * relative[0]), round(height * relative[1])
         self.dl_indicator.move(x, y)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
-        if hasattr(self, "dl_indicator"):
-            self._place_download_ball()
-        if getattr(self, "_wallpaper_source", None) is not None:
-            self._recompute_wallpaper()
+        # QMainWindow 先收到尺寸事件，中央区和 dock 随后才完成布局。
+        # 在布局落定后一起重算 mask，否则右侧仍被旧宽度裁掉。
+        QTimer.singleShot(0, self._refresh_central_geometry)
         self._position_resize_handles()
+
+    def eventFilter(self, watched, event):
+        central = getattr(self, '_background', None)
+        dock = getattr(self, 'ai_dock', None)
+        resized = event.type() == QEvent.Type.Resize
+        moved_while_docked = (watched is dock and event.type() == QEvent.Type.Move
+                              and not dock.isFloating())
+        if (watched is central or watched is dock) and (resized or moved_while_docked):
+            # Dock 拖宽/浮出只改变子控件，不一定触发主窗口 resizeEvent。
+            # 两者的输入 mask 必须在新几何下同步，否则旧宽度外无法交互。
+            QTimer.singleShot(0, self._refresh_central_geometry)
+        return super().eventFilter(watched, event)
+
+    def _refresh_central_geometry(self):
+        if not hasattr(self, '_background'):
+            return
+        self._update_window_shape()
+        self._place_download_ball()
+        if getattr(self, '_wallpaper_source', None) is not None:
+            self._recompute_wallpaper()
+
+    def paintEvent(self, event):
+        # Window masks are not guaranteed to clip visible pixels on every
+        # compositor. Clear corners, then paint an antialiased background.
+        super().paintEvent(event)
+        if sys.platform.startswith(('linux', 'win')):
+            from ui_style import current_color
+            painter = QPainter(self)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            if self.isMaximized() or self.isFullScreen():
+                painter.fillRect(self.rect(), QColor(current_color('bg1')))
+            else:
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(self.rect()), 14, 14)
+                painter.fillPath(path, QColor(current_color('bg1')))
+            painter.end()
+
+    def _update_window_shape(self):
+        """Clip frameless Windows/Linux corners without changing resize edges."""
+        if not sys.platform.startswith(('linux', 'win')):
+            return
+        if self.isMaximized() or self.isFullScreen():
+            self.clearMask()
+            self._mask_outer_children(None)
+            return
+        width, height, radius = self.width(), self.height(), 14
+        if width < 2 * radius or height < 2 * radius:
+            return
+        region = QRegion(0, radius, width, height - 2 * radius)
+        region |= QRegion(radius, 0, width - 2 * radius, height)
+        for x in (0, width - 2 * radius):
+            for y in (0, height - 2 * radius):
+                region |= QRegion(x, y, 2 * radius, 2 * radius,
+                                  QRegion.RegionType.Ellipse)
+        self.setMask(region)
+        self._mask_outer_children(region)
+
+    def _mask_outer_children(self, outer_region):
+        """Clip child backgrounds too; the root mask may not clip their pixels."""
+        children = (getattr(self, 'title_dock', None), self.centralWidget(),
+                    getattr(self, 'ai_dock', None), self.statusBar())
+        for child in children:
+            if child is None or (isinstance(child, QDockWidget) and child.isFloating()):
+                continue
+            if outer_region is None:
+                child.clearMask()
+                continue
+            pos = child.mapTo(self, QPoint(0, 0))
+            clipped = outer_region.translated(-pos.x(), -pos.y()) & QRegion(child.rect())
+            child.setMask(clipped)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._update_window_shape()
+            self._position_resize_handles()
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
@@ -1561,6 +1737,9 @@ class MainWindow(QMainWindow):
         self.resource_center.set_latest_versions(manifest['latest']['release'],
                                                  manifest['latest']['snapshot'])
         self.download_tab._fill_tree(manifest)
+        guide = getattr(self, '_guide_driver', None)
+        if guide is not None:
+            QTimer.singleShot(0, guide.refresh_current_target)
 
         # 填充各资源浏览器的全局游戏版本树(按大版本分组)
         for br in self.resource_center.browsers.values():
@@ -1658,7 +1837,8 @@ class MainWindow(QMainWindow):
 
     def _on_launch_prepare_failed(self, error):
         self.launch_btn.setEnabled(True)
-        self.dl_indicator.hide()
+        self.dl_indicator.set_failed(True)
+        self.dl_indicator.setToolTip("启动准备失败，点击查看状态与日志")
         QMessageBox.warning(self, "启动准备没完成", redact_text(error, self.settings))
 
     def _start_prepared_game(self, plan, v):
@@ -1668,7 +1848,6 @@ class MainWindow(QMainWindow):
         self._start_game_after_memory(plan, v)
 
     def _start_game_after_memory(self, plan, v, exit_after=False):
-        self.dl_indicator.hide()
         d = plan.detail
         game_dir = plan.game_dir
         java_exe = plan.java_exe
@@ -1699,8 +1878,13 @@ class MainWindow(QMainWindow):
                 self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
         except Exception as e:
             self.statusBar().showMessage(f"启动失败: {e}")
+            self.dl_indicator.set_failed(True)
+            self.dl_indicator.setToolTip("启动失败，点击查看状态与日志")
             self.launch_btn.setEnabled(True)
             return
+
+        self.dl_indicator.set_completed(True)
+        self.dl_indicator.setToolTip("游戏已启动，点击查看状态与日志")
 
         from memory_policy import track_process
         track_process(self.game_process, os.path.join(paths.GAME_DIR, 'versions', v['id']))
@@ -1753,8 +1937,12 @@ class MainWindow(QMainWindow):
             pass
         self._stop_in_game_ai()
         if code not in (0, None):
+            self.dl_indicator.set_failed(True)
+            self.dl_indicator.setToolTip(f"游戏异常退出（{code}），点击查看日志")
             self._auto_debug(code)
         elif self._detect_log_crash():
+            self.dl_indicator.set_failed(True)
+            self.dl_indicator.setToolTip("发现崩溃报告，点击查看日志")
             self._auto_debug(0)
 
     def _start_in_game_ai(self, instance_id: str):
@@ -2649,7 +2837,8 @@ if __name__ == "__main__":
     # Fusion gives custom-styled controls the same geometry on Windows 10/11.
     app.setStyle("Fusion")
     app.setWindowIcon(application_icon())
-    from ui_style import apply_global_dark_palette
+    from ui_style import apply_global_dark_palette, set_theme_mode
+    set_theme_mode(load_settings().get('ui_theme', 'system'))
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
     splash = startup_splash()

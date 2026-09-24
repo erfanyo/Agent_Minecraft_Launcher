@@ -92,7 +92,8 @@ def load_packs_from_dir(directory: str) -> int:
         if not f.endswith(".json"):
             continue
         try:
-            data = json.load(open(os.path.join(directory, f), encoding="utf-8"))
+            with open(os.path.join(directory, f), encoding="utf-8") as file:
+                data = json.load(file)
             pid = data.get("pack_id") or os.path.splitext(f)[0]
             register_pack(pid, data.get("name", pid), data.get("pack", {}),
                           data.get("lang", ""))

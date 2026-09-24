@@ -80,11 +80,10 @@ class InstanceTests(unittest.TestCase):
     def test_launch_preparation_keeps_event_loop_responsive(self):
         import time
         from types import SimpleNamespace
-        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtCore import QTimer
         from PySide6.QtWidgets import QApplication, QWidget
         from main import MainWindow
         app = QApplication.instance() or QApplication([])
-        loop = QEventLoop()
         ticks = []
         window = QWidget()
         window.selected_version = {'id': 'test'}
@@ -97,10 +96,10 @@ class InstanceTests(unittest.TestCase):
         window.statusBar = lambda: SimpleNamespace(showMessage=lambda text: None)
         window._on_download_status = lambda text: None
         window._on_download_progress = lambda *a: None
-        window._on_download_cancelled = loop.quit
-        window._on_launch_prepare_failed = lambda error: loop.quit()
+        window._on_download_cancelled = lambda: None
+        window._on_launch_prepare_failed = lambda error: None
         delivered = []
-        window._start_prepared_game = lambda plan, version: (delivered.append(plan), loop.quit())
+        window._start_prepared_game = lambda plan, version: delivered.append(plan)
         def prepare(*a, **kw):
             time.sleep(0.15)
             return 'ready'
@@ -110,8 +109,10 @@ class InstanceTests(unittest.TestCase):
         with patch('main.GameLaunchService') as service:
             service.return_value.prepare.side_effect = prepare
             MainWindow.launch_selected(window)
-            QTimer.singleShot(2000, loop.quit)
-            loop.exec()
+            deadline = time.monotonic() + 2
+            while not delivered and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.01)
         timer.stop()
         self.assertEqual(delivered, ['ready'])
         self.assertGreater(len(ticks), 2)

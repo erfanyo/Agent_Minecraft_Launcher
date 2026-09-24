@@ -104,19 +104,19 @@ class ImportCompletionTests(unittest.TestCase):
             self.assertEqual(sorted(done for done, _ in progress), [done for done, _ in progress])
 
     def test_ui_failure_updates_log_and_state(self):
-        from PySide6.QtCore import QEventLoop, QTimer
+        import time
         from PySide6.QtWidgets import QApplication
         from server_center import ServerCenter
         app = QApplication.instance() or QApplication([])
         panel = ServerCenter()
-        loop = QEventLoop()
         def fail(_):
             raise PermissionError('simulated access denied')
         with patch('server_center.QMessageBox.warning') as warning:
             panel._run(fail, lambda _: None)
-            panel._task.finished.connect(loop.quit)
-            QTimer.singleShot(5000, loop.quit)
-            loop.exec()
+            deadline = time.monotonic() + 5
+            while panel._busy and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.01)
             self.assertFalse(panel._busy)
             self.assertTrue(panel.import_btn.isEnabled())
             self.assertIn('simulated access denied', panel.log.toPlainText())

@@ -105,7 +105,8 @@ class RunLog:
 
 
 def run(messages, settings, tools, executor, max_rounds=None, on_tool=None,
-        on_user_ask=None, return_messages=False, cancel_event=None, max_tokens=2048):
+        on_user_ask=None, return_messages=False, cancel_event=None, max_tokens=2048,
+        stop_after_first_tool=False):
     # max_rounds is retained only for caller compatibility; no tool-count ceiling.
     working = list(messages)
     log = RunLog(settings, messages)
@@ -113,6 +114,7 @@ def run(messages, settings, tools, executor, max_rounds=None, on_tool=None,
     seconds = max(1, int(settings.get('ai_run_timeout_seconds', 1800)))
     context_chars = max(1000, int(settings.get('ai_run_context_chars', 240000)))
     seen = {}
+    recent_probes = []
     stalled = 0
     rounds = calls = 0
     empty_responses = 0
@@ -234,16 +236,30 @@ def run(messages, settings, tools, executor, max_rounds=None, on_tool=None,
                 calls += int(executed)
                 signature = hashlib.sha256(json.dumps([name, args, result], sort_keys=True,
                                                      ensure_ascii=False).encode()).hexdigest()
+                probe = hashlib.sha256(json.dumps([name, args], sort_keys=True,
+                                                  ensure_ascii=False).encode()).hexdigest()
                 repeated = repeated and signature in seen
                 seen[signature] = True
+                if executed:
+                    recent_probes.append(probe)
+                    del recent_probes[:-6]
                 log.write('tool_result', call_id=call['id'], name=name, arguments=args,
                           result=result, executed=executed, elapsed_seconds=time.monotonic()-tick)
                 audit_calls.append({'name': name, 'arguments': args, 'result': result})
                 working.append({'role': 'tool', 'tool_call_id': call['id'], 'content': result})
                 if on_tool:
                     on_tool(name, args, result)
+                if executed and result.startswith('用户取消了这项操作，未做任何修改。'):
+                    reason = boundary() or 'action_declined'
+                if executed and stop_after_first_tool:
+                    reason = reason or 'probe_complete'
             stalled = stalled + 1 if repeated else 0
             if reason:
+                break
+            # Detect a model re-testing the same one or two calls even if
+            # volatile fields in their results defeat exact-result matching.
+            if len(recent_probes) == 6 and len(set(recent_probes)) <= 2:
+                reason = 'tool_loop'
                 break
             if stalled >= 3:
                 reason = 'stalled'
@@ -261,8 +277,12 @@ def run(messages, settings, tools, executor, max_rounds=None, on_tool=None,
             ai_training_log.append(settings, messages, audit_calls, reply or str(reason))
         except Exception:
             pass
-    if reason != 'model_finished':
+    if reason == 'probe_complete':
+        reply = '工具调用自测已取得结果。'
+    elif reason != 'model_finished':
         labels = {'cancelled': '你已停止任务', 'stalled': '连续三轮重复操作且结果不变，已暂停',
+                  'action_declined': '你取消了这项操作，本轮任务已暂停，不会反复请求同一授权',
+                  'tool_loop': '反复测试同一组工具，未取得新进展，已暂停',
                   'time_budget': '达到本次时间预算，已暂停',
                   'context_budget': '压缩旧工具输出后仍超过上下文预算，已暂停；请开启新对话并提供目标、约束、已做修改和待验证事项',
                   'needs_input': '需要你补充信息，已暂停',

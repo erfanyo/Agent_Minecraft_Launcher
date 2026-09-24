@@ -13,7 +13,7 @@
 """
 from ui_tokens import (   # 设计 token 单一数据源:颜色/非颜色 token 全部从 ui_tokens 取
     COLOR_SLOTS, COLOR_TOKENS,
-    is_dark_mode, current_token,
+    is_dark_mode, current_token, set_theme_mode, theme_mode,
     set_custom_colors, clear_custom_colors, get_custom_colors,
     SPACING, RADIUS, SHADOW, DURATION, EASING,
 )
@@ -75,6 +75,12 @@ def refresh_theme() -> None:
     for _w, fn, args in list(_REFRESH_WIDGETS.values()):
         try:
             _w.setStyleSheet(fn(*args))
+            effect = _w.graphicsEffect()
+            from PySide6.QtGui import QColor
+            from PySide6.QtWidgets import QGraphicsDropShadowEffect
+            if isinstance(effect, QGraphicsDropShadowEffect):
+                effect.setColor(QColor(20, 35, 65,
+                                       30 if not is_dark_mode() else 45))
         except Exception:
             pass
     # 也把全局调色板改成最新配色(未登记/用默认色的对话框、菜单、下拉等跟随)
@@ -310,6 +316,17 @@ def popup_panel_style() -> str:
             f" border-radius: 12px; background: {current_color('bg1')};")
 
 
+def apply_card_shadow(widget) -> None:
+    """A restrained card shadow on light surfaces, without shadowing text."""
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(14)
+    effect.setOffset(0, 3)
+    effect.setColor(QColor(20, 35, 65, 30 if not is_dark_mode() else 45))
+    widget.setGraphicsEffect(effect)
+
+
 def card_btn_style() -> str:
     """卡片感按钮(启动器设置/管理/刷新/实例卡片等):圆角 + 悬停蓝框。"""
     bg = current_color("btn_bg")
@@ -454,18 +471,13 @@ def inner_style() -> str:
 
 
 def apply_global_dark_palette(app) -> None:
-    """系统是深色主题时,给整个应用设一套深色 QPalette。
-
-    让那些"没写死色"的默认控件(对话框 / QMenu / QTabWidget / QComboBox 下拉 /
-    QMessageBox 等)也变深色,与启动器整体风格一致。已用样式表写死色的不受影响。"""
-    if not is_dark_mode():
-        return
+    """Apply a complete palette for both modes; native light palettes vary on Linux."""
     from PySide6.QtGui import QColor, QPalette
     p = QPalette()
-    bg = QColor("#23272f")
-    base = QColor("#1a1d23")
-    text = QColor("#e7ecf5")
-    muted = QColor("#8b96a8")
+    bg = QColor(current_color('bg1'))
+    base = QColor(current_color('bg0'))
+    text = QColor(text_color())
+    muted = QColor(muted_color())
     accent = QColor(current_color("accent"))
     p.setColor(QPalette.ColorRole.Window, bg)
     p.setColor(QPalette.ColorRole.WindowText, text)
@@ -479,6 +491,10 @@ def apply_global_dark_palette(app) -> None:
     p.setColor(QPalette.ColorRole.ToolTipBase, base)
     p.setColor(QPalette.ColorRole.ToolTipText, text)
     p.setColor(QPalette.ColorRole.PlaceholderText, muted)
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text,
+               QColor('#9aa4b8' if is_dark_mode() else '#788397'))
+    p.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText,
+               QColor('#9aa4b8' if is_dark_mode() else '#788397'))
     app.setPalette(p)
 
 

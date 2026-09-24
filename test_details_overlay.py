@@ -193,7 +193,9 @@ class RealWindowIntegrationTests(unittest.TestCase):
 
     def test_open_and_back_via_real_overlay(self):
         window = self._window()
-        window._show_instance_details(window.home_panel.current_instance())
+        # CI starts with no user instances; exercise the overlay with a small
+        # explicit instance instead of depending on the developer's game dir.
+        window._show_instance_details(_instance())
         overlay = window._details_overlay
         self.assertIsNotNone(overlay)
         self.assertTrue(overlay.isVisibleTo(window._background) or not overlay.isHidden())
