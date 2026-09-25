@@ -5,6 +5,7 @@ import unittest
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from i18n import t
 
 from download_tab import DownloadTab
 from guide_overlay import GuideDriver, GuideOverlay
@@ -62,7 +63,7 @@ class TutorialStepsTests(unittest.TestCase):
     def test_walkthrough_uses_current_entry_and_no_automatic_install(self):
         steps = first_game_steps()
         self.assertEqual(len(steps), 9)
-        self.assertEqual(steps[0]['focus_main_tab'], '下载新资源')
+        self.assertEqual(steps[0]['focus_main_tab'], t('RESOURCES'))
         self.assertEqual(steps[2]['focus_tree_item'], '1.21.xx')
         self.assertEqual(steps[3]['focus_tree_item'], '1.21.1')
         self.assertIn('最新正式版', steps[2]['text'])
