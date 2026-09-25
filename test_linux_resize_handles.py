@@ -1,6 +1,7 @@
 """Regression for frameless resize handles being covered by central content."""
 import os
 import unittest
+from types import SimpleNamespace
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
@@ -51,7 +52,7 @@ class ResizeHandleTests(unittest.TestCase):
 
         window = Probe()
         window.resize(800, 600)
-        with patch('main.sys.platform', 'linux'):
+        with patch('main.sys', SimpleNamespace(platform='linux')):
             window._update_window_shape()
         self.assertFalse(window.mask().contains(QPoint(0, 0)))
         self.assertTrue(window.mask().contains(QPoint(12, 12)))
@@ -76,7 +77,7 @@ class ResizeHandleTests(unittest.TestCase):
 
         window = ResizeWindow()
         handle = MainWindow._ResizeHandle(Qt.Edge.LeftEdge, window)
-        with patch('main.sys.platform', 'linux'):
+        with patch('main.sys', SimpleNamespace(platform='linux')):
             handle.mousePressEvent(Press())
         self.assertIsNone(handle._drag_origin)
         self.assertIsNone(handle._geo_origin)
@@ -111,7 +112,7 @@ class ResizeHandleTests(unittest.TestCase):
         dock.installEventFilter(window)
         window.show()
         self.app.processEvents()
-        with patch('main.sys.platform', 'linux'):
+        with patch('main.sys', SimpleNamespace(platform='linux')):
             window._update_window_shape()
             old_width = central.width()
             dock.setFloating(True)
@@ -148,7 +149,7 @@ class ResizeHandleTests(unittest.TestCase):
         dock.installEventFilter(window)
         window.show()
         self.app.processEvents()
-        with patch('main.sys.platform', 'linux'):
+        with patch('main.sys', SimpleNamespace(platform='linux')):
             window._update_window_shape()
             old_width = dock.width()
             window.resizeDocks([dock], [old_width + 150], Qt.Orientation.Horizontal)
@@ -169,7 +170,7 @@ class ResizeHandleTests(unittest.TestCase):
         window = Probe()
         window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         window.resize(100, 100)
-        with patch('main.sys.platform', 'linux'):
+        with patch('main.sys', SimpleNamespace(platform='linux')):
             image = window.grab().toImage()
         self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
         self.assertEqual(image.pixelColor(50, 10).alpha(), 255)
@@ -190,7 +191,7 @@ class ResizeHandleTests(unittest.TestCase):
         window.setCentralWidget(child)
         window.resize(100, 100)
         window.show()
-        with patch('main.sys.platform', 'linux'):
+        with patch('main.sys', SimpleNamespace(platform='linux')):
             window._update_window_shape()
         self.assertFalse(child.mask().contains(QPoint(0, 0)))
         self.assertTrue(child.mask().contains(QPoint(50, 50)))
@@ -211,7 +212,7 @@ class ResizeHandleTests(unittest.TestCase):
         window.setCentralWidget(child)
         window.resize(100, 100)
         window.show()
-        with patch('main.sys.platform', 'win32'):
+        with patch('main.sys', SimpleNamespace(platform='win32')):
             window._update_window_shape()
             image = window.grab().toImage()
         self.assertFalse(child.mask().contains(QPoint(0, 0)))
