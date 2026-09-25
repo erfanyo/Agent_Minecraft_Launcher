@@ -70,8 +70,8 @@ class EntryLayoutTests(unittest.TestCase):
     def test_client_mode_labels(self):
         home = self._home()
         home._set_client_mode()
-        self.assertIn(t('导入', 'Import'), home.import_btn.text())
-        self.assertIn(t('一键配置', 'Quick Setup'), home.config_btn.text())
+        self.assertEqual(t('VERSION_HOME_IMPORT_MODPACK'), home.import_btn.text())
+        self.assertEqual(t('VERSION_HOME_ONE_CLICK'), home.config_btn.text())
         self.assertEqual(home.launch_btn.text(), t('启动游戏', 'Launch Game'))
 
     def test_server_mode_labels(self):
@@ -196,3 +196,4 @@ class SettingsChangelogEntryTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
