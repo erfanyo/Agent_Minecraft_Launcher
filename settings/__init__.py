@@ -18,6 +18,7 @@ _SETTINGS_LOCK = threading.RLock()
 DEFAULTS = {
     "username": "Steve",        # 离线模式游戏名
     "memory_gb": 0,              # 0=启动时按可用内存自动预算；正数=手动 GB
+    "ignore_memory_launch_advice": False,  # 启动内存建议可由用户永久忽略
     "version_isolation": True,   # 版本隔离:每版本独立游戏目录
     "last_played_instance": "", # 最近一次成功启动的实例;首页启动时优先选中
     "java_paths": {},            # Java 大版本首选路径，如 {"8": ".../java.exe"};实例设置可覆盖
@@ -42,6 +43,7 @@ DEFAULTS = {
                                  # 这里主要记住"是否已首次决定过",避免每次都弹。
     # AI 助手(OpenAI 兼容接口)
     "ai_provider": "deepseek",
+    "ai_configured": False,
     "ai_base_url": "https://api.deepseek.com/v1",
     "ai_api_key": "",
     "ai_model": "deepseek-chat",
@@ -87,14 +89,14 @@ DEFAULTS = {
         # 默认填官方插件仓库(erfanyo/Agent_Minecraft_Launcher);用户可手动添加其它仓库
         {"url": "https://github.com/erfanyo/Agent_Minecraft_Launcher", "name": "erfanyo/Agent_Minecraft_Launcher"},
     ],       # 插件仓库源:[{"url","name"}] 手动添加(你的官方仓库默认在此)
-    # ---- 自定义背景(阶段 2;默认关,决策 3)----
-    "ui_wallpaper_source": "none",     # 壁纸源:none(关闭)/ preset(预设渐变)/ official(官方,首启下载)/ user(本地图片)
+    # ---- 自定义背景 ----
+    "ui_wallpaper_source": "bundled",  # 新安装默认内置壁纸;已有配置的选择保持不变
     "ui_theme": "system",            # 外观:system / light / dark
     "ui_wallpaper_preset": "teal",     # 预设壁纸 id(见 ui_background.PRESETS)
     "ui_wallpaper_user_path": "",      # 用户图片相对路径(相对 AMCL/cache/,复制进来的)
     "ui_wallpaper_official_id": "",    # 官方壁纸 id(素材待项目方提供)
-    "ui_wallpaper_mask": 60,           # 遮罩强度 0~80(%);默认 60(深色遮罩/浅色遮罩自动换色)
-    "ui_wallpaper_blur": 0,            # 模糊强度 0~80，0=关闭；旧布尔值兼容
+    "ui_wallpaper_mask": None,         # 未自定义时深色 55%、浅色 65%；已有数值保留
+    "ui_wallpaper_blur": None,         # 未自定义时深浅色均为 5；旧布尔值兼容
     "ui_animations_enabled": True,     # 界面动画开关(淡入/标签切换等);关闭后动画立即到位
 }
 

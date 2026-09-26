@@ -26,6 +26,7 @@ from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QImageReader,
                            QPainter, QPixmap)
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -49,7 +50,7 @@ from i18n import t
 from settings import load_settings, save_settings
 from ui_style import (card_btn_style, hover_bg, launch_btn_style, list_style,
                       accent_color, is_dark_mode, muted_color, panel_style,
-                      success_color, tab_style, text_color, set_style,
+                      popup_menu_style, success_color, tab_style, text_color, set_style,
                       apply_card_shadow)
 
 # 登录方式:offline(离线昵称)/ microsoft(微软正版,设备码流)
@@ -184,40 +185,25 @@ class LoginCard(QWidget):
         self.refresh()
 
     def _build_login_menu(self):
-        """按当前设置动态构建登录菜单(每次打开前重建,保证状态与菜单一致)。"""
+        """下拉菜单只放账号操作，登录方式由上方双侧开关切换。"""
         menu = self.login_btn.menu()
         menu.clear()
         s = load_settings()
         cur_method = s.get("login_method", LOGIN_OFFLINE)
         force_online = s.get("microsoft_login", True)        # 强制正版(默认 true)
         has_creds = bool((s.get("ms_credentials") or {}).get("uuid"))
-        # 是否允许离线昵称:
-        #  - 强制正版且【无正版凭证】:完全禁止离线,必须先登录正版
-        #  - 正版玩家(有凭证)或非强制:都可自由切离线昵称(凭证保留)
         allow_offline = (not force_online) or has_creds
-
-        if not allow_offline:
-            act = menu.addAction(("✓ " if cur_method == LOGIN_MICROSOFT else "") + "微软正版登录")
-            act.setToolTip("强制正版(microsoft_login=true)且本机无正版账号,请先登录正版。"
-                           "想纯离线请把开关改为 false。")
-            if cur_method != LOGIN_MICROSOFT:
-                act.triggered.connect(self._do_microsoft_login)
+        if cur_method == LOGIN_MICROSOFT or not allow_offline:
+            menu.addAction("登录 / 更换微软账号…", self._do_microsoft_login)
+            if has_creds:
+                menu.addAction("🌐 换皮肤 / 我的账号", self._open_minecraft_account)
+                menu.addAction("退出登录并清除凭证", self._logout_microsoft)
         else:
-            # 正版/离线昵称 切换(正版玩家可自由选离线昵称,凭证保留)
-            if cur_method == LOGIN_MICROSOFT:
-                menu.addAction("✓ 正版身份(Microsoft)", lambda: None)
-                menu.addAction("以离线昵称游玩(保留正版凭证)", self._play_offline_keep_creds)
-            else:
-                menu.addAction("切换回正版(Microsoft,免重登)", self._use_microsoft_account)
-                menu.addAction("✓ 离线昵称(保留正版凭证)", lambda: None)
-        menu.addSeparator()
-
-        # 二级操作
-        if allow_offline:
-            menu.addAction("🌐 换皮肤 / 我的账号", self._open_minecraft_account)
             menu.addAction("✏️ 设置离线昵称…", self._change_offline_name)
-            menu.addAction("退出登录并清除凭证", self._logout_microsoft)
-            menu.addSeparator()
+            if has_creds:
+                menu.addAction("🌐 换皮肤 / 我的账号", self._open_minecraft_account)
+                menu.addAction("退出登录并清除凭证", self._logout_microsoft)
+        menu.addSeparator()
         for _key, label, tip in _PLANNED_LOGIN:
             act = menu.addAction(label)
             act.setEnabled(False)
@@ -237,23 +223,44 @@ class LoginCard(QWidget):
 
         self.name_label = QLabel()
         self.name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.name_label.setStyleSheet(f"font-weight: bold; font-size: 17px; color: {text_color()};")
+        set_style(self.name_label, lambda: f"font-weight: bold; font-size: 17px; color: {text_color()};")
 
         self.status_label = QLabel()
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setStyleSheet(f"color: {muted_color()};")
+        set_style(self.status_label, lambda: f"color: {muted_color()};")
 
-        # 更改登录方式入口
+        # 双侧登录方式切换；下方菜单只保留当前方式的账号操作。
+        self.login_mode_group = QButtonGroup(self)
+        self.login_mode_group.setExclusive(True)
+        self.online_btn = QPushButton("正版")
+        self.offline_btn = QPushButton("离线")
+        for button in (self.online_btn, self.offline_btn):
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.login_mode_group.addButton(button)
+            set_style(button, lambda: (
+                f"QPushButton {{ color: {text_color()}; background: {hover_bg()};"
+                " border: none; padding: 5px 12px; border-radius: 7px; }"
+                f"QPushButton:checked {{ color: {accent_color()}; font-weight: bold;"
+                f" border: 1px solid {accent_color()}; }}"))
+        self.online_btn.clicked.connect(self._select_online_mode)
+        self.offline_btn.clicked.connect(self._select_offline_mode)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+        mode_row.addWidget(self.online_btn)
+        mode_row.addWidget(self.offline_btn)
+
         self.login_btn = QToolButton()
-        self.login_btn.setText(t("VERSION_HOME_CHANGE_LOGIN"))
+        self.login_btn.setText("账号操作 ▾")
         self.login_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.login_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.login_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.login_btn.setStyleSheet(
+        set_style(self.login_btn, lambda:
             f"QToolButton {{ color: {text_color()}; border: none; background: transparent;"
             f" padding: 2px 6px; border-radius: 6px; }}"
             f"QToolButton:hover {{ background: {hover_bg()}; }}")
         menu = QMenu(self.login_btn)
+        set_style(menu, popup_menu_style)
         self.login_btn.setMenu(menu)
         # 每次打开菜单前按当前状态重建,保证状态与菜单一致(切离线/正版后能正确反映)。
         menu.aboutToShow.connect(self._build_login_menu)
@@ -265,7 +272,19 @@ class LoginCard(QWidget):
         lay.addWidget(self.avatar_label, 0, Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.name_label)
         lay.addWidget(self.status_label)
+        lay.addLayout(mode_row)
         lay.addWidget(self.login_btn, 0, Qt.AlignmentFlag.AlignCenter)
+
+    def _select_online_mode(self):
+        settings = load_settings()
+        if (settings.get('ms_credentials') or {}).get('uuid'):
+            self._use_microsoft_account()
+        else:
+            self.refresh()
+            self._do_microsoft_login()
+
+    def _select_offline_mode(self):
+        self._play_offline_keep_creds()
 
     def resizeEvent(self, event):
         """窗口/卡片变小时主动缩小头像与昵称字号,避免与下方信息重叠。"""
@@ -294,11 +313,11 @@ class LoginCard(QWidget):
         # 昵称字号跟随空间:头像很小(空间紧张)时缩小文字,恢复时回到默认
         if size <= 40:
             fs = max(12, int(size * 0.36))
-            self.name_label.setStyleSheet(
-                f"font-weight: bold; font-size: {fs}px; color: {text_color()};")
+            set_style(self.name_label, lambda fs=fs:
+                      f"font-weight: bold; font-size: {fs}px; color: {text_color()};")
         else:
-            self.name_label.setStyleSheet(
-                f"font-weight: bold; font-size: 17px; color: {text_color()};")
+            set_style(self.name_label, lambda:
+                      f"font-weight: bold; font-size: 17px; color: {text_color()};")
 
     def refresh(self):
         """根据最新设置刷新:头像/昵称/登录方式。"""
@@ -309,6 +328,11 @@ class LoginCard(QWidget):
         force_online = self._settings.get("microsoft_login", True)
         cred = self._settings.get("ms_credentials") or {}
         has_creds = bool(cred.get("uuid"))
+        allow_offline = (not force_online) or has_creds
+        self.offline_btn.setEnabled(allow_offline)
+        self.offline_btn.setToolTip("请先登录正版账号" if not allow_offline else "切换到离线昵称，保留正版凭证")
+        self.online_btn.setChecked(method == LOGIN_MICROSOFT or not allow_offline)
+        self.offline_btn.setChecked(method == LOGIN_OFFLINE and allow_offline)
         logged_in = (method == LOGIN_MICROSOFT) and has_creds
         if logged_in:
             name = cred.get("username", "Minecraft")
@@ -325,9 +349,9 @@ class LoginCard(QWidget):
         if logged_in:
             self.status_label.setText(t("VERSION_HOME_MS_SIGNED_IN"))
         elif has_creds:
-            self.status_label.setText("离线昵称(正版已保留,可切回)")
+            self.status_label.setText(t("VERSION_HOME_OFFLINE_NAME_EDITABLE"))
         elif force_online:
-            self.status_label.setText("未登录正版 · 点上方登录")
+            self.status_label.setText("未登录正版 · 点下方“正版”登录")
         elif method == LOGIN_OFFLINE:
             self.status_label.setText(t("VERSION_HOME_OFFLINE_NAME_EDITABLE"))
         else:
@@ -376,9 +400,12 @@ class LoginCard(QWidget):
         self._server_mode = True
         self._server = server
         self.avatar_label.setPixmap(_server_avatar_pixmap(server, self._avatar_size))
-        self.name_label.hide()
+        self.name_label.setText("Server")
+        self.name_label.show()
         self.status_label.hide()
         self.login_btn.hide()
+        self.online_btn.hide()
+        self.offline_btn.hide()
 
     def set_player_mode(self):
         if not self._server_mode:
@@ -388,6 +415,8 @@ class LoginCard(QWidget):
         self.name_label.show()
         self.status_label.show()
         self.login_btn.show()
+        self.online_btn.show()
+        self.offline_btn.show()
         self.refresh()
 
     def refresh_visual(self):
@@ -584,10 +613,10 @@ class InstanceSettingsCard(QWidget):
         apply_card_shadow(self)
 
         self.title = QLabel(t("VERSION_HOME_CURRENT_SELECTION"))
-        self.title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {muted_color()};")
+        set_style(self.title, lambda: f"font-weight: bold; font-size: 13px; color: {muted_color()};")
         self.inst_label = QLabel(t("VERSION_HOME_NO_INSTANCE_SELECTED"))
         self.inst_label.setWordWrap(True)
-        self.inst_label.setStyleSheet(f"font-weight: bold; font-size: 14px; color: {text_color()};")
+        set_style(self.inst_label, lambda: f"font-weight: bold; font-size: 14px; color: {text_color()};")
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
@@ -711,6 +740,7 @@ class VersionHome(QWidget):
         self.config_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         set_style(self.config_btn, card_btn_style)
         cfg_menu = QMenu(self.config_btn)
+        set_style(cfg_menu, popup_menu_style)
         bridge_item = cfg_menu.addAction(
             t("VERSION_HOME_ONE_CLICK_BRIDGE"),
             lambda: self.one_click_config_requested.emit("bridge"))
@@ -848,6 +878,8 @@ class VersionHome(QWidget):
             self.tabs.setTabText(self._version_tab_index, t(f"实例(共{n}个)", f"Instances ({n})"))
 
     def _on_home_tab_changed(self, index: int):
+        from ui_anim import reveal
+        reveal(self.tabs.widget(index))
         if index == self._server_tab_index:
             self._set_server_mode(self.server_center.selected())
         else:
@@ -860,6 +892,7 @@ class VersionHome(QWidget):
         if menu is not None:
             return menu
         menu = QMenu(self.config_btn)
+        set_style(menu, popup_menu_style)
         menu.addAction('手动指定启动 JAR（识别失败时）…', self.server_center.choose_launch_jar)
         menu.addAction('恢复自动识别启动入口', self.server_center.use_automatic_launch_entry)
         menu.addSeparator()
@@ -895,6 +928,7 @@ class VersionHome(QWidget):
         if menu is not None:
             return menu
         menu = QMenu(self.config_btn)
+        set_style(menu, popup_menu_style)
         menu.addAction('导入服务端压缩包…', self._import_server)
         menu.addAction('智能导入(识别作者资料与服务端)…',
                        lambda: self._import_server(smart=True))

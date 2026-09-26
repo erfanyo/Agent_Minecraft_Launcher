@@ -30,15 +30,17 @@ def _safe_name(title: str) -> str:
     return out or "对话"
 
 
-def save_session(chat_messages: list, entries: list, title: str = "") -> dict:
+def save_session(chat_messages: list, entries: list, title: str = "",
+                 instance_id: str = "") -> dict:
     """把当前对话存成一份会话。返回 {ok, path, title}。"""
     _ensure_dir()
     title = title or _default_title(chat_messages, entries)
-    ts = time.strftime("%Y%m%d-%H%M%S")
+    ts = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000_000:09d}"
     path = os.path.join(ARCHIVE_DIR, f"{ts}-{_safe_name(title)}.json")
     data = {
         "title": title,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "instance_id": instance_id or "",
         "chat_messages": chat_messages or [],
         "entries": _serialize_entries(entries or []),
     }
@@ -65,6 +67,7 @@ def list_sessions() -> list:
                 "created_at": d.get("created_at", ""),
                 "path": p,
                 "count": len(d.get("entries", [])),
+                "instance_id": d.get("instance_id", ""),
             })
         except Exception:
             continue
@@ -77,6 +80,7 @@ def load_session(path: str) -> dict:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
         return {"ok": True, "title": d.get("title", ""),
+                "instance_id": d.get("instance_id", ""),
                 "chat_messages": d.get("chat_messages", []),
                 "entries": _deserialize_entries(d.get("entries", []))}
     except Exception as e:

@@ -67,7 +67,10 @@ def _forge_version_key(version: str) -> tuple:
     """Forge Maven 版本的数值排序键，例如 1.16.5-36.2.39。"""
     try:
         suffix = version.split("-", 1)[1]
-        return tuple(int(part) for part in suffix.split("."))
+        # 旧版坐标可能再带一个 MC 后缀，如
+        # 1.7.10-10.13.4.1614-1.7.10；排序只看 Forge 构建号。
+        build = suffix.split("-", 1)[0]
+        return tuple(int(part) for part in build.split("."))
     except Exception:
         return (0,)
 
@@ -129,7 +132,9 @@ def _forge_profile(ver: str, dest_dir: str) -> dict:
         download_with_mirror(FORGE_INSTALLER.format(ver=ver), jar_path)
         with zipfile.ZipFile(jar_path) as z:
             profile = json.loads(z.read("install_profile.json"))
-            json_path = profile["json"]
+            if isinstance(profile.get("versionInfo"), dict):
+                return profile["versionInfo"]
+            json_path = profile.get("json")
             if not isinstance(json_path, str):
                 raise RuntimeError("Forge install_profile.json 里没有版本 JSON 路径")
             return json.loads(z.read(json_path.lstrip("/")))
@@ -151,11 +156,29 @@ def _installer_download(installer_url: str, ver: str, game_dir: str,
     download_with_mirror(installer_url, jar_path, progress_callback=progress_callback)
     with zipfile.ZipFile(jar_path) as z:
         installer_profile = json.loads(z.read("install_profile.json"))
-        # 版本 JSON 在 jar 里由 install_profile 的 json 字段指路
-        json_path = installer_profile["json"]
-        if not isinstance(json_path, str):
-            raise RuntimeError("install_profile.json 里没有版本 JSON 路径")
-        version_profile = json.loads(z.read(json_path.lstrip("/")))
+        # Forge 1.12.2 早期及更老的安装器把版本 JSON 直接放在
+        # install_profile.versionInfo；新版才用 json 指向独立文件。
+        legacy = isinstance(installer_profile.get("versionInfo"), dict)
+        if legacy:
+            version_profile = dict(installer_profile["versionInfo"])
+            install = installer_profile.get("install") or {}
+            embedded = install.get("filePath")
+            artifact = install.get("path")
+            if not embedded or not artifact:
+                raise RuntimeError("旧版 Forge 安装配置缺少内置运行库路径")
+            dest = _coord_path(artifact, os.path.join(game_dir, "libraries"))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with z.open(embedded.lstrip("/")) as src, open(dest, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            # 1.5/1.6 的 versionInfo 是完整版本，未声明继承；统一让
+            # 原版提供客户端 jar、资源索引及原生库，同时保留 Forge 的启动参数。
+            version_profile.setdefault("inheritsFrom", install.get("minecraft"))
+            version_profile.setdefault("jar", install.get("minecraft"))
+        else:
+            json_path = installer_profile.get("json")
+            if not isinstance(json_path, str):
+                raise RuntimeError("Forge install_profile.json 里没有版本 JSON 路径或 versionInfo")
+            version_profile = json.loads(z.read(json_path.lstrip("/")))
         # 把补丁文件从 installer 里解出来
         binpatch = (installer_profile.get("data") or {}).get("BINPATCH", {}).get("client", "")
         if binpatch:
@@ -421,7 +444,7 @@ def install_loader(loader: str, mc: str, game_dir: str,
                                      sha1=client.get("sha1"), progress_callback=progress_callback)
 
         # 3) (forge/neoforge) 跑补丁步骤,生成 loader 的 client jar
-        if loader in ("forge", "neoforge"):
+        if loader in ("forge", "neoforge") and installer_profile.get("processors"):
             # Forge 1.18+ 的部分 processors 会硬编码读取
             # ``versions/<mc>/<mc>.jar``。基础原版平时存放在 _versions
             # 仓库时，补丁期间临时还原这一标准路径，完成后再清理；不能让

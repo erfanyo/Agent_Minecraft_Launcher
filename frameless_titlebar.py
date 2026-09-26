@@ -11,7 +11,7 @@
 """
 import sys
 
-from PySide6.QtCore import Qt, QPoint, QSize
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 
@@ -25,6 +25,8 @@ class FramelessTitleBar(QWidget):
         super().__init__(parent)
         self._win = window
         self._drag_offset = None
+        self._center_widget = None
+        self._trailing_widget = trailing_widget
         self.setFixedHeight(36)
         self.setObjectName("framelessTitleBar")
 
@@ -68,12 +70,50 @@ class FramelessTitleBar(QWidget):
         self.refresh_theme()
 
     # ---- 控件 ----
+    def set_center_widget(self, widget: QWidget):
+        """Center navigation independently from the status and window controls."""
+        widget.setParent(self)
+        widget.setFixedSize(widget.sizeHint())
+        self._center_widget = widget
+        widget.show()
+        self._place_center_widget()
+
+    def _place_center_widget(self):
+        widget = self._center_widget
+        if widget is None:
+            return
+        left = 48 if _is_mac() else self.title_label.geometry().right() + 12
+        right = self.reset_size_btn.geometry().left() - 12
+        if self._trailing_widget is not None and self._trailing_widget.isVisible():
+            right = min(right, self._trailing_widget.geometry().left() - 12)
+        centered = (self.width() - widget.width()) // 2
+        x = max(left, min(centered, right - widget.width()))
+        widget.move(x, (self.height() - widget.height()) // 2)
+        widget.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._place_center_widget)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._place_center_widget)
+
     def refresh_theme(self):
-        from ui_style import is_dark_mode, muted_color
+        from ui_style import current_color, is_dark_mode, muted_color, text_color
         color = '#e7ecf5' if is_dark_mode() else '#1f2430'
         self.title_label.setStyleSheet(
             f'font-weight: bold; color: {color}; font-size: 13px;')
         for button in self.findChildren(QPushButton):
+            if button.property('titleNav'):
+                button.setStyleSheet(
+                    f'QPushButton {{ background: {current_color("panel_bg")};'
+                    f' color: {text_color()}; border: 1px solid {current_color("panel_border")};'
+                    ' border-radius: 7px; font-size: 12px; padding: 0 7px; }'
+                    f'QPushButton:hover {{ background: {current_color("hover")}; }}'
+                    f'QPushButton:pressed {{ background: {current_color("sel_bg")}; }}'
+                    f'QPushButton:disabled {{ color: {muted_color()}; }}')
+                continue
             if not button.property('titleControl'):
                 continue
             button.setStyleSheet(

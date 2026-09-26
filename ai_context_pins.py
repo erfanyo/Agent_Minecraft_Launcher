@@ -355,7 +355,8 @@ class ContextPins(QWidget):
                 else:
                     rect = widget.rect()
                 rect = rect.intersected(parent.rect())
-                marker.setVisible(not rect.isEmpty() and widget.isVisible())
+                marker.setVisible(not rect.isEmpty() and widget.isVisible()
+                                  and self.isVisible())
                 if not rect.isEmpty():
                     marker.move(max(rect.left(), rect.right() - 23), rect.top())
                     marker.raise_()

@@ -20,16 +20,18 @@ import urllib.parse
 import collections
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QColor, QDesktopServices
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QComboBox,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QMenu,
     QPushButton,
     QScrollArea,
@@ -44,7 +46,7 @@ from PySide6.QtWidgets import (
 from i18n import t
 from background_tasks import BackgroundTask
 from ui_style import (card_btn_style, hint_style, launch_btn_style, list_style,
-                      muted_color, panel_style, popup_panel_style, text_color, set_style,
+                      muted_color, panel_style, popup_menu_style, popup_panel_style, text_color, set_style,
                       accent_color, warning_color, current_color)
 from version_tree import GameVersionTree
 
@@ -79,6 +81,7 @@ RESOURCE_CATEGORIES = [
     ("datapack", "🗂 数据包", "datapacks"),
     ("resourcepack", "🎨 资源包", "resourcepacks"),
 ]
+FLEXIBLE_VERSION_TYPES = frozenset(('shader', 'datapack', 'resourcepack'))
 
 # 标签(分类)多级菜单结构:按逻辑分组(中文组名→Modrinth 分类)。替代以前"手输标签"。
 # - mod/modpack 的 Modrinth 分类全是 header="categories"(扁平)→ 按语义分组;
@@ -271,10 +274,11 @@ class ResourceBrowser(QWidget):
         self._offset = 0            # 已加载结果数(游标)
         self._no_more = False       # 是否已没有更多
         self._more_loading = False  # 是否正在加载更多(防重入)
-        self._search_params = None  # 当前搜索参数 (query, gv, loader, order, tags)
+        self._search_params = None  # 当前项目搜索参数 (source, query, order, tags)
         self._search_generation = 0 # 丢弃更早搜索晚到的结果
         self._selection_generation = 0  # 丢弃更早资源详情/版本晚到的结果
         self._version_generation = 0    # 同一资源切换筛选时也只接受最后一次版本请求
+        self._loaded_versions = None     # 文件全集；更换目标实例时只调整优先顺序
         # 懒加载图标:只为"当前可见"的行拉图,按顺序串行,用户没看到的先不拉不存。
         self._icon_loaded = {}          # id(row) -> slug(已请求过图标的行,避免重复拉)
         self._icon_queue = collections.deque()   # 待拉图标的 (list_item, slug, url)
@@ -344,6 +348,10 @@ class ResourceBrowser(QWidget):
         self.search_edit.setPlaceholderText(
             t(f"搜索{self.label},回车确认(如 sodium / 钠 / 名字)", f"Search {self.label}, press Enter..."))
         self.search_edit.returnPressed.connect(self.do_search)
+        self.clear_filters_btn = QPushButton(t("清除筛选", "Clear filters"))
+        self.clear_filters_btn.setToolTip(t("清除关键词、版本、加载器和标签筛选", "Clear search, version, loader and tag filters"))
+        self.clear_filters_btn.clicked.connect(self._clear_search_filters)
+        set_style(self.clear_filters_btn, card_btn_style)
 
         self.sort_combo = QComboBox()
         for lbl, val in [("按下载量排序", "downloads"),
@@ -367,6 +375,7 @@ class ResourceBrowser(QWidget):
         self.tag_btn.setToolTip("按分类标签筛选(可多选;组内是子菜单)")
         self._selected_tags = set()
         self.tag_menu = QMenu(self.tag_btn)
+        set_style(self.tag_menu, popup_menu_style)
         self.tag_btn.setMenu(self.tag_menu)
         self._build_tag_menu()
 
@@ -379,7 +388,7 @@ class ResourceBrowser(QWidget):
         self.instance_cards_box = QWidget()
         self.instance_cards_layout = QVBoxLayout(self.instance_cards_box)
         self.instance_cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.instance_cards_layout.setSpacing(4)
+        self.instance_cards_layout.setSpacing(8)
         self._inst_cards = []          # [(inst, card)]
         self._none_card = None
         self.custom_label = QLabel("")
@@ -389,7 +398,7 @@ class ResourceBrowser(QWidget):
         self.cards_scroll = QScrollArea()
         self.cards_scroll.setWidgetResizable(True)
         self.cards_scroll.setWidget(self.instance_cards_box)
-        self.cards_scroll.setMaximumHeight(210)
+        self.cards_scroll.setMaximumHeight(300)
         self.cards_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.cards_scroll.setStyleSheet(
             "QScrollArea { background: transparent; border: none; }"
@@ -432,6 +441,11 @@ class ResourceBrowser(QWidget):
         self.meta_label = QLabel("")
         self.meta_label.setStyleSheet(hint_style())
         self.meta_label.setWordWrap(True)
+        self.compat_range_label = QLabel("")
+        self.compat_range_label.setWordWrap(True)
+        self.compat_range_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        set_style(self.compat_range_label, lambda: f"color: {muted_color()}; font-size: 12px;")
+        self.compat_range_label.setVisible(False)
         self.desc_label = QLabel("")
         self.desc_label.setStyleSheet(hint_style())
         self.desc_label.setWordWrap(True)
@@ -482,6 +496,12 @@ class ResourceBrowser(QWidget):
                              ("NeoForge", "neoforge"), ("Quilt", "quilt")]:
             self.loader_combo.addItem(label, value)
         self.ver_combo = QComboBox()
+        # 使用受高度限制的列表弹层；Windows 原生下拉会忽略最大可见项数。
+        self.ver_combo.setView(QListView(self.ver_combo))
+        self.ver_combo.setMaxVisibleItems(8)
+        self.ver_combo.setStyleSheet("QComboBox { combobox-popup: 0; }")
+        self.ver_combo.view().setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.dl_btn = QPushButton(t("DOWNLOAD"))
         set_style(self.dl_btn, launch_btn_style)
         self.dl_btn.clicked.connect(self._download)
@@ -489,6 +509,7 @@ class ResourceBrowser(QWidget):
         self.loader_combo.currentIndexChanged.connect(self._refresh_versions_global)
         self.ver_combo.currentIndexChanged.connect(self._update_fav_btn)
         self.ver_combo.currentIndexChanged.connect(self._refresh_compatibility_report)
+        self.ver_combo.currentIndexChanged.connect(self._refresh_download_warning)
 
         # 版本/加载器/mod版本 + 下载,改放【底部向上展开的折叠条】(bottom_bar),不占右侧窄条。
         # 右侧 panel 只留描述/作者/百科链接 → Mod 列表更宽、能多展示。
@@ -500,6 +521,7 @@ class ResourceBrowser(QWidget):
         p.setSpacing(8)
         p.addWidget(self.title_label)
         p.addWidget(self.meta_label)
+        p.addWidget(self.compat_range_label)
         p.addWidget(self.desc_label)
         p.addWidget(self.desc_note_label)
         p.addWidget(self.compat_box)
@@ -538,6 +560,7 @@ class ResourceBrowser(QWidget):
         # 顶部统一操作行:搜索(占1) + 来源 + 排序 + 标签
         top_row = QHBoxLayout()
         top_row.addWidget(self.search_edit, 1)
+        top_row.addWidget(self.clear_filters_btn)
         top_row.addWidget(self.source_combo)
         top_row.addWidget(self.sort_combo)
         top_row.addWidget(self.tag_btn)
@@ -569,7 +592,10 @@ class ResourceBrowser(QWidget):
         self.manual_toggle = QPushButton("▸ " + t("MANUAL_DOWNLOAD"))
         self.manual_toggle.setCheckable(False)
         self.manual_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.manual_toggle.setToolTip(t("SET_GAME_LOADER_MOD_VERSION"))
+        self.manual_toggle.setToolTip(
+            t("查看并选择资源文件版本；兼容标签仅供参考", "Choose a file version; compatibility tags are guidance")
+            if self.project_type in FLEXIBLE_VERSION_TYPES else
+            t("按所选条件筛选当前资源的文件版本", "Filter this resource's files"))
         set_style(self.manual_toggle, card_btn_style)
         self.manual_toggle.clicked.connect(self._toggle_manual_popup)
         row.addWidget(self.manual_toggle, 2)
@@ -581,24 +607,59 @@ class ResourceBrowser(QWidget):
         mp = QVBoxLayout(self.manual_popup)
         mp.setContentsMargins(10, 8, 10, 8)
         mp.setSpacing(6)
-        mp.addWidget(QLabel(t("GAME_VERSION_CLICK_A_MAJOR_TO_AUTO_PICK")))
-        self.gv_combo.setMaximumHeight(180)
-        self.gv_combo.setMinimumHeight(110)
-        mp.addWidget(self.gv_combo)
-        for lbl, combo in [(t("LOADER"), self.loader_combo),
-                           (t("MOD_VERSION"), self.ver_combo)]:
+        if self.project_type in FLEXIBLE_VERSION_TYPES:
+            # These controls are still used by shared code, but must belong to
+            # the popup. Unparented widgets become separate top-level windows.
+            self.gv_combo.setParent(self.manual_popup)
+            self.loader_combo.setParent(self.manual_popup)
+            self.gv_combo.hide()
+            self.loader_combo.hide()
+        else:
+            filter_hint = QLabel(t("可用的筛选条件只作用于下方资源版本", "Available filters only affect the files below"))
+            filter_hint.setStyleSheet(hint_style())
+            filter_hint.setWordWrap(True)
+            mp.addWidget(filter_hint)
+            mp.addWidget(QLabel(t("GAME_VERSION_CLICK_A_MAJOR_TO_AUTO_PICK")))
+            self.gv_combo.setMaximumHeight(180)
+            self.gv_combo.setMinimumHeight(110)
+        rows = []
+        if self.project_type not in FLEXIBLE_VERSION_TYPES:
+            rows.append((t("LOADER"), self.loader_combo))
+        version_label = (t("光影包版本", "Shader pack version") if self.project_type == "shader"
+                         else t("资源文件版本", "File version") if self.project_type in FLEXIBLE_VERSION_TYPES
+                         else t("MOD_VERSION"))
+        rows.append((version_label, self.ver_combo))
+        if self.project_type not in FLEXIBLE_VERSION_TYPES:
+            mp.addWidget(self.gv_combo)
+            self.show_all_versions_btn = QPushButton(t("显示未匹配的文件版本", "Include unmatched file versions"))
+            self.show_all_versions_btn.setCheckable(True)
+            self.show_all_versions_btn.setToolTip(t(
+                "忽略上方筛选，允许手动选择可能不兼容的文件版本；CurseForge 最多读取最近 500 个文件",
+                "Ignore filters and allow possibly incompatible files; CurseForge loads up to 500 recent files"))
+            set_style(self.show_all_versions_btn, card_btn_style)
+            self.show_all_versions_btn.toggled.connect(self._refresh_versions_global)
+            mp.addWidget(self.show_all_versions_btn)
+        elif self.project_type in ('datapack', 'resourcepack'):
+            note = QLabel("版本标签仅供参考；可以下载未标注当前游戏版本的文件。数据包可能因命令或格式变化失效。"
+                          if self.project_type == 'datapack' else
+                          "版本标签仅供参考；可以下载未标注当前游戏版本的文件，部分纹理或界面元素可能不适配。")
+            note.setWordWrap(True)
+            set_style(note, hint_style)
+            mp.addWidget(note)
+        for lbl, combo in rows:
             r = QHBoxLayout()
             r.addWidget(QLabel(lbl))
             r.addWidget(combo, 1)
             mp.addLayout(r)
         # 泛用收藏和指定版本分开：后者会收进前者的展开项，而不是覆盖收藏本体。
         self.fav_btn = QToolButton()
-        self.fav_btn.setText("☆ 收藏 Mod")
+        self.fav_btn.setText("☆ 收藏资源")
         self.fav_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.fav_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         set_style(self.fav_btn, card_btn_style)
         self.fav_btn.clicked.connect(self._fav_current)
         self.fav_menu = QMenu(self.fav_btn)
+        set_style(self.fav_menu, popup_menu_style)
         self.fav_version_action = self.fav_menu.addAction("＋ 收藏当前版本")
         self.fav_version_action.triggered.connect(self._fav_selected_version)
         self.fav_btn.setMenu(self.fav_menu)
@@ -618,22 +679,31 @@ class ResourceBrowser(QWidget):
         self.inst_popup.setObjectName("inst_popup")
         set_style(self.inst_popup, popup_panel_style)
         pp = QVBoxLayout(self.inst_popup)
-        pp.setContentsMargins(10, 8, 10, 8)
-        pp.setSpacing(4)
+        pp.setContentsMargins(14, 12, 14, 12)
+        pp.setSpacing(8)
         pp.addWidget(self.cards_scroll)
         pp.addWidget(self.custom_label)
-        self.inst_popup.setFixedWidth(320)
+        self.inst_popup.setMinimumWidth(320)
+        self.inst_popup.setMaximumWidth(600)
         self.inst_popup.hide()
         self.inst_popup.closed.connect(self._on_popup_closed_autoclose)
 
         # 下载/收藏放到同一横行，避免底部操作区为了两个按钮占两层高度。
         dl_card = QWidget()
         set_style(dl_card, card_btn_style)
-        db = QHBoxLayout(dl_card)
+        db = QVBoxLayout(dl_card)
         db.setContentsMargins(8, 8, 8, 8)
-        db.setSpacing(6)
-        db.addWidget(self.fav_btn, 1)
-        db.addWidget(self.dl_btn, 1)
+        db.setSpacing(3)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        buttons.addWidget(self.fav_btn, 1)
+        buttons.addWidget(self.dl_btn, 1)
+        db.addLayout(buttons)
+        self.download_warning = QLabel()
+        self.download_warning.setWordWrap(True)
+        self.download_warning.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
+        self.download_warning.hide()
+        db.addWidget(self.download_warning)
         self.dl_card = dl_card
         row.addWidget(dl_card, 3)
 
@@ -656,7 +726,7 @@ class ResourceBrowser(QWidget):
         self.cards_scroll.updateGeometry()
         self.inst_popup.layout().activate()
         hint = self.inst_popup.layout().sizeHint()
-        self.inst_popup.resize(max(320, hint.width()), max(60, hint.height()))
+        self.inst_popup.resize(max(380, hint.width()), max(60, hint.height()))
         self._popup_above(self.inst_popup, self.inst_cards_toggle)
         self._apply_shared_wallpaper(self.inst_popup)
         self.inst_popup.show()
@@ -679,11 +749,27 @@ class ResourceBrowser(QWidget):
         self.manual_popup.raise_()
 
     def _popup_above(self, popup, anchor):
-        """把浮窗放在 anchor(按钮)正上方,并夹在窗口水平范围内。"""
+        """把浮窗放在 anchor 附近,并限制在当前屏幕可用区域内。"""
         g = anchor.mapToGlobal(anchor.rect().topLeft())
+        screen = QGuiApplication.screenAt(g) or QGuiApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else self.window().geometry()
+        popup.setMaximumWidth(max(280, available.width() - 24))
+        if popup.width() > available.width() - 24:
+            popup.resize(available.width() - 24, popup.height())
+        # 优先放在按钮上方；若上方空间不足，则放在下方，并让列表区滚动。
+        above = g.y() - available.top() - 12
+        below = available.bottom() - (g.y() + anchor.height()) - 12
+        room = max(above, below)
+        max_height = max(120, min(420, room))
+        if popup.height() > max_height:
+            popup.resize(popup.width(), max_height)
         top = self.window().mapToGlobal(self.window().rect().topLeft())
-        x = max(top.x(), min(g.x(), top.x() + self.window().width() - popup.width()))
-        y = g.y() - popup.height()
+        x = max(available.left() + 12, min(g.x(), available.right() - popup.width() - 12))
+        if above >= popup.height() or above >= below:
+            y = g.y() - popup.height()
+        else:
+            y = g.y() + anchor.height()
+        y = max(available.top() + 12, min(y, available.bottom() - popup.height() - 12))
         popup.move(x, y)
 
     def _apply_shared_wallpaper(self, popup):
@@ -772,6 +858,21 @@ class ResourceBrowser(QWidget):
             self._build_tag_menu()   # 重建,取消所有勾选 + 清空项禁用
             self.do_search()
 
+    def _clear_search_filters(self):
+        """清除本页的搜索条件，并只发起一次刷新。"""
+        self.search_edit.clear()
+        self._selected_tags.clear()
+        self._build_tag_menu()
+        previous_gv = self.gv_combo.blockSignals(True)
+        previous_loader = self.loader_combo.blockSignals(True)
+        try:
+            self.gv_combo.select_version("")
+            self.loader_combo.setCurrentIndex(0)
+        finally:
+            self.gv_combo.blockSignals(previous_gv)
+            self.loader_combo.blockSignals(previous_loader)
+        self.do_search()
+
     # ---- 目标实例(全局共享) ----
     def _set_target_hooks(self, getter, setter):
         self._target_getter = getter
@@ -796,22 +897,22 @@ class ResourceBrowser(QWidget):
             snapshot = self._instance_pin_snapshot(inst)
             card.ai_pin_provider = lambda pos, data=snapshot: dict(data)
             card.setCheckable(True)
-            card.setMinimumHeight(40)
+            card.setMinimumHeight(48)
             set_style(card, card_btn_style)
             card.clicked.connect(lambda _c, i=inst: self._select_inst(i))
             self.instance_cards_layout.addWidget(card)
             self._inst_cards.append((inst, card))
         none_card = QPushButton(t("NONE_PICK_FOLDER"))
         none_card.setCheckable(True)
-        none_card.setMinimumHeight(40)
+        none_card.setMinimumHeight(48)
         set_style(none_card, card_btn_style)
         none_card.clicked.connect(self._select_none)
         self.instance_cards_layout.addWidget(none_card)
         self._none_card = none_card
-        # 内容区最小高度 = 卡片数×(卡片高40 + 间距4):widgetResizable 不会把 box 压到低于该值,
+        # 内容区最小高度 = 卡片数×(卡片高48 + 间距8):widgetResizable 不会把 box 压到低于该值,
         # 内容超出视口(210)时滚动区才真正滚动,而不是把卡片压扁/互相重叠
         n = len(self._inst_cards) + (1 if self._none_card else 0)
-        self.instance_cards_box.setMinimumHeight(n * 44)
+        self.instance_cards_box.setMinimumHeight(n * 56)
         self.cards_scroll.updateGeometry()
 
         self._sync_target_ui()
@@ -849,24 +950,41 @@ class ResourceBrowser(QWidget):
         else:
             self.inst_cards_toggle.setText("▸ 目标实例: 未选择")
             self._apply_inst_cards(None)
+        if (self.project_type in ('datapack', 'resourcepack')
+                and getattr(self, '_current', None) and self._loaded_versions is not None):
+            self._fill_versions(self._loaded_versions, preserve_selection=True)
         self._refresh_compatibility_report()
+        self._refresh_download_warning()
 
     def _select_inst(self, inst):
         """选中某实例:更新本地卡片+筛选,并广播到全局(其他分类页一并生效)。"""
         self._apply_inst_cards(inst["id"])
         # 选中后收起悬浮层,标题箭头复位
         self._close_inst_popup()
-        # 全局筛选同步到该实例的基础版本 + 加载器(方案一:选中实例 → 底部 gv/loader 跟随)
-        self.gv_combo.select_version(inst["base"])
-        li = self.loader_combo.findData(inst["loader"])
-        if li >= 0:
-            self.loader_combo.setCurrentIndex(li)
+        # Mod 使用实例环境筛选文件；数据包/资源包/光影包只改变下载目标。
+        if self.project_type in FLEXIBLE_VERSION_TYPES:
+            self._target_setter(inst, None)
+            return
+        # 用实例环境作为文件版本筛选的默认值，只刷新一次当前项目的版本列表。
+        previous_gv = self.gv_combo.blockSignals(True)
+        previous_loader = self.loader_combo.blockSignals(True)
+        try:
+            self.gv_combo.select_version(inst["base"])
+            li = self.loader_combo.findData(inst["loader"])
+            if li >= 0:
+                self.loader_combo.setCurrentIndex(li)
+        finally:
+            self.gv_combo.blockSignals(previous_gv)
+            self.loader_combo.blockSignals(previous_loader)
         self._target_setter(inst, None)
+        self._refresh_versions_global()
 
     def _select_none(self):
-        """选"无":改用自定义目录(或稍后手动选位置),并广播全局。"""
+        """选择“无”实例时立即打开文件夹选择器，设置自定义安装目录。"""
         self._close_inst_popup()
-        self._target_setter(None, None)
+        import paths
+        start_dir = self.custom_dir or paths.GAME_DIR
+        self.pick_custom_dir(start_dir)
 
     def _close_inst_popup(self):
         """收起目标实例悬浮层并复位标题箭头。"""
@@ -887,7 +1005,7 @@ class ResourceBrowser(QWidget):
     def pick_custom_dir(self, game_dir: str):
         """用户用文件管理器选安装位置(装到其他启动器的目录)。"""
         from PySide6.QtWidgets import QFileDialog
-        d = QFileDialog.getExistingDirectory(self, t("PICK_FOLDER"), game_dir)
+        d = QFileDialog.getExistingDirectory(self.window(), t("PICK_FOLDER"), game_dir)
         if d:
             self._target_setter(None, d)
 
@@ -942,7 +1060,7 @@ class ResourceBrowser(QWidget):
             self.tag_btn.setEnabled(False)
             self.tag_btn.setText("CurseForge 无标签筛选")
             self.loader_combo.setEnabled(False)
-            self.loader_combo.setToolTip("CurseForge 当前按游戏版本筛选；加载器信息以文件说明为准")
+            self.loader_combo.setToolTip("CurseForge 文件版本按游戏版本筛选；加载器信息以文件说明为准")
         else:
             self._build_tag_menu()
             self.loader_combo.setEnabled(True)
@@ -955,16 +1073,20 @@ class ResourceBrowser(QWidget):
         generation = self._search_generation
         query = self.search_edit.text().strip()
         # 允许空关键词:打开资源页即「默认浏览」(空 query → 按 sort_combo 排序,默认 downloads)。
-        # 全局版本/加载器筛选(底部 gv_combo/loader_combo)会被尊重(为空则全量)。
-        gv = self._current_gv()                       # 「无(全部版本)」→ None
-        loader = self.loader_combo.currentData() or None   # 「无(全部加载器)」→ None
+        # 游戏版本/加载器只筛选选中项目的文件版本，不筛掉整个资源项目。
         order = self.sort_combo.currentData() or "downloads"
         tags = ",".join(sorted(self._selected_tags))
         self._last_query = query
         self._offset = 0
         self._no_more = False
         source = self._source()
-        self._search_params = (source, query, gv, loader, order, tags)
+        self._search_params = (source, query, order, tags)
+        self._selection_generation += 1
+        self._version_generation += 1
+        self._current = None
+        self.ver_combo.clear()
+        self.dl_btn.setEnabled(False)
+        self._refresh_download_warning()
         self.result_list.clear()
         if source == "curseforge":
             try:
@@ -983,10 +1105,10 @@ class ResourceBrowser(QWidget):
             try:
                 if source == "curseforge":
                     import curseforge
-                    return curseforge.search_mods(query, gv, order, offset=0, limit=30)
+                    return curseforge.search_mods(query, None, order, offset=0, limit=30)
                 import modrinth
                 return modrinth.search_mods_cn(
-                    query, gv, loader, limit=30, project_type=self.project_type,
+                    query, None, None, limit=30, project_type=self.project_type,
                     order_by=order, tags=tags, offset=0)
             except Exception as e:
                 # _async 的通用保护会把异常归为 None；搜索页保留一份安全的
@@ -1006,7 +1128,7 @@ class ResourceBrowser(QWidget):
                 return
             self._fill_results(result)
 
-        self._async(("search", source, query, gv, loader, self.project_type, order, tags),
+        self._async(("search", source, query, self.project_type, order, tags),
                     fetch, done, cache=False)
 
     def maybe_auto_load(self):
@@ -1025,11 +1147,11 @@ class ResourceBrowser(QWidget):
         self.do_search()
 
     def _refresh_versions_global(self):
-        """全局版本/加载器筛选变化 → 重新搜索(列表按新筛选刷新)。
-        方案一:gv/loader 是全局筛选(也是下载默认),变化即刷新列表。"""
-        if self.search_edit.text().strip():
+        """游戏版本/加载器变化只刷新当前资源的文件版本列表。"""
+        if self.project_type in FLEXIBLE_VERSION_TYPES:
             return
-        self.do_search()
+        if getattr(self, "_current", None):
+            self._refresh_versions()
 
     def _fill_results(self, hits, append=False):
         if not append:
@@ -1081,7 +1203,9 @@ class ResourceBrowser(QWidget):
                 "resource_type": self.project_type, "description": hit.get("description") or "",
                 "url": hit.get("website_url") or (f"https://modrinth.com/project/{project_id}" if source == "modrinth" else ""),
                 "target_instance": (self.selected_inst or {}).get("id") or "未选择",
-                "version_selection": "未固定具体版本，下载前需确认与目标实例兼容"}
+                "version_selection": ("未固定具体版本；文件标签供参考，可选择其他版本"
+                                      if self.project_type in FLEXIBLE_VERSION_TYPES else
+                                      "未固定具体版本，下载前需确认与目标实例兼容")}
 
     def _maybe_load_more(self, value: int = 0):
         """滚动到底附近 → 加载下一页(分页)。"""
@@ -1097,7 +1221,7 @@ class ResourceBrowser(QWidget):
     def _load_more(self):
         """加载下一页结果并追加到列表。"""
         self._more_loading = True
-        source, query, gv, loader, order, tags = self._search_params
+        source, query, order, tags = self._search_params
         generation = self._search_generation
         expected_params = self._search_params
         offset = self._offset
@@ -1105,10 +1229,10 @@ class ResourceBrowser(QWidget):
         def fetch():
             if source == "curseforge":
                 import curseforge
-                return curseforge.search_mods(query, gv, order, offset=offset, limit=30)
+                return curseforge.search_mods(query, None, order, offset=offset, limit=30)
             import modrinth
             return modrinth.search_mods_cn(
-                query, gv, loader, limit=30, project_type=self.project_type,
+                query, None, None, limit=30, project_type=self.project_type,
                 order_by=order, tags=tags, offset=offset)
 
         def on_done(hits):
@@ -1116,7 +1240,7 @@ class ResourceBrowser(QWidget):
                 return
             self._fill_results(hits, append=True)
 
-        self._async(("more", source, query, gv, loader, self.project_type, order, tags, offset),
+        self._async(("more", source, query, self.project_type, order, tags, offset),
                     fetch, on_done, cache=False)
 
     # ---- 详情面板 ----
@@ -1131,22 +1255,28 @@ class ResourceBrowser(QWidget):
 
     def _on_selected(self, current, _prev):
         self._selection_generation += 1
-        generation = self._selection_generation
         if current is None:
+            self._current = None
+            self.dl_btn.setEnabled(False)
+            self._refresh_download_warning()
             self.mcmod_link.setVisible(False)
+            self.compat_range_label.setVisible(False)
             return
         h = current.data(Qt.ItemDataRole.UserRole)
         if not h:
             self.mcmod_link.setVisible(False)
+            self.compat_range_label.setVisible(False)
             return
         self._current = h
         self.compat_box.setVisible(False)
         self.compat_detail.setVisible(False)
         self.compat_toggle.setText("查看依赖详情")
         for w in (self.title_label, self.meta_label,
-                  self.desc_label, self.gv_combo, self.loader_combo,
-                  self.ver_combo, self.dl_btn, self.fav_btn):
+                  self.desc_label, self.ver_combo, self.dl_btn, self.fav_btn):
             w.setVisible(True)
+        if self.project_type not in FLEXIBLE_VERSION_TYPES:
+            self.gv_combo.setVisible(True)
+            self.loader_combo.setVisible(True)
         # CurseForge 条款禁止保存 API 数据，因此不把其项目元数据写入收藏文件。
         self.fav_btn.setVisible(h.get("source") != "curseforge")
         self.empty_label.setVisible(False)
@@ -1175,16 +1305,53 @@ class ResourceBrowser(QWidget):
         if h.get("categories"):
             meta.append("·".join(h["categories"][:6]))
         self.meta_label.setText("  ".join(meta))
+        self.compat_range_label.setText("正在读取兼容范围…")
+        self.compat_range_label.setToolTip("")
+        self.compat_range_label.setVisible(True)
         self.desc_label.setText(h.get("description", ""))
         self.desc_note_label.setText("")
         self.desc_note_label.setVisible(False)
         self._update_fav_btn()
-        # 异步加载项目详情,刷新【mod 可用版本】下拉(方案一:gv/loader 是全局筛选不清,
-        # 只清并重填 ver_combo —— 它才是逐 Mod 的)
+        # 直接加载当前项目的文件版本；无需额外请求项目详情。
+        self._loaded_versions = None
         self.ver_combo.clear()
-        self._load_project(h, generation)
+        self.dl_btn.setEnabled(False)
+        self._refresh_versions()
+        self._load_compatibility_range(h, self._selection_generation)
         # 后台线程翻译 Mod 描述(不卡 UI);若关闭开关则保持原文
         self._start_desc_translation(h)
+
+    def _load_compatibility_range(self, hit: dict, generation: int):
+        """Summarize all declared file versions, independent of download filters."""
+        source = hit.get('source', 'modrinth')
+        slug = hit.get('slug')
+
+        def fetch():
+            if source == 'curseforge':
+                import curseforge
+                return curseforge.list_mod_file_compatibility(hit['curseforge_id'])
+            import modrinth
+            return modrinth.list_mod_versions(slug, None, None, detailed=True)
+
+        def done(result):
+            current = getattr(self, '_current', None) or {}
+            if generation != self._selection_generation or current.get('slug') != slug:
+                return
+            if result is None:
+                self.compat_range_label.setText('兼容范围暂时无法读取')
+                return
+            from resource_compatibility import format_compatibility
+            if source == 'curseforge':
+                records = result.get('versions') or []
+                partial = bool(result.get('partial'))
+            else:
+                records, partial = result, False
+            summary, full = format_compatibility(records, partial=partial, source=source)
+            self.compat_range_label.setText(summary)
+            self.compat_range_label.setToolTip(full)
+
+        key = ('ver', source, slug, None, None) if source != 'curseforge' else ('compat-range', slug)
+        self._async(key, fetch, done, cache=source != 'curseforge')
 
     def _fav_current(self):
         """收藏当前资源本体到默认收藏夹，不绑定任何指定版本。"""
@@ -1236,7 +1403,7 @@ class ResourceBrowser(QWidget):
         if slug and favs.is_favorited(data, favs.DEFAULT_FOLDER, slug):
             self.fav_btn.setText("★ 已收藏")
         else:
-            self.fav_btn.setText("☆ 收藏 Mod")
+            self.fav_btn.setText("☆ 收藏资源")
         version = (self.ver_combo.currentText() or "").strip()
         saved_versions = favs.versions(data, favs.DEFAULT_FOLDER, slug) if slug else []
         self.fav_version_action.setText("✓ 已收藏该版本" if version and version in saved_versions else "＋ 收藏当前版本")
@@ -1445,31 +1612,6 @@ class ResourceBrowser(QWidget):
         self._icon_loading = False
         self._pump_icon_queue()
 
-    def _load_project(self, h, generation: int):
-        """异步拉项目详情,填充 游戏版本/加载器 两个下拉。"""
-        requested_slug = h.get("slug", "")
-        def fetch():
-            if h.get("source") == "curseforge":
-                import curseforge
-                return curseforge.get_mod(h["curseforge_id"])
-            import modrinth
-            return modrinth.get_project(h["slug"])
-        def done(proj):
-            current = getattr(self, "_current", None) or {}
-            if generation != self._selection_generation or current.get("slug") != requested_slug:
-                return
-            self._populate_project(proj)
-
-        self._async(("proj", h.get("source", "modrinth"), h["slug"]), fetch, done,
-                    cache=h.get("source") != "curseforge")
-
-    def _populate_project(self, proj):
-        if not proj:
-            return
-        # 方案一:gv_combo/loader_combo 是【全局】版本/加载器筛选(用户选,不随选中项变),
-        # 不在这里重填。只刷新选中 Mod 的【可用 mod 版本】列表(_refresh_versions)。
-        self._refresh_versions()
-
     def _refresh_versions(self):
         if not getattr(self, "_current", None):
             return
@@ -1480,19 +1622,29 @@ class ResourceBrowser(QWidget):
         generation = self._selection_generation
         # 方案一:gv 是全局筛选(可为"无(全部版本)"→ None);loader 类似。
         # gv/loader 为空 → 该 Mod 的"可用版本"就全列(不按版本过滤)。
-        gv = self._current_gv()                     # 「无(全部版本)」→ None
-        loader = self.loader_combo.currentData() or None
+        show_all = (self.project_type in FLEXIBLE_VERSION_TYPES or
+                    getattr(self, 'show_all_versions_btn', None) is not None and
+                    self.show_all_versions_btn.isChecked())
+        gv = None if show_all else self._current_gv()
+        loader = None if show_all else (self.loader_combo.currentData() or None)
         self.ver_combo.clear()
         self.ver_combo.addItem(t("LOADING"), None)
         self.ver_combo.setEnabled(False)
+        self.dl_btn.setEnabled(False)
+        self._refresh_download_warning()
 
         def fetch():
             if current.get("source") == "curseforge":
                 import curseforge
-                return curseforge.list_mod_files(current["curseforge_id"], gv or None)
+                return curseforge.list_mod_files(current["curseforge_id"], gv or None,
+                                                max_files=500 if show_all else 50)
             import modrinth
+            # Pack tags are useful guidance, but exact Minecraft and mod-loader
+            # filters hide files that may work across several game versions.
+            if self.project_type in FLEXIBLE_VERSION_TYPES:
+                return modrinth.list_mod_versions(slug, None, None, detailed=True)
             # gv 为空 → 不按版本过滤,列该 mod 全部可用版本
-            return modrinth.list_mod_versions(slug, gv or None, loader)
+            return modrinth.list_mod_versions(slug, gv or None, loader, detailed=True)
 
         def done(versions):
             selected = getattr(self, "_current", None) or {}
@@ -1502,23 +1654,89 @@ class ResourceBrowser(QWidget):
                 return
             self._fill_versions(versions)
 
-        self._async(("ver", current.get("source", "modrinth"), slug, gv, loader), fetch,
+        cache_gv = gv
+        cache_loader = loader
+        self._async(("ver", current.get("source", "modrinth"), slug, cache_gv, cache_loader), fetch,
                     done, cache=current.get("source") != "curseforge")
 
-    def _fill_versions(self, versions):
+    def _fill_versions(self, versions, *, preserve_selection=False):
+        previous = self.ver_combo.currentData() if preserve_selection else None
+        self._loaded_versions = list(versions or [])
         self.ver_combo.clear()
         if not versions:
             self.ver_combo.addItem(t("NO_VERSIONS"), None)
             self.ver_combo.setEnabled(False)
+            self.dl_btn.setEnabled(False)
+            self._refresh_download_warning()
             return
+        target_gv = ((self.selected_inst or {}).get('base')
+                     if self.project_type in ('datapack', 'resourcepack') else None)
+        if target_gv:
+            # Exact declarations are convenient defaults, but every file stays
+            # selectable because packs can work across undeclared game versions.
+            versions = sorted(versions, key=lambda v: target_gv in (v.get('game_versions') or [])
+                              if isinstance(v, dict) else False, reverse=True)
         for v in versions:
             if isinstance(v, dict):
-                self.ver_combo.addItem(v.get("label") or v.get("filename") or "?", v)
+                label = v.get("label") or v.get("filename") or "?"
+                declared = bool(target_gv and target_gv in (v.get('game_versions') or []))
+                if declared:
+                    label = f"✓ {label} · 标注适配 {target_gv}"
+                self.ver_combo.addItem(label, v)
+                if v.get("game_versions") or v.get("loaders"):
+                    support = " · ".join(filter(None, [
+                        ", ".join(v.get("game_versions") or []),
+                        ", ".join(v.get("loaders") or [])]))
+                    if target_gv and not declared:
+                        support += f"\n未标注 {target_gv}，仍可手动下载；请在游戏中确认效果。"
+                    self.ver_combo.setItemData(self.ver_combo.count() - 1, support,
+                                               Qt.ItemDataRole.ToolTipRole)
             else:
                 self.ver_combo.addItem(v, v)
         self.ver_combo.setEnabled(True)
-        self.ver_combo.setCurrentIndex(0)
+        selected_index = 0
+        if previous is not None:
+            for index in range(self.ver_combo.count()):
+                if self.ver_combo.itemData(index) == previous:
+                    selected_index = index
+                    break
+        self.ver_combo.setCurrentIndex(selected_index)
+        self.dl_btn.setEnabled(True)
         self._refresh_compatibility_report()
+        self._refresh_download_warning()
+
+    def _refresh_download_warning(self, *_args):
+        """Warn about a manually selected file without preventing its download."""
+        if not hasattr(self, 'download_warning'):
+            return
+        version = self.ver_combo.currentData()
+        inst = getattr(self, 'selected_inst', None)
+        if not isinstance(version, dict):
+            self.download_warning.hide()
+            return
+        show_all = (getattr(self, 'show_all_versions_btn', None) is not None and
+                    self.show_all_versions_btn.isChecked())
+        reasons = []
+        game_versions = version.get('game_versions') or []
+        loaders = [str(value).lower() for value in version.get('loaders') or []]
+        base = (inst or {}).get('base') or (self._current_gv() if self.project_type == 'modpack' else None)
+        loader = ((inst or {}).get('loader') or
+                  (self.loader_combo.currentData() if self.project_type == 'modpack' else '') or '').lower()
+        if base and game_versions and base not in game_versions:
+            reasons.append(f"未标注适配 MC {base}")
+        if self.project_type in ('mod', 'modpack') and loader and loader != 'vanilla' and loaders and loader not in loaders:
+            reasons.append(f"未标注支持 {loader.title()}")
+        if reasons:
+            self.download_warning.setText("⚠ 可能不兼容：" + "，".join(reasons) + "。仍可下载。")
+            self.download_warning.show()
+        elif show_all and inst and self.project_type == 'mod' and (not game_versions or not loaders):
+            self.download_warning.setText("⚠ 文件兼容标签不完整，可能不兼容；仍可下载。")
+            self.download_warning.show()
+        elif show_all and not inst and self.project_type != 'modpack':
+            self.download_warning.setText("⚠ 未选择目标实例，无法确认文件兼容性；仍可下载。")
+            self.download_warning.show()
+        else:
+            self.download_warning.hide()
 
     def _toggle_compat_detail(self):
         shown = not self.compat_detail.isVisible()
@@ -1534,13 +1752,13 @@ class ResourceBrowser(QWidget):
             self.compat_box.setVisible(True)
             self.compat_toggle.setVisible(False)
             self.compat_detail.setVisible(False)
-            self.compat_summary.setText("CurseForge 文件会按所选 Minecraft 版本筛选。"
-                                        "加载器与依赖信息以文件页为准；该来源暂不提供依赖图和自动前置下载。")
+            self.compat_summary.setText(
+                "CurseForge 文件兼容标签仅供参考；启用“显示未匹配的文件版本”后也可手动下载。"
+                "该来源暂不提供依赖图和自动前置下载。")
             return
         version = self.ver_combo.currentData()
-        inst = self.selected_inst
-        gv = (inst or {}).get("base") or self._current_gv()
-        loader = (inst or {}).get("loader") or self.loader_combo.currentData()
+        gv = self._current_gv()
+        loader = self.loader_combo.currentData()
         if not version:
             self.compat_box.setVisible(True)
             self.compat_summary.setText("选择一个具体 Mod 版本后，显示依赖与兼容报告。")
@@ -1552,33 +1770,52 @@ class ResourceBrowser(QWidget):
         self.compat_detail.setVisible(False)
         self.compat_summary.setText("正在检查 Minecraft 版本、加载器与依赖…")
         slug = self._current["slug"]
+        target_dir = (os.path.join(self.get_instance_dir(self.selected_inst['id']), 'mods')
+                      if self.selected_inst else self.custom_dir)
+        version_label = version.get("version_number", "?") if isinstance(version, dict) else version
+        version_key = (version.get("id") or version_label) if isinstance(version, dict) else version
 
         def fetch():
             import modrinth
-            return modrinth.resolve_dependencies(slug, gv or None, loader or None, version)
+            deps = modrinth.resolve_dependencies(slug, gv or None, loader or None, version)
+            installed = modrinth.installed_mod_identifiers(target_dir) if target_dir else set()
+            return deps, installed
 
-        def done(deps):
+        def done(result):
             cur = getattr(self, "_current", None)
-            if not cur or cur.get("slug") != slug or self.ver_combo.currentData() != version:
+            active_target = (os.path.join(self.get_instance_dir(self.selected_inst['id']), 'mods')
+                             if self.selected_inst else self.custom_dir)
+            if (not cur or cur.get("slug") != slug or self.ver_combo.currentData() != version
+                    or active_target != target_dir):
                 return
+            from modrinth import dependency_is_installed
+            deps, installed = result
             deps = deps or {"required": [], "optional": [], "incompatible": []}
-            required = deps.get("required", [])
+            required = [dep for dep in deps.get("required", [])
+                        if not dependency_is_installed(dep, installed)]
+            present = [dep for dep in deps.get("required", [])
+                       if dependency_is_installed(dep, installed)]
             optional = deps.get("optional", [])
             incompatible = deps.get("incompatible", [])
-            status = (f"适配：Minecraft {gv} · {loader} · Mod {version}"
-                      if gv and loader else f"已解析 Mod {version} 的依赖；选择目标实例后会检查版本与加载器适配。")
+            status = f"已选 Mod {version_label}；下方是该文件声明的依赖。"
             if incompatible:
                 status += f"\n不建议同装 {len(incompatible)} 个已声明冲突项。"
             elif required:
                 status += f"\n将自动加入 {len(required)} 个必需前置到同一下载任务。"
+            elif present:
+                status += "\n必需前置均已安装，可直接下载。"
             else:
                 status += "\n未声明必需前置，可直接下载。"
             if optional:
                 status += f"\n另有 {len(optional)} 个可选联动 Mod（不会自动下载）。"
+            if present:
+                status += f"\n已有 {len(present)} 个必需前置，将跳过下载。"
             self.compat_summary.setText(status)
             lines = []
             if required:
                 lines.append("必需前置（确认下载后自动加入）：\n" + "\n".join("· " + d["title"] for d in required))
+            if present:
+                lines.append("已安装的必需前置（跳过）：\n" + "\n".join("· " + d["title"] for d in present))
             if optional:
                 lines.append("可选联动（仅介绍，不自动下载）：\n" + "\n".join("· " + d["title"] for d in optional))
             if incompatible:
@@ -1586,7 +1823,7 @@ class ResourceBrowser(QWidget):
             self.compat_detail.setText("\n\n".join(lines) or "Modrinth 未为这个版本声明额外依赖或冲突。")
             self.compat_toggle.setVisible(True)
 
-        self._async(("compat", slug, gv, loader, version), fetch, done)
+        self._async(("compat", slug, gv, loader, version_key, target_dir), fetch, done)
 
     # ---- 下载 ----
     def _download(self):
@@ -1609,7 +1846,25 @@ class ResourceBrowser(QWidget):
             return
         target = None
         if inst:
-            target = os.path.join(self.get_instance_dir(inst["id"]), self.sub_dir)
+            instance_dir = self.get_instance_dir(inst["id"])
+            if self.project_type == 'datapack':
+                saves_dir = os.path.join(instance_dir, 'saves')
+                try:
+                    worlds = (sorted(name for name in os.listdir(saves_dir)
+                                     if os.path.isfile(os.path.join(saves_dir, name, 'level.dat')))
+                              if os.path.isdir(saves_dir) else [])
+                except OSError:
+                    worlds = []
+                if not worlds:
+                    self.inst_cards_toggle.setText('▾ 此实例还没有存档；先创建世界或选择手动目录')
+                    return
+                world, accepted = QInputDialog.getItem(
+                    self, '选择数据包目标存档', '安装到哪个世界？', worlds, 0, False)
+                if not accepted or not world:
+                    return
+                target = os.path.join(saves_dir, world, 'datapacks')
+            else:
+                target = os.path.join(instance_dir, self.sub_dir)
         elif self.custom_dir:
             target = self.custom_dir
         self.on_download(self._current, self.ver_combo.currentData(),
@@ -1825,7 +2080,11 @@ class ResourceCenter(QWidget):
 
     # ---- 菜单 ----
     def switch_to(self, idx: int):
+        previous = self.stack.currentIndex()
         self.stack.setCurrentIndex(idx)
+        if previous != idx:
+            from ui_anim import reveal
+            reveal(self.stack.currentWidget())
         if idx == 7:
             self._reload_favorites()
         # 切到资源浏览器页且搜索框为空 → 自动默认浏览(打开即显示列表,无需先搜索)
@@ -1841,11 +2100,11 @@ class ResourceCenter(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
         self.home_latest = QLabel(t("LATEST_RELEASE_LATEST_SNAPSHOT"))
-        self.home_latest.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
+        set_style(self.home_latest, lambda: f"font-weight: bold; font-size: 15px; color: {text_color()};")
         self.home_hint = QLabel(
             t("TIP_THE_NEWEST_MC_VERSION_USUALLY_HAS_POOR_MOD_SUPPORT_PREFER_ACTIVE_VERSIONS_LIKE_1_21_1_1_20_1"))
         self.home_hint.setWordWrap(True)
-        self.home_hint.setStyleSheet(hint_style())
+        set_style(self.home_hint, hint_style)
         layout.addWidget(self.home_latest)
         layout.addWidget(self.home_hint)
         layout.addSpacing(14)
@@ -1964,6 +2223,7 @@ class ResourceCenter(QWidget):
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QCursor
         menu = QMenu(self)
+        menu.setStyleSheet(popup_menu_style())
         act_remove = menu.addAction("从收藏夹移除")
         cur = self._fav_folder_list.currentItem().text() if self._fav_folder_list.currentItem() else None
         copy_menu = menu.addMenu("复制到 →")
@@ -1999,6 +2259,7 @@ class ResourceCenter(QWidget):
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QCursor
         menu = QMenu(self)
+        menu.setStyleSheet(popup_menu_style())
         remove_action = menu.addAction(f"取消收藏版本「{version}」")
         if menu.exec_(QCursor.pos()) != remove_action:
             return

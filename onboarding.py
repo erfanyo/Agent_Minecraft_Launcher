@@ -4,7 +4,7 @@
 1. 选择 Minecraft 游戏文件存放位置 —— 可以是全新目录,也可以是已有的
    .minecraft(比如 PCL2 / 官方启动器创建的),启动器会直接读取里面的实例。
    一个用户有多个 .minecraft 时,引导里浏览选择用哪一个即可。
-2. 按需配置 AI 助手(DeepSeek / Ollama / LM Studio / 自定义)。
+2. 按需配置 AI 云端 API。
 """
 import json
 import os
@@ -19,7 +19,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -27,7 +26,7 @@ from PySide6.QtWidgets import (
 
 import paths
 from path_validation import assess_game_path
-from assistant import AISettingsForm
+from assistant import AIQuickSettingsForm
 from settings import load_settings, save_settings
 
 
@@ -139,35 +138,22 @@ class OnboardingDialog(QDialog):
         page_ai = QWidget()
         title2 = QLabel("可选 · 连接 AI 助手")
         title2.setStyleSheet(f"font-size: 16px; font-weight: bold; color: {_text};")
-        desc2 = QLabel("AI 能回答问题、诊断报错、帮你装 Mod；不配置也不影响创建、启动游戏、"
-                       "安装 Mod 或导入整合包。以后随时可在设置的 AI 助手页修改。")
+        desc2 = QLabel("配置云端 AI 接口；配置完成后可在设置中调整高级选项。")
         desc2.setWordWrap(True)
-        self.ai_form = AISettingsForm(self.settings)
-        hint = QLabel("没有 DeepSeek 账号?可以先用 Ollama / LM Studio 本地模型,完全免费离线。\n"
-                      "注意:发图片需要模型本身会\"看图\",本地模型通常不支持,不确定就别勾。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {muted_color()};")
-        builtin_hint = QLabel("💡 也可以直接用「内置本地 AI 模型」:离线可用、无需密钥,"
-                              "首次用到时自动下载(约 500MB,镜像优先)。\n"
-                              "⚠️ 但它很小,只懂直白指令;像\"按功能找 mod\"这类模糊需求它理解不了,"
-                              "甚至会选错工具——想要稳定体验建议配云端(如 DeepSeek)。")
-        builtin_hint.setWordWrap(True)
-        builtin_hint.setStyleSheet(f"color: {muted_color()};")
+        self.ai_form = AIQuickSettingsForm(self.settings)
+        local_limit = QLabel(
+            "本地模型的优势是离线可用，但内置模型较小，主要适合基础问答和简单、明确的指令。"
+            "面对复杂推理、多步规划或模糊描述（例如按功能推荐 Mod）时，可能理解不准或选错工具；"
+            "需要这类能力时建议配置云端模型。")
+        local_limit.setWordWrap(True)
+        local_limit.setStyleSheet(f"color: {_muted};")
 
         p2 = QVBoxLayout(page_ai)
         p2.addWidget(title2)
         p2.addWidget(desc2)
         p2.addSpacing(12)
-        # AI 表单较长,包进滚动区防止裁剪(策略下面的字段被截断)
-        ai_scroll = QScrollArea()
-        ai_scroll.setWidgetResizable(True)
-        ai_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        ai_scroll.setStyleSheet("QScrollArea { background: transparent; }"
-                                "QScrollArea > QWidget > QWidget { background: transparent; }")
-        ai_scroll.setWidget(self.ai_form)
-        p2.addWidget(ai_scroll, 1)
-        p2.addWidget(hint)
-        p2.addWidget(builtin_hint)
+        p2.addWidget(self.ai_form)
+        p2.addWidget(local_limit)
         p2.addStretch()
 
         self.stack = QStackedWidget()
@@ -181,15 +167,11 @@ class OnboardingDialog(QDialog):
         self.prev_btn.clicked.connect(self._prev)
         self.next_btn = QPushButton("下一步")
         self.next_btn.clicked.connect(self._next)
-        skip_btn = QPushButton("先不用 AI，完成")
-        skip_btn.setToolTip("先保存游戏目录,AI 用默认设置,以后在 设置 里改")
-        skip_btn.clicked.connect(self._finish)
         from ui_style import current_color, set_style, card_btn_style
-        for b in (skip_btn, self.prev_btn, self.next_btn):
+        for b in (self.prev_btn, self.next_btn):
             set_style(b, card_btn_style)
 
         btn_row = QHBoxLayout()
-        btn_row.addWidget(skip_btn)
         btn_row.addStretch()
         btn_row.addWidget(self.prev_btn)
         btn_row.addWidget(self.next_btn)

@@ -34,9 +34,9 @@ class ReleaseSelectionTests(unittest.TestCase):
         with patch.object(modrinth.requests, "get", return_value=_Response(rows)):
             return modrinth._find_version("example", "1.21.1", "neoforge", requested)
 
-    def test_automatic_selection_prefers_release_over_newer_beta(self):
+    def test_automatic_selection_accepts_newer_beta(self):
         found = self.find([_version("2.0-beta.1", "beta"), _version("1.9", "release")])
-        self.assertEqual(found["version_number"], "1.9")
+        self.assertEqual(found["version_number"], "2.0-beta.1")
 
     def test_explicit_prerelease_is_still_selectable(self):
         found = self.find([_version("2.0-beta.1", "beta"), _version("1.9", "release")],

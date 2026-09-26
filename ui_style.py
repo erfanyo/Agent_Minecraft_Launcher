@@ -316,6 +316,23 @@ def popup_panel_style() -> str:
             f" border-radius: 12px; background: {current_color('bg1')};")
 
 
+def popup_menu_style() -> str:
+    """Opaque menu colors from the selected app theme on every platform."""
+    bg = current_color('bg1')
+    border = current_color('panel_border')
+    text = text_color()
+    muted = muted_color()
+    selected = current_color('menu_sel')
+    return (
+        f'QMenu {{ background: {bg}; color: {text}; border: 1px solid {border};'
+        ' border-radius: 8px; padding: 5px; }'
+        f'QMenu::item {{ color: {text}; padding: 6px 16px; border-radius: 5px; }}'
+        f'QMenu::item:selected {{ background: {selected}; color: {text}; }}'
+        f'QMenu::item:disabled {{ color: {muted}; }}'
+        f'QMenu::separator {{ height: 1px; background: {border}; margin: 4px 8px; }}'
+    )
+
+
 def apply_card_shadow(widget) -> None:
     """A restrained card shadow on light surfaces, without shadowing text."""
     from PySide6.QtGui import QColor
@@ -352,7 +369,7 @@ def list_style() -> str:
         f"QListWidget {{ background: transparent; border: none; outline: none; }}"
         f"QListWidget::item {{ padding: 8px 10px; margin: 3px 4px;"
         f" border-radius: 8px; color: {text}; }}"
-        f"QListWidget::item:selected {{ background: {sel}; color: #ffffff; }}"
+        f"QListWidget::item:selected {{ background: {sel}; color: {text}; }}"
         f"QListWidget::item:hover {{ background: {hover}; }}"
     )
 
@@ -471,14 +488,13 @@ def inner_style() -> str:
 
 
 def apply_global_dark_palette(app) -> None:
-    """Apply a complete palette for both modes; native light palettes vary on Linux."""
+    """Apply all control colors from the app theme, including checkbox bevels."""
     from PySide6.QtGui import QColor, QPalette
     p = QPalette()
     bg = QColor(current_color('bg1'))
     base = QColor(current_color('bg0'))
     text = QColor(text_color())
     muted = QColor(muted_color())
-    accent = QColor(current_color("accent"))
     p.setColor(QPalette.ColorRole.Window, bg)
     p.setColor(QPalette.ColorRole.WindowText, text)
     p.setColor(QPalette.ColorRole.Base, base)
@@ -486,7 +502,19 @@ def apply_global_dark_palette(app) -> None:
     p.setColor(QPalette.ColorRole.Text, text)
     p.setColor(QPalette.ColorRole.Button, bg)
     p.setColor(QPalette.ColorRole.ButtonText, text)
-    p.setColor(QPalette.ColorRole.Highlight, accent)
+    # Fusion uses these inherited system roles for checkbox/radio indicators.
+    # If the OS is dark while AMCL is light, omitted roles can leave a black box.
+    if is_dark_mode():
+        light, midlight, mid, dark, shadow = ('#535b69', '#424a57', '#343b46', '#181c23', '#11141a')
+    else:
+        light, midlight, mid, dark, shadow = ('#ffffff', '#f2f4f8', '#cfd5e0', '#aeb8c8', '#8692a5')
+    for role, value in ((QPalette.ColorRole.Light, light),
+                        (QPalette.ColorRole.Midlight, midlight),
+                        (QPalette.ColorRole.Mid, mid),
+                        (QPalette.ColorRole.Dark, dark),
+                        (QPalette.ColorRole.Shadow, shadow)):
+        p.setColor(role, QColor(value))
+    p.setColor(QPalette.ColorRole.Highlight, QColor(current_color('accent_bg')))
     p.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     p.setColor(QPalette.ColorRole.ToolTipBase, base)
     p.setColor(QPalette.ColorRole.ToolTipText, text)

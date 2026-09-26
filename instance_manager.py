@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from backup import backup_instance, list_backups, set_ftb_backup_frequency
-from ui_style import card_btn_style, hint_style, set_style
+from ui_style import card_btn_style, hint_style, popup_menu_style, set_style
 
 
 def _plugin_instance_sections(host) -> list:
@@ -815,7 +815,7 @@ class InstanceManagerDialog(QWidget):
             return
         try:
             from modrinth import download_mod, search_mods
-            hits = search_mods(kw.strip(), self._game_version(), None,
+            hits = search_mods(kw.strip(), None, None,
                                limit=12, project_type=ptype)
         except Exception as e:
             QMessageBox.warning(self, "搜索失败", str(e))
@@ -841,8 +841,7 @@ class InstanceManagerDialog(QWidget):
             QMessageBox.information(self, "完成", f"已下载到:\n{dest}\n{filename}")
             self._refresh_pack_list(ptype)
         else:
-            QMessageBox.warning(self, "没有版本",
-                                f"该项目没有 {self._game_version()} 的可用版本")
+            QMessageBox.warning(self, "没有版本", "该项目没有可下载的文件版本")
 
     def _game_version(self) -> str:
         return self._inst_base
@@ -1119,6 +1118,7 @@ class InstanceManagerDialog(QWidget):
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(btn)
+        set_style(menu, popup_menu_style)
         # 正式方案:bridge-mod(本地指令口)
         menu.addAction("一键配置 bridge-mod(本地指令口,推荐)", self._one_click_bridge)
         # 临时方案:RCON(需对局域网开放)

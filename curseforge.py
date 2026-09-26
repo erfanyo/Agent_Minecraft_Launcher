@@ -5,6 +5,7 @@
 资源中心当前接入 Minecraft Mod（classId=6）。
 """
 import os
+import re
 
 import requests
 
@@ -35,12 +36,16 @@ def _headers() -> dict:
     return {"Accept": "application/json", "x-api-key": key}
 
 
-def _get(path: str, params=None):
+def _get_payload(path: str, params=None):
     response = requests.get(BASE + path, params=params, headers=_headers(), timeout=25)
     if response.status_code in (401, 403):
         raise CurseForgeError("CurseForge API Key 无效、未获授权或没有访问权限")
     response.raise_for_status()
-    return response.json().get("data")
+    return response.json()
+
+
+def _get(path: str, params=None):
+    return _get_payload(path, params).get("data")
 
 
 def _normalise(project: dict) -> dict:
@@ -78,17 +83,55 @@ def get_mod(project_id: int) -> dict:
     return _normalise(_get(f"/mods/{int(project_id)}") or {})
 
 
-def list_mod_files(project_id: int, game_version: str | None = None) -> list[dict]:
-    files = _get(f"/mods/{int(project_id)}/files", {"pageSize": 50}) or []
+def list_mod_files(project_id: int, game_version: str | None = None,
+                   max_files: int = 50) -> list[dict]:
+    files = []
+    index = 0
+    while index < max_files:
+        page_size = min(50, max_files - index)
+        page = _get(f"/mods/{int(project_id)}/files",
+                    {"index": index, "pageSize": page_size}) or []
+        files.extend(page)
+        index += len(page)
+        if len(page) < page_size:
+            break
     out = []
+    known_loaders = {'forge', 'neoforge', 'fabric', 'quilt', 'rift', 'liteloader'}
+    minecraft_version = re.compile(r'^(?:\d+\.\d+(?:\.[\w-]+)*|\d{2}w\d{2}[a-z])$', re.I)
     for file in files:
-        versions = file.get("gameVersions") or []
+        versions = [str(tag).strip() for tag in file.get("gameVersions") or []]
         if game_version and game_version not in versions:
             continue
         filename = file.get("fileName") or f"curseforge-{file.get('id')}.jar"
         out.append({"file_id": file.get("id"), "filename": filename,
-                    "label": file.get("displayName") or filename})
+                    "label": file.get("displayName") or filename,
+                    "game_versions": [tag for tag in versions if minecraft_version.fullmatch(tag)],
+                    "loaders": [tag.lower() for tag in versions if tag.lower() in known_loaders]})
     return out
+
+
+def list_mod_file_compatibility(project_id: int, max_files: int = 500) -> dict:
+    """Read file tags across pages for the detail panel, without disk caching."""
+    known_loaders = {'forge', 'neoforge', 'fabric', 'quilt', 'rift', 'liteloader'}
+    minecraft_version = re.compile(r'^(?:\d+\.\d+(?:\.[\w-]+)*|\d{2}w\d{2}[a-z])$', re.I)
+    records = []
+    index = 0
+    total = None
+    page_size = 50
+    while index < max_files:
+        payload = _get_payload(f"/mods/{int(project_id)}/files",
+                               {"index": index, "pageSize": page_size})
+        files = payload.get('data') or []
+        total = (payload.get('pagination') or {}).get('totalCount', total)
+        for file in files:
+            tags = [str(tag).strip() for tag in file.get('gameVersions') or []]
+            loaders = [tag.lower() for tag in tags if tag.lower() in known_loaders]
+            game_versions = [tag for tag in tags if minecraft_version.fullmatch(tag)]
+            records.append({'loaders': loaders, 'game_versions': game_versions})
+        index += len(files)
+        if not files or (total is not None and index >= total) or len(files) < page_size:
+            break
+    return {'versions': records, 'partial': total is not None and index < total}
 
 
 def download_mod(project_id: int, file_id: int, target_dir: str, progress_callback=None) -> str:

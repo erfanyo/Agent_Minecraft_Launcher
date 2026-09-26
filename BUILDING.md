@@ -27,7 +27,19 @@ py -V:3.14 -m venv .venv-release
 ```
 
 脚本会依次运行完整测试、准备并校验 llama.cpp 与 bridge-mod、构建 exe、实际启动成品做
-无界面检查，并生成 `dist/SHA256SUMS.txt`。任何一步失败都不会被当成可发布结果。
+无界面检查，并生成两个 Windows 版本及 `dist/SHA256SUMS.txt`。本地 AI ZIP 会自动下载
+并 SHA256 校验内置模型；因此首次构建这个变体需要额外下载约 530 MB。
+
+Windows 发布有两个变体：
+
+- `AgentMinecraftLauncher.exe`：标准版，单文件；首次运行时由启动器在 exe 旁创建 `AMCL`。
+- `AgentMinecraftLauncher-Windows-LocalAI.zip`：解压后包含 exe、`AMCL/models/` 下已校验的
+  内置模型，以及 `CreateDesktopShortcut.bat`。运行 BAT 会在桌面创建快捷方式。快捷方式指向
+  解压目录的绝对位置；移动目录后再次运行 BAT 更新快捷方式。压缩包只包含这个模型文件，
+  不打包开发机的配置、密钥或其他 AMCL 内容。
+
+Windows 构建流程和包内路径约定记录在本文档，后续参与项目的 agent 应先读本节和
+[`DISTRIBUTION.md`](DISTRIBUTION.md) 及 `tools/build_local_ai_bundle.py`，然后再改发布流程。
 
 ## 正式签名包
 
@@ -42,7 +54,8 @@ py -V:3.14 -m venv .venv-release
 
 - Windows、macOS、Linux：源码导入检查。
 - Windows：完整自动测试和 Python 文件编译检查。
-- Windows 手动任务：使用 Python 3.14.7 构建单文件 exe，并实际启动成品验证内置资源。
+- Windows 手动任务：使用 Python 3.14.7 构建单文件 exe 和预装本地 AI ZIP，并实际启动
+  标准版成品验证内置资源；模型由包生成脚本单独校验。
 - Linux 手动任务：在 Ubuntu 22.04 上构建 `onedir`，实际启动成品验证内置资源，
   然后上传 `AgentMinecraftLauncher-linux-x86_64.tar.gz` 和 SHA256 文件。
 

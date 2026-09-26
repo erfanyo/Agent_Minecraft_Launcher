@@ -14,7 +14,7 @@ import time
 import base64
 
 PLUGIN_ID = "lan_bridge"
-PLUGIN_NAME = "联机 CLI 桥接"
+PLUGIN_NAME = "EasyTier兼容"
 PLUGIN_DESCRIPTION = "下载或选择 EasyTier 创建联机网络，可与使用 EasyTier 的其他启动器及独立客户端互联。"
 PLUGIN_VERSION = "0.3.0"
 PLUGIN_API_VERSION = 1
@@ -430,7 +430,7 @@ def register(api):
         page.setStyleSheet('QWidget#easyTierSettingsPage { background: transparent; }')
         layout = QVBoxLayout(page)
         layout.setContentsMargins(16, 12, 16, 12)
-        layout.addWidget(QLabel("联机 CLI 工具（EasyTier）"))
+        layout.addWidget(QLabel("EasyTier兼容"))
         info = QLabel("可自动下载官方核心到 AMCL 文件夹，或选择已有程序。下载不会启动联机；启动/停止时可能弹出 UAC 授权，停止只影响本插件启动的进程。")
         info.setWordWrap(True)
         layout.addWidget(info)

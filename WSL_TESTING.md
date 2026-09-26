@@ -54,8 +54,14 @@ sudo apt update
 sudo apt install -y libegl1 libgl1 libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0
 ```
 
-AMCL 在 WSLg 中会自动使用 X11 软件渲染，避免 Wayland 下只出现透明或空白窗口。
+AMCL 在提供 XWayland 的 Linux 会话中优先用 X11，以便浮动 AI 背景按主窗口相对位置更新；
+没有 XWayland 时退回 Wayland。WSLg 还会启用软件渲染，避免透明或空白窗口。
+若显式设置 `QT_QPA_PLATFORM=wayland`，浮窗改用系统标题栏以保证能移动；Wayland 不提供
+跨顶层窗口的可靠坐标，需要位置联动背景时应使用 `QT_QPA_PLATFORM=xcb`。
 如果测试者预先设置了 `QT_QPA_PLATFORM` 或 `QT_OPENGL`，启动器会尊重已有设置。
 
 验收时至少检查首次启动、设置保存、版本列表、Java 下载、原版实例启动，以及关闭后
-再次打开。测试数据默认落在解压目录旁；整个 `~/amcl-package-test` 可在测试后删除。
+再次打开。还要把 AI 助手浮出，在顶部空白处拖动窗口，分别拖到主窗口左、右边缘
+松开检查停靠，并检查标题栏按钮也能停靠；WSLg 的 X11 路径使用鼠标位移移动浮窗。
+测试数据默认落在解压目录旁；整个
+`~/amcl-package-test` 可在测试后删除。

@@ -168,5 +168,7 @@ class InstanceInstallService:
         if filename:
             status(f"{kind} Mod 已装:{filename}")
         else:
-            status(f"{kind} Mod {slug} 暂无 {game_version}+{loader} 版本,已跳过")
+            raise RuntimeError(
+                f"{kind} Mod {slug} 没有适用于 {game_version}+{loader} 的可下载文件；"
+                "请更换 Mod 版本或取消该项后重试")
         return filename

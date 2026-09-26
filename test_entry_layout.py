@@ -10,6 +10,7 @@
 """
 import os
 import unittest
+from i18n import t
 
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -69,9 +70,9 @@ class EntryLayoutTests(unittest.TestCase):
     def test_client_mode_labels(self):
         home = self._home()
         home._set_client_mode()
-        self.assertIn('导入', home.import_btn.text())      # 导入整合包 / 智能导入
-        self.assertIn('一键配置', home.config_btn.text())
-        self.assertEqual(home.launch_btn.text(), '启动游戏')
+        self.assertEqual(t('VERSION_HOME_IMPORT_MODPACK'), home.import_btn.text())
+        self.assertEqual(t('VERSION_HOME_ONE_CLICK'), home.config_btn.text())
+        self.assertEqual(home.launch_btn.text(), t('启动游戏', 'Launch Game'))
 
     def test_server_mode_labels(self):
         home = self._home()

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -73,8 +74,9 @@ from assistant_ui import (
     SendWithRing,
 )
 from chat_view import ChatEntry, ChatView, coerce_entries
-from ui_style import set_style, list_style, muted_color, accent_color, success_color, warning_color, danger_color, text_color, current_color, tab_style
+from ui_style import set_style, list_style, muted_color, accent_color, success_color, warning_color, danger_color, text_color, current_color, tab_style, popup_menu_style
 from ui_background import BackgroundWidget
+from ui_switch import ToggleSwitch, setting_switch_row
 from settings import save_settings
 
 # 本地推理(§8.1 拍板模型):接入路由后才启用,懒加载
@@ -979,6 +981,7 @@ _CLOUD_PROVIDERS = [
     ("硅基流动(国内速度快)", "siliconflow"),
     ("智谱 BigModel（GLM-4.7-Flash）", "zhipu"),
     ("通义千问(国内)", "dashscope"),
+    ("小米 MiMo API(按量计费)", "mimo"),
     ("自定义(自己填接口)", "custom"),
 ]
 # 本地模型类型(下拉:标签, 值)
@@ -1103,10 +1106,9 @@ class AISettingsForm(QWidget):
         b_row = QHBoxLayout(self.local_builtin_row)
         b_row.setContentsMargins(0, 0, 0, 0)
         self.local_status = QLabel("")
-        self.local_auto_dl = QCheckBox("首次用到且未下载时自动下载")
-        self.local_auto_dl.setChecked(True)
+        self.local_auto_dl = ToggleSwitch(True)
         b_row.addWidget(self.local_status, 1)
-        b_row.addWidget(self.local_auto_dl)
+        b_row.addWidget(setting_switch_row("需要时自动下载", self.local_auto_dl))
         # Ollama / LM Studio 专属:服务地址 + 模型名
         self.local_server_row = QWidget()
         s_form = QFormLayout(self.local_server_row)
@@ -1151,11 +1153,11 @@ class AISettingsForm(QWidget):
         self.context_window.setSingleStep(1024)
         self.context_window.setSuffix(" tokens")
         self.context_window.setToolTip("模型上下文窗口上限,用于对话框里的占用圆环显示")
-        self.vision_check = QCheckBox("允许给 AI 发图片(需要所选模型本身支持看图)")
+        self.vision_check = ToggleSwitch(False)
         self.vision_check.setToolTip(
             "图片功能不是想开就开:要看你选的模型本身会不会\"看图\"(多模态)。\n"
             "不确定的话保持关闭最稳妥;勾了但模型不支持,发图片时会报错。")
-        self.ai_in_game = QCheckBox("开启游戏内 AI(玩家在游戏里敲 /ai 问启动器 AI)")
+        self.ai_in_game = ToggleSwitch(False)
         self.ai_in_game.setToolTip(
             "玩家在游戏里敲 /ai <描述> 问启动器 AI,不用切出游戏。\n"
             "开启后走启动器 AI 的路由(本地/云端/混合),策略跟随启动器选的 ai_strategy\n"
@@ -1168,12 +1170,14 @@ class AISettingsForm(QWidget):
         cf.addRow("操作确认:", self.confirmation_mode)
         cf.addRow("文件权限:", self.permission)
         cf.addRow("上下文窗口:", self.context_window)
-        cf.addRow("图片输入:", self.vision_check)
+        cf.addRow("图片输入:", setting_switch_row("允许发送图片", self.vision_check,
+                                             "需要当前模型支持看图"))
 
         # ---------- 游戏内 AI(独立成组,方便理解/测试) ----------
         ai_group = QGroupBox("游戏内 AI")
         av = QVBoxLayout(ai_group)
-        av.addWidget(self.ai_in_game)
+        av.addWidget(setting_switch_row("开启游戏内 AI", self.ai_in_game,
+                                        "在游戏聊天中输入 /ai 调用启动器 AI"))
         ai_explain = QLabel(
             "开启后,玩家在游戏里敲 /ai(如「/ai 把天气改为雨天」),\n"
             "启动器 AI 会按所选策略处理(云端/混合能真执行,结果回显到游戏聊天窗;本地为纯对话)。\n"
@@ -1372,6 +1376,9 @@ class AISettingsForm(QWidget):
         elif idx == "dashscope":
             self.cloud_base_url.setText("https://dashscope.aliyuncs.com/compatible-mode/v1")
             self.cloud_model.setText("qwen-plus")
+        elif idx == "mimo":
+            self.cloud_base_url.setText("https://api.xiaomimimo.com/v1")
+            self.cloud_model.setText("mimo-v2.6-pro")
         # custom:保留用户输入
 
     def _switch_cloud_provider(self):
@@ -1484,6 +1491,7 @@ class AISettingsForm(QWidget):
             api_key = ""
             model = LOCAL_MODEL_ID if mode == "builtin" else self.local_model.text().strip()
         return {
+            "ai_configured": True,
             "ai_source": source,
             "ai_strategy": self._current_strategy(),
             # 云端组
@@ -1516,44 +1524,151 @@ class AISettingsForm(QWidget):
         }
 
 
+class AIQuickSettingsForm(QWidget):
+    """Small API-only setup shared by first-run onboarding and the AI dock."""
+
+    def __init__(self, settings: dict, parent=None):
+        super().__init__(parent)
+        self.settings = dict(settings)
+        self.provider = QComboBox(self)
+        for label, value in _CLOUD_PROVIDERS:
+            self.provider.addItem(label, value)
+        self.base_url = QLineEdit(self)
+        self.api_key = QLineEdit(self)
+        self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.model = QLineEdit(self)
+        self.remote_models = QComboBox(self)
+        self.remote_models.addItem("获取到的模型…", None)
+        self.remote_models.hide()
+        self.fetch_models_btn = QPushButton("获取模型", self)
+        self.fetch_models_btn.setToolTip("使用当前地址和密钥查询模型列表，不发送推理请求")
+        self._keys = dict(self.settings.get("ai_cloud_api_keys") or {})
+        self.provider.setCurrentIndex(max(0, self.provider.findData(
+            self.settings.get("ai_cloud_provider", "deepseek"))))
+        self.base_url.setText(self.settings.get("ai_cloud_base_url", "https://api.deepseek.com/v1"))
+        self.model.setText(self.settings.get("ai_cloud_model", "deepseek-chat"))
+        provider = self.provider.currentData()
+        self._active_provider = provider
+        self._keys.setdefault(provider, self.settings.get("ai_cloud_api_key", ""))
+        self.api_key.setText(self._keys.get(provider, ""))
+        self.provider.currentIndexChanged.connect(self._provider_changed)
+        self.fetch_models_btn.clicked.connect(self._fetch_cloud_models)
+        self.remote_models.activated.connect(self._choose_remote_model)
+        self.base_url.textChanged.connect(self.remote_models.hide)
+        self.api_key.textChanged.connect(self.remote_models.hide)
+        form = QFormLayout(self)
+        form.addRow("服务商", self.provider)
+        form.addRow("API 地址", self.base_url)
+        form.addRow("API 密钥", self.api_key)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.model, 1)
+        model_row.addWidget(self.fetch_models_btn)
+        form.addRow("模型", model_row)
+        form.addRow("", self.remote_models)
+        if self.provider.currentData() == "mimo":
+            self.api_key.setToolTip("填写 Xiaomi MiMo 按量 API Key（sk-）；Token Plan 额度不适用于本启动器。")
+
+    def _provider_changed(self, *_):
+        old = getattr(self, "_active_provider", None)
+        if old is not None:
+            self._keys[old] = self.api_key.text().strip()
+        provider = self.provider.currentData()
+        self._active_provider = provider
+        self.api_key.setText(self._keys.get(provider, ""))
+        defaults = {
+            "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat"),
+            "mimo": ("https://api.xiaomimimo.com/v1", "mimo-v2.6-pro"),
+            "openrouter": ("https://openrouter.ai/api/v1", "openrouter/free"),
+            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.7-flash"),
+            "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-20b"),
+            "cerebras": ("https://api.cerebras.ai/v1", "gpt-oss-120b"),
+            "siliconflow": ("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
+            "zhipu": ("https://open.bigmodel.cn/api/paas/v4", "glm-4.7-flash"),
+            "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+        }
+        if provider in defaults:
+            self.base_url.setText(defaults[provider][0])
+            self.model.setText(defaults[provider][1])
+        self.api_key.setToolTip(
+            "填写 Xiaomi MiMo 按量 API Key（sk-）；Token Plan 额度不适用于本启动器。"
+            if provider == "mimo" else "")
+        self.remote_models.hide()
+
+    def _choose_remote_model(self, index):
+        model = self.remote_models.itemData(index)
+        if model:
+            self.model.setText(model)
+
+    def _fetch_cloud_models(self):
+        from ai_model_list import fetch_models
+        from background_tasks import BackgroundTask
+
+        if getattr(self, "_models_task", None) and self._models_task.is_running:
+            return
+        captured = (self.base_url.text().strip(), self.api_key.text().strip())
+        self.fetch_models_btn.setEnabled(False)
+        self.fetch_models_btn.setText("正在获取…")
+        task = BackgroundTask(lambda _current: fetch_models(*captured), self)
+        self._models_task = task
+
+        def still_current():
+            return captured == (self.base_url.text().strip(), self.api_key.text().strip())
+
+        def success(names):
+            if not still_current():
+                return
+            self.remote_models.clear()
+            self.remote_models.addItem("选择模型（列表不保证全部可调用）", None)
+            for name in names:
+                self.remote_models.addItem(name, name)
+            self.remote_models.show()
+
+        def failure(error):
+            if still_current():
+                QMessageBox.information(self, "获取模型", str(error))
+
+        def finished():
+            self.fetch_models_btn.setEnabled(True)
+            self.fetch_models_btn.setText("获取模型")
+
+        task.succeeded.connect(success)
+        task.failed.connect(failure)
+        task.finished.connect(finished)
+        task.start()
+
+    def values(self):
+        provider = self.provider.currentData()
+        self._keys[provider] = self.api_key.text().strip()
+        return {
+            "ai_configured": bool(self.api_key.text().strip()),
+            "ai_cloud_provider": provider,
+            "ai_cloud_base_url": self.base_url.text().strip(),
+            "ai_cloud_api_key": self.api_key.text().strip(),
+            "ai_cloud_api_keys": dict(self._keys),
+            "ai_cloud_model": self.model.text().strip(),
+            "ai_source": "cloud",
+            "ai_strategy": "cloud_first",
+            "ai_provider": provider,
+            "ai_base_url": self.base_url.text().strip(),
+            "ai_api_key": self.api_key.text().strip(),
+            "ai_model": self.model.text().strip(),
+        }
+
+
 class AISettingsDialog(QDialog):
-    """AI 服务设置:服务商 / 接口地址 / 密钥 / 模型"""
+    """Quick cloud API setup; advanced routing and permissions stay in Settings."""
 
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("AI 助手设置")
         self.setMinimumWidth(380)
         self.settings = dict(settings)
-
-        self.form = AISettingsForm(self.settings, self)
-        # 兼容旧用法:直接访问 dlg.provider / dlg.base_url / dlg.permission 等
-        # (现在分云端/本地两组,旧别名指向云端服务商那组)
-        self.provider = self.form.cloud_provider
-        self.base_url = self.form.cloud_base_url
-        self.api_key = self.form.cloud_api_key
-        self.model = self.form.cloud_model
-        self.permission = self.form.permission
-        self.context_window = self.form.context_window
-
-        hint = QLabel(
-            "怎么选:\n"
-            "· 云端(DeepSeek / OpenRouter / 硅基流动 / 智谱 / 通义):去官网注册拿密钥,填右上(DeepSeek 最便宜);\n"
-            "· 本地(内置本地模型 / Ollama / LM Studio):离线可用;内置模型约 500MB 首次用自动下载;\n"
-            "· ⚠️ 本地是小模型:只擅长直白指令,理解不了模糊描述(如\"按功能找 mod/我要个能加速熔炉的东西\"),"
-            "甚至会选错工具;这类要靠云端大模型,想要稳定体验请配云端;\n"
-            "· 发图片:和用哪家无关,取决于所选模型本身会不会\"看图\"(内置本地模型不支持,自动关闭);\n"
-            "文件权限：只读只能查看；日常可写允许装 Mod、改设置；工作区可写还允许生成插件和改源码。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {muted_color()};")
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.form = AIQuickSettingsForm(settings, self)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save)
         buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-
         layout = QVBoxLayout(self)
         layout.addWidget(self.form)
-        layout.addWidget(hint)
+        buttons.setToolTip("MiMo Token Plan 密钥不适用于本启动器。")
         layout.addWidget(buttons)
 
     def accept(self):
@@ -1627,6 +1742,7 @@ class _DockHeader(BackgroundWidget):
         self.dock = dock
         self.tabs = tabs
         self._system_move_active = False
+        self._drag_offset = None
         row = QHBoxLayout(self)
         row.setContentsMargins(6, 3, 4, 3)
         row.setSpacing(3)
@@ -1684,14 +1800,24 @@ class _DockHeader(BackgroundWidget):
 
     def update_floating_state(self, floating):
         self.float_button.setToolTip(
-            '点击停靠；或按住拖到启动器窗口后松开；双击顶部空白处停靠'
+            '点击停靠；拖到主窗口左/右边缘也可停靠；双击顶部空白处停靠'
             if floating else '浮出 AI 助手')
 
+    @staticmethod
+    def _manual_move_on_xcb():
+        return QApplication.platformName() == "xcb"
+
     def mousePressEvent(self, event):
-        # Floating QDockWidget's own drag uses mouse grabbing, which Wayland
-        # rejects for ordinary windows. The return button handles re-docking.
+        # Qt's system move is required on Wayland. On X11/XWayland, some window
+        # managers accept the request but never move the undecorated dock, so
+        # move it from the pointer delta instead.
         self._system_move_active = False
+        self._drag_offset = None
         if event.button() == Qt.MouseButton.LeftButton and self.dock.isFloating():
+            if self._manual_move_on_xcb():
+                self._drag_offset = event.globalPosition().toPoint() - self.dock.pos()
+                event.accept()
+                return
             window = self.dock.windowHandle()
             self._system_move_active = bool(window is not None and window.startSystemMove())
             # Do not pass the same press back to QDockWidget, even if the
@@ -1702,17 +1828,48 @@ class _DockHeader(BackgroundWidget):
         event.ignore()
 
     def mouseMoveEvent(self, event):
+        if self._drag_offset is not None:
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                self.dock.move(event.globalPosition().toPoint() - self._drag_offset)
+                sync_wallpaper = getattr(self.dock, "_sync_wallpaper_view", None)
+                if sync_wallpaper is not None:
+                    sync_wallpaper()
+            event.accept()
+            return
         if self._system_move_active:
             event.accept()
             return
         event.ignore()
 
     def mouseReleaseEvent(self, event):
+        if self._drag_offset is not None:
+            self._drag_offset = None
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._snap_back_to_main(event.globalPosition().toPoint())
+            event.accept()
+            return
         if self._system_move_active:
             self._system_move_active = False
             event.accept()
             return
         event.ignore()
+
+    def _snap_back_to_main(self, global_pos):
+        main = self.dock.parentWidget()
+        if main is None or not main.isVisible() or not hasattr(main, "addDockWidget"):
+            return
+        bounds = main.frameGeometry()
+        if not bounds.top() <= global_pos.y() <= bounds.bottom():
+            return
+        left = abs(global_pos.x() - bounds.left())
+        right = abs(global_pos.x() - bounds.right())
+        if min(left, right) > 36:
+            return
+        area = (Qt.DockWidgetArea.LeftDockWidgetArea if left <= right
+                else Qt.DockWidgetArea.RightDockWidgetArea)
+        main.addDockWidget(area, self.dock)
+        self.dock.setFloating(False)
+        self.dock.show()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.dock.isFloating():
@@ -1743,6 +1900,9 @@ class _FloatingDockResizeGrip(QWidget):
 
 class AIChatDock(QDockWidget):
     """右侧停靠的 AI 对话栏"""
+
+    archive_changed = Signal()
+    conversation_changed = Signal()
 
     def __init__(self, parent, settings: dict):
         super().__init__("AI 助手", parent)
@@ -1776,6 +1936,8 @@ class AIChatDock(QDockWidget):
 
         self.history = ChatView()
         self.history.anchorClicked.connect(self._on_anchor)  # 自己处理链接(展开工具日志/开外部链接)
+        self.history.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history.customContextMenuRequested.connect(self._show_history_menu)
         self.input = _ChatInput()
         self.input.setPlaceholderText("问 AI 任何问题…(Enter 发送, Shift+Enter 换行;Ctrl+V 可粘贴图片)")
         self.input.returnPressed.connect(self.send)
@@ -1790,32 +1952,32 @@ class AIChatDock(QDockWidget):
         self.strategy_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.strategy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._rebuild_strategy_menu()
-        self.strategy_btn.setStyleSheet(
+        set_style(self.strategy_btn, lambda:
             f"QToolButton {{ color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
             f" border-radius: 6px; padding: 3px 8px; background: transparent; }}"
-            f"QToolButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
+            f"QToolButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         skills_btn = QPushButton("技能与可选功能…")
         skills_btn.setToolTip("管理 AI 技能、运行辅助和实验性工作流")
         skills_btn.clicked.connect(self.open_skill_manager)
-        skills_btn.setStyleSheet(
+        set_style(skills_btn, lambda:
             f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
             f" border-radius: 6px; padding: 3px 8px; }}"
-            f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
+            f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         undo_btn = QPushButton("撤销设置")
         undo_btn.setToolTip("撤销最近一次由 AI 完成的设置修改；Mod 安装请使用自动备份恢复")
         undo_btn.clicked.connect(self._undo_last_setting)
-        undo_btn.setStyleSheet(
+        set_style(undo_btn, lambda:
             f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
             f" border-radius: 6px; padding: 3px 8px; }}"
-            f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
+            f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         action_log_btn = QPushButton("操作记录")
         action_log_btn.setToolTip("查看 AI 修改了什么，以及可用的回退信息。")
         action_log_btn.setToolTip("查看 AI 已确认、取消或失败的操作，以及是否可回退")
         action_log_btn.clicked.connect(self._show_action_history)
-        action_log_btn.setStyleSheet(
+        set_style(action_log_btn, lambda:
             f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
             f" border-radius: 6px; padding: 3px 8px; }}"
-            f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
+            f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         top_row = QHBoxLayout()
         top_row.setContentsMargins(2, 0, 2, 0)
         top_row.addWidget(self.strategy_btn)
@@ -1833,10 +1995,10 @@ class AIChatDock(QDockWidget):
         perm_btn.setToolTip("只读：只能查看\n日常可写：安装 Mod、改游戏和启动器设置\n"
                             "工作区可写：还允许生成插件、修改源码")
         perm_btn.clicked.connect(self._cycle_permission)
-        perm_btn.setStyleSheet(
+        set_style(perm_btn, lambda:
             f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
             f" border-radius: 6px; padding: 3px 8px; }}"
-            f"QPushButton:hover {{ color: #ffffff; border-color: {accent_color()}; }}")
+            f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         self.perm_label = QLabel("")
         perm_row = QHBoxLayout()
         perm_row.setContentsMargins(2, 0, 2, 0)
@@ -1864,11 +2026,17 @@ class AIChatDock(QDockWidget):
         task_row.setContentsMargins(0, 0, 0, 0)
         task_row.setSpacing(4)
         task_row.addStretch()
+        self.quote_button = QPushButton('引用选中内容')
+        self.quote_button.setToolTip('选中上方对话的一段文字，添加注释后放入输入框')
+        self.quote_button.clicked.connect(self._quote_selected_conversation)
+        self.quote_button.hide()
+        task_row.addWidget(self.quote_button)
         task_row.addWidget(stop_run)
         task_row.addWidget(run_records)
         row.addLayout(task_row)
         # 局部紧凑样式，不受主窗口大按钮的最小宽度和内边距影响。
-        for button in (skills_btn, undo_btn, action_log_btn, perm_btn, stop_run, run_records):
+        for button in (skills_btn, undo_btn, action_log_btn, perm_btn,
+                       self.quote_button, stop_run, run_records):
             button.setStyleSheet(
                 f"QPushButton {{ background: transparent; color: {muted_color()};"
                 f" border: 1px solid {current_color('btn_border')}; border-radius: 5px;"
@@ -1899,10 +2067,35 @@ class AIChatDock(QDockWidget):
         set_style(self.tabs, tab_style)   # 透明标签条/面板,壁纸透出
         # Tab0: 聊天(历史+权限+图片+输入)
         chat_tab = QWidget()
+        self._chat_tab = chat_tab
+        self._focus_mode = False
         chat_lay = QVBoxLayout(chat_tab)
         chat_lay.setContentsMargins(8, 4, 8, 4)
         chat_lay.setSpacing(6)
+        self.focus_target_label = QLabel()
+        self.focus_target_label.setWordWrap(True)
+        set_style(self.focus_target_label, lambda:
+                  f'color: {muted_color()}; font-size: 12px; padding: 3px 5px;')
+        self.focus_target_label.hide()
+        chat_lay.addWidget(self.focus_target_label)
         chat_lay.addLayout(top_row)            # 顶部:技能管理入口
+        self.focus_welcome = QWidget()
+        welcome_lay = QVBoxLayout(self.focus_welcome)
+        welcome_lay.addStretch()
+        welcome_title = QLabel('你想让我们在 AMCL 中构建什么？')
+        welcome_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_title.setWordWrap(True)
+        set_style(welcome_title, lambda:
+                  f'color: {text_color()}; font-size: 25px; font-weight: bold;')
+        welcome_lay.addWidget(welcome_title)
+        welcome_hint = QLabel('可以从安装 Mod、整理实例或分析崩溃开始。')
+        welcome_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_hint.setWordWrap(True)
+        set_style(welcome_hint, lambda: f'color: {muted_color()}; font-size: 13px;')
+        welcome_lay.addWidget(welcome_hint)
+        welcome_lay.addStretch()
+        self.focus_welcome.hide()
+        chat_lay.addWidget(self.focus_welcome, 1)
         chat_lay.addWidget(self.history, 1)    # 历史区上下弹性伸缩
         chat_lay.addLayout(perm_row)
         chat_lay.addLayout(audit_row)
@@ -1948,6 +2141,8 @@ class AIChatDock(QDockWidget):
         self._tool_expand_levels = {}  # 工具折叠级别:0摘要 / 1参数+结果摘要 / 2完整结果
         self._expanded_ai = set()      # 已展开的长 AI 回答(按 _entries 中的索引)
         self._chat_messages = []       # 真正的对话历史(喂给 LLM 的消息,不含 system)
+        self._session_instance_id = ''  # 会话首次提问时的目标实例，供左侧归档分组
+        self._session_dirty = False
         self._local_engine = None      # 本地推理引擎(懒加载单例,见 _get_local_engine)
         self._local_downloading = False   # 本地模型下载中标志
         self._local_preloading = False    # 本地模型预热中标志(§8.2 冷启动预加载)
@@ -1973,17 +2168,52 @@ class AIChatDock(QDockWidget):
         if self._dock_header is not None:
             self._dock_header.update_floating_state(floating)
             self._dock_header._system_move_active = False
-        # The custom title bar moves the floating window via the compositor.
-        # Leave QDockWidgetMovable only while docked, otherwise Qt also tries
-        # its own mouse-grab drag on Wayland. Re-docking remains on the button.
+            self._dock_header._drag_offset = None
+        # On Wayland, switch the floating dock to native window decorations
+        # after the initial undocking drag ends. A custom QDockWidget title bar
+        # suppresses those decorations, and a second drag may be accepted by
+        # startSystemMove without actually moving the independent window.
+        wayland = self._is_wayland()
         movable = QDockWidget.DockWidgetFeature.DockWidgetMovable
         features = self.features()
-        wanted = features & ~movable if floating else features | movable
+        wanted = features & ~movable if floating and not wayland else features | movable
         if wanted != features:
             self.setFeatures(wanted)
+        if wayland:
+            QTimer.singleShot(0, self._sync_wayland_titlebar)
         self._position_left_resize_grips()
         # Qt may finish changing QDockWidget's native window after this signal.
         QTimer.singleShot(0, self._position_left_resize_grips)
+        # Linux window managers can publish the floating window's global
+        # position one event-loop turn after topLevelChanged.
+        sync_wallpaper = getattr(self, "_sync_wallpaper_view", None)
+        if sync_wallpaper is not None:
+            QTimer.singleShot(0, sync_wallpaper)
+
+    @staticmethod
+    def _is_wayland():
+        return QApplication.platformName().startswith("wayland")
+
+    def _sync_wayland_titlebar(self):
+        if not self._is_wayland():
+            return
+        header = getattr(self, "_dock_header", None)
+        container = getattr(self, "_container", None)
+        layout = container.layout() if container is not None else None
+        if header is None or layout is None:
+            return
+        if self.isFloating():
+            if QApplication.mouseButtons() & Qt.MouseButton.LeftButton:
+                QTimer.singleShot(50, self._sync_wayland_titlebar)
+                return
+            if self.titleBarWidget() is header:
+                self.setTitleBarWidget(None)
+                layout.insertWidget(0, header)
+                header.setToolTip("拖动上方系统标题栏可移动 AI 浮窗")
+        elif self.titleBarWidget() is not header:
+            layout.removeWidget(header)
+            header.setToolTip("")
+            self.setTitleBarWidget(header)
 
     def _position_left_resize_grips(self):
         grips = getattr(self, '_left_resize_grips', ())
@@ -2031,27 +2261,96 @@ class AIChatDock(QDockWidget):
         ox = getattr(main, "_wallpaper_ox", 0)
         oy = getattr(main, "_wallpaper_oy", 0)
         mask = getattr(main, "_wallpaper_mask", 0.6)
-        central = getattr(main, "_background", None)
+        central = (getattr(main, 'ai_focus_sidebar', None)
+                   if getattr(main, '_ai_focus_mode', False)
+                   else getattr(main, '_background', None))
         if central is None:
             return
         dg = c.mapToGlobal(c.rect().topLeft())
         cg = central.mapToGlobal(central.rect().topLeft())
         dx = dg.x() - cg.x()
         dy = dg.y() - cg.y()
-        c.set_shared_view(scaled, ox + dx, oy + dy, mask)
+        floating = self.isFloating()
+        c.set_shared_view(scaled, ox + dx, oy + dy, mask, wrap=floating)
         if header is not None:
             hg = header.mapToGlobal(header.rect().topLeft())
             header.set_shared_view(scaled, ox + hg.x() - cg.x(),
-                                   oy + hg.y() - cg.y(), mask)
+                                   oy + hg.y() - cg.y(), mask, wrap=floating)
 
     def moveEvent(self, e):
         super().moveEvent(e)
         self._sync_wallpaper_view()
+        if self.isFloating():
+            QTimer.singleShot(0, self._sync_wallpaper_view)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._position_left_resize_grips()
+        self._update_focus_margins()
         self._sync_wallpaper_view()
+
+    def set_focus_mode(self, enabled: bool):
+        """Center the live conversation when the dock fills the main window."""
+        self._focus_mode = bool(enabled)
+        if self._focus_mode:
+            self._focus_show_history = False
+        self.focus_target_label.setVisible(self._focus_mode)
+        self.quote_button.setVisible(self._focus_mode)
+        if self._focus_mode:
+            self.context_pins.cancel()
+        self.context_pins.setVisible(not self._focus_mode)
+        self._update_focus_empty_state()
+        self._update_focus_margins()
+
+    def update_focus_target(self, inst):
+        name = (inst or {}).get('name') or (inst or {}).get('id')
+        self.focus_target_label.setText(
+            f'当前目标实例：{name}  ·  {(inst or {}).get("base", "")} '
+            f'{(inst or {}).get("loader", "")}' if name else
+            '当前目标实例：未选择  ·  发送安装或修复任务前请选择实例')
+
+    def _update_focus_empty_state(self):
+        if not hasattr(self, 'focus_welcome'):
+            return
+        has_user_message = any(entry.kind == 'user' for entry in self._entries)
+        empty = (self._focus_mode and not has_user_message
+                 and not getattr(self, '_focus_show_history', False))
+        self.focus_welcome.setVisible(empty)
+        self.history.setVisible(not empty)
+
+    def _show_history_menu(self, pos):
+        menu = self.history.createStandardContextMenu()
+        if self._focus_mode and self.history.textCursor().hasSelection():
+            menu.addSeparator()
+            menu.addAction('引用并添加注释…', self._quote_selected_conversation)
+        menu.exec(self.history.mapToGlobal(pos))
+
+    def _quote_selected_conversation(self):
+        selected = self.history.textCursor().selectedText().replace('\u2029', '\n').strip()
+        if not selected:
+            QMessageBox.information(self, '引用对话', '先在对话中选中想引用的文字。')
+            return
+        annotation, accepted = QInputDialog.getMultiLineText(
+            self, '引用对话', '给这段会话添加注释：')
+        if not accepted:
+            return
+        excerpt = selected[:2000]
+        if len(selected) > 2000:
+            excerpt += '\n…（引用已截断）'
+        quote = '\n'.join('> ' + line for line in excerpt.splitlines())
+        note = annotation.strip()
+        addition = quote + (f'\n注释：{note}' if note else '')
+        current = self.input.text().strip()
+        self.input.setText((current + '\n\n' if current else '') + addition + '\n')
+        self.input.setFocus()
+
+    def _update_focus_margins(self):
+        chat = getattr(self, '_chat_tab', None)
+        if chat is None:
+            return
+        side = max(12, (self.width() - 980) // 2) if self._focus_mode else 8
+        chat.layout().setContentsMargins(side, 10 if self._focus_mode else 4,
+                                         side, 14 if self._focus_mode else 4)
 
     def update_vision_ui(self):
         """按所选模型是否支持看图(多模态)显示/隐藏图片相关按钮。
@@ -2084,6 +2383,7 @@ class AIChatDock(QDockWidget):
     def _rebuild_strategy_menu(self, _=None):
         """重建策略下拉菜单(当前档打勾),并刷新按钮文案。"""
         menu = QMenu(self.strategy_btn)
+        menu.setStyleSheet(popup_menu_style())
         cur = self._current_strategy()
         for key in STRATEGY_CYCLE:
             label = STRATEGY_LABELS.get(key, key)
@@ -2247,16 +2547,49 @@ class AIChatDock(QDockWidget):
 
     def _archive_current(self):
         """把当前对话存成一份会话。"""
+        self.save_current_session(show_feedback=True)
+
+    def save_current_session(self, *, show_feedback=False):
+        """Save the live conversation with its selected instance for focus mode."""
         import chat_archive as ca
-        if not self._entries:
-            QMessageBox.information(self, "存档", "当前没有对话内容可存档。")
-            return
-        r = ca.save_session(self._chat_messages, self._entries)
+        if not any(entry.kind == 'user' for entry in self._entries):
+            if show_feedback:
+                QMessageBox.information(self, '存档', '当前没有会话内容可存档。')
+            return False
+        r = ca.save_session(self._chat_messages, self._entries,
+                            instance_id=self._session_instance_id)
         if r.get("ok"):
-            QMessageBox.information(self, "存档", f"✅ 已存档:「{r['title']}」")
+            self._session_dirty = False
             self._refresh_archive_list()
+            self.archive_changed.emit()
+            if show_feedback:
+                QMessageBox.information(self, "存档", f"✅ 已存档:「{r['title']}」")
+            return True
         else:
             QMessageBox.warning(self, "存档", f"❌ 存档失败:{r.get('error')}")
+            return False
+
+    def new_session(self):
+        """Keep the previous exchange in the archive before clearing the chat."""
+        if getattr(self, '_agent_running', False):
+            QMessageBox.information(self, '新会话', '请先等待当前 AI 任务结束。')
+            return False
+        if self._session_dirty and any(entry.kind == 'user' for entry in self._entries):
+            if not self.save_current_session():
+                return False
+        self._chat_messages.clear()
+        self._entries.clear()
+        self._session_instance_id = ''
+        self._session_dirty = False
+        self._focus_show_history = False
+        self._tool_expand_levels.clear()
+        self._expanded_ai.clear()
+        self.input.clear()
+        self._render_all()
+        self.tabs.setCurrentIndex(0)
+        self.input.setFocus()
+        self.conversation_changed.emit()
+        return True
 
     def _restore_selected(self):
         """从归档恢复选中会话(替换当前对话历史,可继续提问)。"""
@@ -2265,16 +2598,42 @@ class AIChatDock(QDockWidget):
         if cur is None:
             return
         path = cur.data(Qt.ItemDataRole.UserRole)
+        self.load_session_path(path)
+
+    def load_session_path(self, path):
+        if getattr(self, '_agent_running', False):
+            QMessageBox.information(self, '切换会话', '请先等待当前 AI 任务结束。')
+            return False
+        if self._session_dirty and any(entry.kind == 'user' for entry in self._entries):
+            if not self.save_current_session():
+                return False
+        import chat_archive as ca
         s = ca.load_session(path)
         if not s.get("ok"):
             QMessageBox.warning(self, "恢复", f"❌ 读取失败:{s.get('error')}")
-            return
+            return False
+        instance_id = s.get('instance_id') or ''
+        source = self.main.instance_list
+        if instance_id:
+            match = next((source.item(index) for index in range(source.count())
+                          if (source.item(index).data(Qt.ItemDataRole.UserRole) or {}).get('id')
+                          == instance_id), None)
+            if match is not None:
+                source.setCurrentItem(match)
+            else:
+                source.setCurrentRow(-1)
+        else:
+            source.setCurrentRow(-1)
         self._chat_messages = list(s.get("chat_messages", []))
         self._entries = coerce_entries(s.get("entries", []))
+        self._session_instance_id = instance_id
+        self._session_dirty = False
         self._render_all()
         self.tabs.setCurrentIndex(0)          # 切回聊天 tab
         self.input.setFocus()
         self._append_system(f"已从归档恢复「{s.get('title','')}」,可继续提问。")
+        self.conversation_changed.emit()
+        return True
 
     def _delete_selected(self):
         import chat_archive as ca
@@ -2285,18 +2644,28 @@ class AIChatDock(QDockWidget):
         if ca.delete_session(path):
             QMessageBox.information(self, "删除", "已删除该归档会话。")
             self._refresh_archive_list()
+            self.archive_changed.emit()
 
     # ---- 消息显示(条目化,渲染委托给 chat_view) ----
     def _append_system(self, text: str):
+        if getattr(self, '_focus_mode', False):
+            self._focus_show_history = True
         self._entries.append(ChatEntry(kind="system", text=text))
         self._render_all()
 
     def _append_user(self, text: str):
+        if not any(entry.kind == 'user' for entry in self._entries):
+            current = self.main.instance_list.currentItem()
+            inst = current.data(Qt.ItemDataRole.UserRole) if current is not None else None
+            self._session_instance_id = (inst or {}).get('id', '')
         self._entries.append(ChatEntry(kind="user", text=text))
+        self._session_dirty = True
         self._render_all()
+        self.conversation_changed.emit()
 
     def _append_ai(self, text: str):
         self._entries.append(ChatEntry(kind="ai", text=text))
+        self._session_dirty = True
         self._render_all()
 
     def append_table(self, title: str, columns: list, rows: list):
@@ -2324,6 +2693,7 @@ class AIChatDock(QDockWidget):
             self._entries,
             tool_level=self._tool_expand_levels.get,
             expanded_ai=self._expanded_ai)
+        self._update_focus_empty_state()
         self._update_ctx_ring()
 
     def _update_ctx_ring(self):
@@ -2670,6 +3040,10 @@ class AIChatDock(QDockWidget):
         self._on_dl_done("本地模型", ("完成" in msg), msg)
         self._append_system(msg)
         self.update_local_status()
+        if "完成" in msg:
+            settings_center = getattr(getattr(self, "main", None), "settings_center", None)
+            if settings_center is not None and hasattr(settings_center, "refresh_ai_config_visibility"):
+                settings_center.refresh_ai_config_visibility()
 
     # ---- 本地模型状态显示(未下载/下载中/预加载/已就绪/推理中) ----
     def _local_status_text(self) -> str:
@@ -2927,7 +3301,7 @@ class AIChatDock(QDockWidget):
             self._append_system(f"🎮 {result}")
             return
         self._append_user(text + (f"  [📷×{len(images)}]" if images else ""))
-        pin_context = self.context_pins.message()
+        pin_context = '' if self._focus_mode else self.context_pins.message()
         if pin_context:
             self._append_system("📍 本条消息附带固定对象快照：" +
                                 ", ".join(d.get("name", "参考对象") for d, _ in self.context_pins.records))
@@ -3343,6 +3717,11 @@ class AIChatDock(QDockWidget):
         if dlg.exec():
             self.settings = dlg.settings
             self.main.settings = dlg.settings
+            if getattr(self.main, "settings_center", None) is not None:
+                self.main.settings_center.settings.update(dlg.settings)
             save_settings(dlg.settings)
             self.apply_settings(dlg.settings)
+            settings_center = getattr(self.main, "settings_center", None)
+            if settings_center is not None and hasattr(settings_center, "refresh_ai_config_visibility"):
+                settings_center.refresh_ai_config_visibility()
             self._append_system("AI 设置已保存")

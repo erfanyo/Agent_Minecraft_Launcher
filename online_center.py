@@ -39,27 +39,23 @@ def _open_url(url: str):
 def _open_lan_bridge_settings(owner: QWidget):
     """从联机中心直达 CLI 桥接配置；默认关闭时带用户去插件开关，而非留下死按钮。"""
     root = owner.window()
+    if not hasattr(root, "online_center"):
+        root = root.parentWidget() or root
     online = getattr(root, "online_center", None)
-    tabs = getattr(root, "main_tabs", None)
     if online is not None and online.shell.switch_by_label("EasyTier 设置"):
-        if tabs is not None:
-            index = tabs.indexOf(online)
-            if index >= 0:
-                tabs.setCurrentIndex(index)
+        root.open_online_center()
         return
     settings_center = getattr(root, "settings_center", None)
-    main_tabs = getattr(root, "main_tabs", None)
-    if settings_center is None or main_tabs is None:
+    if settings_center is None:
         return
-    index = main_tabs.indexOf(settings_center)
-    if index >= 0:
-        main_tabs.setCurrentIndex(index)
-    if settings_center.shell.switch_by_label("插件:联机 CLI 桥接"):
+    if settings_center.shell.switch_by_label("插件:EasyTier兼容"):
+        root.open_settings()
         return
     settings_center.shell.switch_by_label(t("PLUGINS"))
+    root.open_settings()
     QMessageBox.information(
-        owner, "联机 CLI 桥接",
-        "联机 CLI 桥接目前未启用。请在这里启用它并重启启动器；重启后可从联机页或设置页进入配置。",
+        root, "EasyTier兼容",
+        "EasyTier兼容目前未启用。请在这里启用它并重启启动器；重启后可从联机页或设置页进入配置。",
     )
 
 # --------------------------------------------------------------------------
@@ -418,7 +414,7 @@ class RecommendWizard(QWidget):
         self.et_status.setStyleSheet(f"color: {muted_color()};")
         self.et_gen = QPushButton(t("GENERATE_ROOM_SHARE"))
         self.et_gen.clicked.connect(self._easytier_gen)
-        self.et_config = QPushButton("配置联机 CLI 桥接")
+        self.et_config = QPushButton("配置 EasyTier兼容")
         self.et_config.clicked.connect(lambda: _open_lan_bridge_settings(self))
         et.addWidget(self.et_status)
         et.addWidget(self.et_gen)

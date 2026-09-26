@@ -29,14 +29,17 @@ if _CI_STARTUP_SMOKE:
     if not (getattr(sys, 'frozen', False) and sys.platform == 'win32'):
         os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     os.environ.setdefault('AML_DATA_DIR', os.path.join(tempfile.gettempdir(), 'amcl-ci-smoke'))
-# WSLg's Wayland path can create a visible but unpainted translucent Qt window.
-# Prefer its X11 bridge with software rendering; users can still override any
-# of these variables before launch. This must run before importing PySide6.
+# Wayland does not expose top-level window coordinates needed to align the
+# floating AI wallpaper with the main window. Prefer XWayland when DISPLAY is
+# available, with native Wayland as fallback; respect an explicit user choice.
+# WSLg also needs software rendering for its translucent Qt window.
+# This must run before importing PySide6.
 if __name__ == '__main__' and not _CI_STARTUP_SMOKE:
+    if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
+        os.environ.setdefault('QT_QPA_PLATFORM', 'xcb;wayland')
     try:
         from os_platform.system import is_wsl
         if is_wsl():
-            os.environ.setdefault('QT_QPA_PLATFORM', 'xcb')
             os.environ.setdefault('QT_OPENGL', 'software')
             os.environ.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
     except Exception:
@@ -59,7 +62,7 @@ import requests
 from log_privacy import redact_text
 from downloader import failure_advice
 
-from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher, QEvent, QRectF, QPoint
+from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher, QEvent, QRectF, QPoint, QLockFile
 from PySide6.QtGui import (QColor, QCursor, QGuiApplication, QFont, QIcon, QImageReader, QPainter,
                            QPainterPath, QPalette, QPixmap, QRegion)
 from PySide6.QtWidgets import (
@@ -81,6 +84,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSplashScreen,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QToolButton,
     QTreeWidget,
@@ -235,8 +239,33 @@ class MainWindow(QMainWindow):
         from frameless_titlebar import FramelessTitleBar
         self._running_instances = set()
         self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
+        self._running_label.setMaximumWidth(160)
         self.title_bar = FramelessTitleBar(self, "AMCL",
                                            trailing_widget=self._running_label)
+        self._ai_focus_mode = False
+        self._ai_transition = None
+        self.ai_mode_button = QPushButton("AI 模式")
+        self.ai_mode_button.setToolTip("进入全屏对话工作台")
+        self.online_button = QPushButton("联机")
+        self.online_button.setToolTip("联机方案中心")
+        self.settings_button = QPushButton("设置")
+        self.settings_button.setToolTip("启动器设置")
+        self.title_nav = QWidget(self.title_bar)
+        nav_layout = QHBoxLayout(self.title_nav)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(12)
+        for button, width in ((self.ai_mode_button, 110),
+                              (self.online_button, 84),
+                              (self.settings_button, 84)):
+            button.setProperty('titleNav', True)
+            button.setFixedSize(width, 28)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            nav_layout.addWidget(button)
+        self.title_bar.set_center_widget(self.title_nav)
+        self.ai_mode_button.clicked.connect(self._on_mode_button_clicked)
+        self.settings_button.clicked.connect(lambda: self.open_settings())
+        self.online_button.clicked.connect(self._toggle_online_center)
+        self.title_bar.refresh_theme()
         # 边缘缩放手柄(Linux 无边框窗口专用;Windows 走 WM_NCHITTEST,手柄不影响)
         self._setup_resize_handles()
         # 菜单栏已取消(2026-08-25):「文件/查看/设置/AI/联机/帮助」全部移除。
@@ -289,38 +318,65 @@ class MainWindow(QMainWindow):
         from folder_instance_import import start_import
         self.instance_list.folders_dropped.connect(lambda folders: start_import(self, folders))
 
-        # ---- 主选项卡(我的实例 / 实例详情 / 下载新资源 / 联机 / 设置) ----
+        # ---- 主选项卡(我的实例 / 共用详情 / 下载新资源) ----
         self.main_tabs = QTabWidget()
-        from ui_style import tab_style, set_style
+        from ui_style import tab_style, card_btn_style, set_style
         set_style(self.main_tabs, tab_style)   # 外层标签页:圆角+字体放大(14px)
         self.main_tabs.addTab(tab_a, t("MY_INSTANCES"))
         self._my_inst_tab_idx = 0   # 「我的实例」= 主标签第 0 页(拖入文件 → 当作整合包安装)
-        # 客户端实例详情:不再是与「设置」平级的标签页,改为**覆盖层 + 左上角返回**
-        # (与「下载详情」同一套交互:点开看详情,返回回到原页)。
+        # 客户端与服务端详情共用一个顶层标签页。
         from instance_manager import InstanceManagerDialog
         self.instance_details = InstanceManagerDialog()
         self.instance_details.setObjectName("instance_details")
         tab_a.instance_selected.connect(self._on_instance_selected)
-        # 服务端详情:与客户端实例详情同构,同样用覆盖层。
         from server_details import ServerDetailsView
         self.server_details = ServerDetailsView()
         self.server_details.setObjectName("server_details")
         tab_a.server_center.selection_changed.connect(self._on_server_selected)
+        self.details_stack = QStackedWidget()
+        self.details_placeholder = QLabel("请先在“我的实例”中选择一个实例或服务端。")
+        self.details_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.details_stack.addWidget(self.details_placeholder)
+        self.details_stack.addWidget(self.instance_details)
+        self.details_stack.addWidget(self.server_details)
+        self._details_tab_idx = self.main_tabs.addTab(self.details_stack, t("INSTANCE_DETAILS"))
         self.main_tabs.addTab(self.resource_center, t("RESOURCES"))
-        # 联机方案中心:改为「下载新资源」右侧的标签卡(卡片形式)
+        # 联机方案中心留在主窗口右侧，可和当前页面并排查看。
         from online_center import OnlineCenter
-        self.online_center = OnlineCenter()
+        self.online_dock = QDockWidget("联机", self)
+        self.online_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.online_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        from ui_style import current_color
+        set_style(self.online_dock, lambda: (
+            f'QDockWidget {{ background: {current_color("panel_bg")};'
+            f' border-left: 1px solid {current_color("panel_border")}; }}'))
+        online_header = QWidget()
+        online_header_layout = QHBoxLayout(online_header)
+        online_header_layout.setContentsMargins(12, 4, 8, 4)
+        online_header_layout.addWidget(QLabel("联机方案"))
+        online_header_layout.addStretch()
+        online_close = QPushButton("✕")
+        online_close.setFixedSize(28, 28)
+        set_style(online_close, card_btn_style)
+        online_close.clicked.connect(self._close_online_center)
+        online_header_layout.addWidget(online_close)
+        self.online_dock.setTitleBarWidget(online_header)
+        from ui_background import BackgroundWidget
+        self.online_surface = BackgroundWidget(self.online_dock)
+        online_body = QVBoxLayout(self.online_surface)
+        online_body.setContentsMargins(0, 0, 0, 0)
+        self.online_center = OnlineCenter(self.online_surface)
         self.online_center.setObjectName("online_center")
-        self._online_tab_idx = self.main_tabs.addTab(self.online_center, t("MULTIPLAYER"))
-        # 设置:与下载新资源平级；左侧按游戏/语言/个性化/系统/软件信息/AI等功能分区。
+        online_body.addWidget(self.online_center)
+        self.online_dock.setWidget(self.online_surface)
+        # 设置页嵌入主窗口，由两种模式共用。
         from settings.center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
         self.settings_center.applied.connect(self._on_settings_applied)
         self.settings_center.visual_changed.connect(self._on_visual_settings_changed)
         self.settings_center.runtime_changed.connect(self._on_runtime_settings_changed)
-        self.main_tabs.addTab(self.settings_center, t("SETTINGS"))
 
-        # ---- 插件注册的主标签页(与 下载新资源/联机/设置 平级)----
+        # ---- 插件注册的主标签页(与下载新资源平级) ----
         try:
             import plugin_manager
             for _label, _build in plugin_manager.MAIN_TABS:
@@ -343,7 +399,20 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.main_tabs)
-        self.setCentralWidget(central)
+        from ai_focus_mode import AIFocusSidebar
+        self.ai_focus_sidebar = AIFocusSidebar(self)
+        self.ai_focus_sidebar.installEventFilter(self)
+        self.settings_page = BackgroundWidget()
+        settings_layout = QVBoxLayout(self.settings_page)
+        settings_layout.setContentsMargins(12, 12, 12, 12)
+        settings_layout.addWidget(self.settings_center)
+        self._central_stack = QStackedWidget()
+        self._central_stack.addWidget(central)
+        self._central_stack.addWidget(self.ai_focus_sidebar)
+        self._central_stack.addWidget(self.settings_page)
+        self._central_stack.setCurrentWidget(central)
+        self._settings_open = False
+        self.setCentralWidget(self._central_stack)
         self._position_resize_handles()
         self._background = central
         central.installEventFilter(self)
@@ -392,6 +461,8 @@ class MainWindow(QMainWindow):
         # ---- AI 助手/游戏日志:停靠在右侧,做成"标签页"(tab)形式 ----
         # 允许拖动(可浮出成子窗口)、可关闭;标签页之间点击切换显示/隐藏。
         self.ai_dock = AIChatDock(self, self.settings)
+        self.ai_dock.archive_changed.connect(self.ai_focus_sidebar.refresh_sessions)
+        self.ai_dock.conversation_changed.connect(self.ai_focus_sidebar.refresh_sessions)
         def log_pin(pos):
             selected = self.log_view.textCursor().selectedText()
             return {"id": "game-log", "name": "游戏日志选段" if selected else "最近游戏日志",
@@ -408,6 +479,9 @@ class MainWindow(QMainWindow):
         self.ai_dock.topLevelChanged.connect(lambda _floating: QTimer.singleShot(0, self._update_window_shape))
         self.ai_dock.visibilityChanged.connect(lambda _visible: QTimer.singleShot(0, self._update_window_shape))
         self.ai_dock.show()
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.online_dock)
+        self.online_dock.hide()
+        self.online_surface.installEventFilter(self)
 
         # 游戏日志已挪进实例详情,不再有独立 dock(AI 助手单独在右侧作标签页)
 
@@ -473,23 +547,81 @@ class MainWindow(QMainWindow):
         # 启动阶段结束标记。详情页已改为「用户点开才显示」的覆盖层,不再需要在
         # 这里挡住自动挂载;保留该标记供外部/测试判断窗口是否已完成初始化。
         self._ui_ready = True
+        from ui_anim import install_interaction_feedback
+        self._interaction_feedback = install_interaction_feedback(self)
         # 窗口大小/位置:放在最后恢复,确保其它控件已建好、不会在显示过程中被挤压
         self._restore_window_geometry()
         QTimer.singleShot(0, self._place_download_ball)
 
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
-        """打开设置:切换到「设置」标签卡(非模态,现为顶部标签页)。
-        tab 可选 "mirror":直接切到镜像源小节(设置菜单 → 镜像源…)"""
-        idx = self.main_tabs.indexOf(self.settings_center)
-        if idx < 0:
-            return
-        self.main_tabs.setCurrentIndex(idx)
+        """在主窗口中打开两种模式共用的设置页。"""
         if tab == "mirror":
             self.settings_center.shell.switch_by_label(t("MIRROR"))
+        if self._settings_open:
+            return
+        if self.online_dock.isVisible():
+            self._close_online_center()
+        self._settings_restore = {
+            'dock_visible': self.ai_dock.isVisible(),
+            'strip_visible': self.ai_strip_dock.isVisible(),
+            'download_visible': self.dl_indicator.isVisible(),
+        }
+        self._settings_open = True
+        self.ai_dock.hide()
+        self.ai_strip_dock.hide()
+        self.dl_indicator.hide()
+        self._central_stack.setMaximumWidth(16777215)
+        self._central_stack.setCurrentWidget(self.settings_page)
+        self._update_mode_button()
+        self._recompute_wallpaper()
+        from ui_anim import reveal
+        reveal(self.settings_page)
+
+    def _close_settings(self):
+        if not self._settings_open:
+            return
+        saved = self._settings_restore
+        self._settings_open = False
+        if self._ai_focus_mode:
+            self._central_stack.setMaximumWidth(300)
+            self._central_stack.setCurrentWidget(self.ai_focus_sidebar)
+        else:
+            self._central_stack.setCurrentWidget(self._background)
+            self.main_tabs.setCurrentIndex(self._my_inst_tab_idx)
+        self.ai_dock.setVisible(saved['dock_visible'])
+        self.ai_strip_dock.setVisible(saved['strip_visible'])
+        self.dl_indicator.setVisible(saved['download_visible'])
+        self._update_mode_button()
+        self._recompute_wallpaper()
+        from ui_anim import reveal
+        reveal(self._central_stack.currentWidget())
+
+    def _on_mode_button_clicked(self):
+        if self._settings_open:
+            self._close_settings()
+        elif self.online_dock.isVisible():
+            self._close_online_center()
+            if not self._ai_focus_mode:
+                self.main_tabs.setCurrentIndex(self._my_inst_tab_idx)
+            self._update_mode_button()
+        else:
+            self._toggle_ai_focus_mode()
+
+    def _update_mode_button(self):
+        other_page = self._settings_open or self.online_dock.isVisible()
+        if other_page:
+            self.ai_mode_button.setText('主页')
+            self.ai_mode_button.setToolTip('返回当前模式的主页')
+        elif self._ai_focus_mode:
+            self.ai_mode_button.setText('常规模式')
+            self.ai_mode_button.setToolTip('退出 AI 模式')
+        else:
+            self.ai_mode_button.setText('AI 模式')
+            self.ai_mode_button.setToolTip('进入全屏对话工作台')
 
     def _on_settings_applied(self):
-        """设置(标签卡)保存后:刷新本窗口与各处联动。"""
+        """设置窗口保存后:刷新本窗口与各处联动。"""
         s = self.settings_center.settings
         self.settings = s
         from ui_anim import set_animations_enabled
@@ -505,10 +637,14 @@ class MainWindow(QMainWindow):
     def _on_visual_settings_changed(self):
         """颜色/壁纸/动画自动保存后只刷新外观，避免重扫实例和重载 AI。"""
         self.settings = self.settings_center.settings
-        from ui_style import set_theme_mode, apply_global_dark_palette, refresh_theme
+        from ui_style import (set_theme_mode, apply_global_dark_palette,
+                              popup_menu_style, refresh_theme)
         set_theme_mode(self.settings.get('ui_theme', 'system'))
         apply_global_dark_palette(QApplication.instance())
         refresh_theme()
+        strategy_menu = self.ai_dock.strategy_btn.menu()
+        if strategy_menu is not None:
+            strategy_menu.setStyleSheet(popup_menu_style())
         self.title_bar.refresh_theme()
         self._paint_title_background()
         self.ai_dock._dock_header.refresh_theme()
@@ -518,6 +654,13 @@ class MainWindow(QMainWindow):
         self._apply_dock_separator_style()
         self.dl_indicator.update()
         self.home_panel.refresh_visual()
+
+    def _on_system_color_scheme_changed(self, *_):
+        """System mode selects an app theme, then refreshes all app surfaces."""
+        if self.settings_center.theme_combo.currentData() != 'system':
+            return
+        self.settings_center.refresh_wallpaper_defaults()
+        self._on_visual_settings_changed()
 
     def _on_runtime_settings_changed(self):
         """Java 首选等设置保存后立即供启动服务读取，不做昂贵的界面刷新。"""
@@ -570,21 +713,55 @@ class MainWindow(QMainWindow):
         """按当前中央区尺寸 + 壁纸源,重算共享壁纸(一张画布),并设置中央区与 AI dock 视口。"""
         from ui_background import prepare_shared_wallpaper
         pix = getattr(self, "_wallpaper_source", None)
-        mask = getattr(self, "_wallpaper_mask", 0.6)
+        mask = getattr(self, "_wallpaper_mask", 0.55)
+        online = getattr(self, 'online_surface', None)
+        online_visible = bool(online is not None and self.online_dock.isVisible())
+        if getattr(self, '_settings_open', False):
+            self.settings_page.set_wallpaper(pix, mask)
+            return
+        if getattr(self, '_ai_focus_mode', False):
+            sidebar = self.ai_focus_sidebar
+            if pix is None:
+                self._wallpaper_scaled = None
+                self._wallpaper_ox = self._wallpaper_oy = 0
+                sidebar.clear()
+                if online is not None:
+                    online.clear()
+            else:
+                canvas = QSize(max(1, self.width()), max(1, sidebar.height()))
+                scaled, ox, oy = prepare_shared_wallpaper(pix, canvas)
+                self._wallpaper_scaled = scaled
+                self._wallpaper_ox, self._wallpaper_oy = ox, oy
+                sidebar.set_shared_view(scaled, ox, oy, mask)
+                if online_visible:
+                    origin = sidebar.mapTo(self, QPoint(0, 0))
+                    position = online.mapTo(self, QPoint(0, 0))
+                    online.set_shared_view(scaled, position.x() - origin.x() + ox,
+                                           position.y() - origin.y() + oy, mask)
+            self._sync_ai_wallpaper()
+            return
         bg = getattr(self, "_background", None)
         if pix is None or bg is None:
             self._wallpaper_scaled = None
             self._wallpaper_ox = self._wallpaper_oy = 0
             if bg is not None:
                 bg.clear()
+            if online is not None:
+                online.clear()
             self._sync_ai_wallpaper()
             return
-        scaled, ox, oy = prepare_shared_wallpaper(pix, bg.size(), self._ai_dock_width())
+        right_width = online.width() if online_visible else self._ai_dock_width()
+        scaled, ox, oy = prepare_shared_wallpaper(pix, bg.size(), right_width)
         self._wallpaper_scaled = scaled
         self._wallpaper_ox = ox
         self._wallpaper_oy = oy
         if scaled is not None:
             bg.set_shared_view(scaled, ox, oy, mask)
+            if online_visible:
+                origin = bg.mapTo(self, QPoint(0, 0))
+                position = online.mapTo(self, QPoint(0, 0))
+                online.set_shared_view(scaled, position.x() - origin.x() + ox,
+                                       position.y() - origin.y() + oy, mask)
         self._sync_ai_wallpaper()
 
     def _ai_dock_width(self) -> int:
@@ -922,15 +1099,143 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     # ---- AI 助手 ----
+    def _toggle_ai_focus_mode(self):
+        """Play the full transition before switching between launcher and AI layouts."""
+        if getattr(self, '_ai_transition', None) is not None:
+            return
+        from ai_focus_mode import AIFocusTransition
+        entering = not self._ai_focus_mode
+        transition = AIFocusTransition(self, entering)
+        self._ai_transition = transition
+        top = self.title_dock.height() if hasattr(self, 'title_dock') else 36
+        transition.setGeometry(0, top, self.width(), max(0, self.height() - top))
+        transition.finished.connect(lambda: self._finish_ai_focus_mode(entering))
+        self.ai_mode_button.setEnabled(False)
+        transition.start()
+
+    def _finish_ai_focus_mode(self, entering):
+        """Reuse the live AI dock so its messages, tools and input stay intact."""
+        if entering:
+            dock = self.ai_dock
+            self._ai_focus_restore = {
+                'visible': dock.isVisible(),
+                'floating': dock.isFloating(),
+                'geometry': dock.geometry(),
+                'width': dock.width(),
+                'features': dock.features(),
+                'tab': dock.tabs.currentIndex(),
+                'status_visible': self.statusBar().isVisible(),
+                'download_visible': self.dl_indicator.isVisible(),
+            }
+            self.ai_focus_sidebar.refresh_from_home()
+            if dock.isFloating():
+                dock.setFloating(False)
+            dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+            dock.tabs.setCurrentIndex(0)
+            dock.set_focus_mode(True)
+            current = self.instance_list.currentItem()
+            dock.update_focus_target(
+                current.data(Qt.ItemDataRole.UserRole) if current else None)
+            header = dock._dock_header
+            header.archive_button.hide()
+            header.float_button.hide()
+            header.close_button.hide()
+            header.chat_button.setText('对话')
+            self._central_stack.setCurrentWidget(self.ai_focus_sidebar)
+            self._central_stack.setMaximumWidth(300)
+            self.ai_strip_dock.hide()
+            dock.show()
+            self.statusBar().hide()
+            self.dl_indicator.hide()
+            self._ai_focus_mode = True
+            self._recompute_wallpaper()
+            QTimer.singleShot(0, lambda: self.resizeDocks(
+                [dock], [max(320, self.width() - self.ai_focus_sidebar.width() - 12)],
+                Qt.Orientation.Horizontal))
+            QTimer.singleShot(0, self._recompute_wallpaper)
+            QTimer.singleShot(0, dock.input.setFocus)
+        else:
+            saved = getattr(self, '_ai_focus_restore', {})
+            self._ai_focus_mode = False
+            self._central_stack.setMaximumWidth(16777215)
+            self._central_stack.setCurrentWidget(self._background)
+            dock = self.ai_dock
+            dock.set_focus_mode(False)
+            header = dock._dock_header
+            header.archive_button.show()
+            header.float_button.show()
+            header.close_button.show()
+            header.chat_button.setText('聊天')
+            dock.setFeatures(saved.get('features', dock.features()))
+            dock.tabs.setCurrentIndex(saved.get('tab', 0))
+            if saved.get('floating'):
+                dock.setFloating(True)
+                dock.setGeometry(saved['geometry'])
+            else:
+                QTimer.singleShot(0, lambda: self.resizeDocks(
+                    [dock], [saved.get('width', 360)], Qt.Orientation.Horizontal))
+            dock.setVisible(saved.get('visible', True))
+            self.statusBar().setVisible(saved.get('status_visible', True))
+            self.dl_indicator.setVisible(saved.get('download_visible', False))
+            self._ai_focus_restore = None
+        self._update_mode_button()
+        self.ai_mode_button.setEnabled(True)
+        transition = self._ai_transition
+        self._ai_transition = None
+        if transition is not None:
+            transition.hide()
+            transition.deleteLater()
+        QTimer.singleShot(0, self._refresh_central_geometry)
+
     def _toggle_ai(self, checked: bool):
         """显示/隐藏右侧 AI 对话栏(靠其自身标题/关闭控制,不再有菜单入口)"""
         if hasattr(self, "ai_dock"):
             self.ai_dock.setVisible(bool(checked))
 
     def open_online_center(self):
-        """打开联机方案中心:改为切到「联机」标签卡(卡片形式,非模态)"""
-        if hasattr(self, "_online_tab_idx"):
-            self.main_tabs.setCurrentIndex(self._online_tab_idx)
+        """在主窗口右侧展开联机抽屉，左侧页面保持可用。"""
+        if self.online_dock.isVisible():
+            return
+        if self._settings_open:
+            self._close_settings()
+        self._online_restore = {
+            'dock_visible': self.ai_dock.isVisible(),
+            'strip_visible': self.ai_strip_dock.isVisible(),
+        }
+        self.ai_dock.hide()
+        self.ai_strip_dock.hide()
+        self.online_dock.show()
+        from ui_anim import reveal
+        QTimer.singleShot(0, lambda: reveal(self.online_surface)
+                          if self.online_dock.isVisible() else None)
+        width = max(480, self.width() - 320) if self._ai_focus_mode else min(560, max(400, self.width() // 2))
+        QTimer.singleShot(0, lambda: self.resizeDocks(
+            [self.online_dock], [width], Qt.Orientation.Horizontal)
+            if self.online_dock.isVisible() else None)
+        self._update_mode_button()
+
+    def _close_online_center(self):
+        if not self.online_dock.isVisible():
+            return
+        self.online_dock.hide()
+        saved = getattr(self, '_online_restore', {})
+        self.ai_dock.setVisible(saved.get('dock_visible', False))
+        self.ai_strip_dock.setVisible(saved.get('strip_visible', False))
+        self._online_restore = None
+        from ui_anim import reveal
+        reveal(self._central_stack.currentWidget())
+        self._recompute_wallpaper()
+        if self._ai_focus_mode and self.ai_dock.isVisible():
+            QTimer.singleShot(0, lambda: self.resizeDocks(
+                [self.ai_dock], [max(320, self.width() - 320)],
+                Qt.Orientation.Horizontal))
+        self._update_mode_button()
+
+    def _toggle_online_center(self):
+        if self.online_dock.isVisible():
+            self._close_online_center()
+        else:
+            self.open_online_center()
 
     def _open_resource_page(self, page_index: int):
         """首页常用操作直达资源中心，避免新建游戏/下载 Mod 被埋进二级菜单。"""
@@ -987,7 +1292,7 @@ class MainWindow(QMainWindow):
         """AI 对话栏可见性变化:X 掉/隐藏 → 收窄成贴右边缘小条(留「展开」);显示 → 收起小条。
         变化会影响右侧内容区宽度 → 重摆下载悬浮球 + 重算共享壁纸。"""
         if hasattr(self, "ai_strip_dock"):
-            self.ai_strip_dock.setVisible(not visible)
+            self.ai_strip_dock.setVisible(not visible and not self._ai_focus_mode)
         if hasattr(self, "dl_indicator"):
             QTimer.singleShot(0, self._place_download_ball)
         if getattr(self, "_wallpaper_source", None) is not None:
@@ -1266,6 +1571,8 @@ class MainWindow(QMainWindow):
         self._dl_finish(ok)
 
     def _on_download_cancelled(self):
+        if self._launch_task is not None:
+            self._stop_launch_button_animation()
         self._dl_log.append("已取消下载。已校验的文件会保留，重试时会尽量复用。")
         self.dl_indicator.set_progress(0, 1)
         self.dl_indicator.set_waiting()
@@ -1544,6 +1851,9 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
+        if getattr(self, '_ai_transition', None) is not None:
+            top = self.title_dock.height() if hasattr(self, 'title_dock') else 36
+            self._ai_transition.setGeometry(0, top, self.width(), max(0, self.height() - top))
         # QMainWindow 先收到尺寸事件，中央区和 dock 随后才完成布局。
         # 在布局落定后一起重算 mask，否则右侧仍被旧宽度裁掉。
         QTimer.singleShot(0, self._refresh_central_geometry)
@@ -1555,7 +1865,10 @@ class MainWindow(QMainWindow):
         resized = event.type() == QEvent.Type.Resize
         moved_while_docked = (watched is dock and event.type() == QEvent.Type.Move
                               and not dock.isFloating())
-        if (watched is central or watched is dock) and (resized or moved_while_docked):
+        focus_sidebar = getattr(self, 'ai_focus_sidebar', None)
+        online_surface = getattr(self, 'online_surface', None)
+        if (watched is central or watched is dock or watched is focus_sidebar
+                or watched is online_surface) and (resized or moved_while_docked):
             # Dock 拖宽/浮出只改变子控件，不一定触发主窗口 resizeEvent。
             # 两者的输入 mask 必须在新几何下同步，否则旧宽度外无法交互。
             QTimer.singleShot(0, self._refresh_central_geometry)
@@ -1633,13 +1946,17 @@ class MainWindow(QMainWindow):
         from ui_style import muted_color, success_color
         n = len(self._running_instances)
         if n:
-            self._running_label.setText("🟢 正在运行：" + ", ".join(sorted(self._running_instances)))
+            running_text = "🟢 正在运行：" + ", ".join(sorted(self._running_instances))
+            self._running_label.setText(
+                self._running_label.fontMetrics().elidedText(
+                    running_text, Qt.TextElideMode.ElideRight, 160))
             self._running_label.setToolTip("运行中的实例:\n" + "\n".join(sorted(self._running_instances)))
             self._running_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
         else:
             self._running_label.setText("尚未启动游戏")
             self._running_label.setToolTip("启动实例后这里会显示运行中的游戏")
             self._running_label.setStyleSheet(f"color: {muted_color()};")
+        QTimer.singleShot(0, self.title_bar._place_center_widget)
 
     def _busy_download(self, busy: bool):
         self.download_tab.set_busy(busy)
@@ -1792,6 +2109,43 @@ class MainWindow(QMainWindow):
             repository_only,
         )
 
+    def _start_launch_button_animation(self):
+        """Keep launch progress visible inside the primary button."""
+        from ui_anim import is_animations_enabled
+        if not hasattr(self, '_launch_button_timer'):
+            self._launch_button_timer = QTimer(self)
+            self._launch_button_timer.setInterval(180)
+            self._launch_button_timer.timeout.connect(self._advance_launch_button_animation)
+        self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
+        self._launch_button_frame = 0
+        self.launch_btn.setText('启动中…')
+        if is_animations_enabled():
+            self._launch_button_timer.start()
+
+    def _advance_launch_button_animation(self):
+        self._launch_button_frame = (self._launch_button_frame + 1) % 4
+        if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
+            self.launch_btn.setText('启动中' + '·' * self._launch_button_frame)
+
+    def _stop_launch_button_animation(self):
+        self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
+        timer = getattr(self, '_launch_button_timer', None)
+        if timer is not None:
+            timer.stop()
+        if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
+            self.launch_btn.setText(t('VERSION_HOME_LAUNCH_GAME'))
+
+    def _show_launch_button_success(self):
+        timer = getattr(self, '_launch_button_timer', None)
+        if timer is not None:
+            timer.stop()
+        self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
+        generation = self._launch_button_generation
+        if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
+            self.launch_btn.setText('✓ 启动成功')
+        QTimer.singleShot(1800, lambda: self._stop_launch_button_animation()
+                          if self._launch_button_generation == generation else None)
+
     def launch_selected(self):
         """启动当前选中版本:准备 Java → 拼命令 → 拉起进程 → 日志实时显示"""
         v = self.selected_version
@@ -1822,6 +2176,7 @@ class MainWindow(QMainWindow):
             v, status_cb=current.report_status, progress_cb=current.report_progress), self)
         self._launch_task = task
         self.launch_btn.setEnabled(False)
+        self._start_launch_button_animation()
         self._dl_log = []
         self._dl_progress = (0, 1)
         self.dl_indicator.set_progress(0, 1)
@@ -1836,6 +2191,7 @@ class MainWindow(QMainWindow):
         task.start()
 
     def _on_launch_prepare_failed(self, error):
+        self._stop_launch_button_animation()
         self.launch_btn.setEnabled(True)
         self.dl_indicator.set_failed(True)
         self.dl_indicator.setToolTip("启动准备失败，点击查看状态与日志")
@@ -1848,6 +2204,7 @@ class MainWindow(QMainWindow):
         self._start_game_after_memory(plan, v)
 
     def _start_game_after_memory(self, plan, v, exit_after=False):
+        self._start_launch_button_animation()
         d = plan.detail
         game_dir = plan.game_dir
         java_exe = plan.java_exe
@@ -1877,12 +2234,14 @@ class MainWindow(QMainWindow):
             else:
                 self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
         except Exception as e:
+            self._stop_launch_button_animation()
             self.statusBar().showMessage(f"启动失败: {e}")
             self.dl_indicator.set_failed(True)
             self.dl_indicator.setToolTip("启动失败，点击查看状态与日志")
             self.launch_btn.setEnabled(True)
             return
 
+        self._show_launch_button_success()
         self.dl_indicator.set_completed(True)
         self.dl_indicator.setToolTip("游戏已启动，点击查看状态与日志")
 
@@ -1924,6 +2283,7 @@ class MainWindow(QMainWindow):
         self.skill_mgr.on_game_log(line)
 
     def _on_game_process_exited(self, code: int):
+        self._stop_launch_button_animation()
         self.launch_btn.setEnabled(True)
         self.statusBar().showMessage(f"游戏进程已退出(退出码 {code})")
         inst_id = getattr(self, "_running_instance_id", None)
@@ -1972,11 +2332,7 @@ class MainWindow(QMainWindow):
             self._in_game_ai = None
 
     def _toggle_log(self, checked: bool):
-        """显示游戏日志:打开「实例详情」覆盖层并切到「游戏日志」项。
-
-        详情已改为覆盖层(与下载详情同一套),所以这里直接打开覆盖层再切页面,
-        不再需要先挂标签页。
-        """
+        """打开共用详情标签，并切到当前实例的游戏日志。"""
         if hasattr(self, "instance_details") and self.instance_details.shell is not None:
             inst = self.home_panel.current_instance()
             if inst is None:
@@ -2071,6 +2427,8 @@ class MainWindow(QMainWindow):
         self.home_panel._on_selection_changed(self.instance_list.currentItem(), None)
         # 同步到首页面板(实例数量 + 当前选择态)
         self.home_panel.set_current_instances(shown)
+        if getattr(self, '_ai_focus_mode', False):
+            self.ai_focus_sidebar.refresh_from_home()
 
         # 3) 实例记录(实例清单备忘,可手动编辑补充)
         self.instance_catalog.write_record(shown)
@@ -2163,7 +2521,14 @@ class MainWindow(QMainWindow):
         if not target_dir:
             self.statusBar().showMessage("未选择安装位置")
             return
-        gv = (inst["base"] if inst else "1.21.1") or "1.21.1"
+        # Pack version tags are guidance, not an exact install requirement.
+        # A chosen Modrinth version ID wins over these preference hints.
+        if sub_dir == "shaderpacks":
+            gv = None
+        elif sub_dir in ("datapacks", "resourcepacks"):
+            gv = inst.get("base") if inst else None
+        else:
+            gv = (inst["base"] if inst else "1.21.1") or "1.21.1"
         loader = (inst["loader"] if inst else None)
         # Mod 按加载器过滤;光影/数据包/资源包一般不区分加载器
         use_loader = loader if sub_dir == "mods" else None
@@ -2173,14 +2538,18 @@ class MainWindow(QMainWindow):
         extra_deps = []
         if sub_dir == "mods":
             try:
-                from modrinth import resolve_dependencies
+                from modrinth import (dependency_is_installed,
+                                      installed_mod_identifiers, resolve_dependencies)
                 deps = resolve_dependencies(slug, gv, use_loader, version)
             except Exception:
                 deps = None
             if deps:
+                installed_ids = installed_mod_identifiers(target_dir)
+                missing = [dep for dep in deps["required"]
+                           if not dependency_is_installed(dep, installed_ids)]
                 lines = [hit.get("title", slug) + " 的依赖提示:"]
-                if deps["required"]:
-                    lines.append("需要(必装):\n" + "\n".join(f" · {d['title']}" for d in deps["required"]))
+                if missing:
+                    lines.append("缺少的必需前置:\n" + "\n".join(f" · {d['title']}" for d in missing))
                 if deps["optional"]:
                     lines.append("可选(选装):\n" + "\n".join(f" · {d['title']}" for d in deps["optional"]))
                 if deps["incompatible"]:
@@ -2193,27 +2562,33 @@ class MainWindow(QMainWindow):
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                     if cont != QMessageBox.StandardButton.Yes:
                         return
-                    extra_deps = [d["slug"] for d in deps["required"]]
+                    extra_deps = missing
 
         def worker(status, progress):
-            from modrinth import download_mod
-            for dep_slug in extra_deps:
+            from modrinth import (dependency_is_installed, download_mod,
+                                  installed_mod_identifiers)
+            installed_ids = installed_mod_identifiers(target_dir) if extra_deps else set()
+            for dep in extra_deps:
+                dep_slug = dep["slug"]
+                if dependency_is_installed(dep, installed_ids):
+                    status(f"已跳过已有前置: {dep['title']}")
+                    continue
                 try:
                     dn = download_mod(dep_slug, gv, use_loader, target_dir, progress_callback=progress)
                     if dn:
                         status(f"依赖已装:{dn}")
+                        installed_ids = installed_mod_identifiers(target_dir)
                 except Exception as e:
                     status(f"依赖 {dep_slug} 装入失败(跳过): {e}")
-            try:
-                filename = download_mod(slug, gv, use_loader, target_dir,
-                                        version_number=version,
-                                        progress_callback=progress)
-                if filename:
-                    status(f"✅ 已下载 {filename} → {sub_dir}")
-                else:
-                    status(f"⚠️ {slug} 没有 {gv}{'+' + use_loader if use_loader else ''} 的可用版本")
-            except Exception as e:
-                status(f"❌ 下载失败: {e}")
+            filename = download_mod(slug, gv, use_loader, target_dir,
+                                    version_number=version,
+                                    progress_callback=progress)
+            if not filename:
+                if gv:
+                    target = f"{gv}{'+' + use_loader if use_loader else ''}"
+                    raise RuntimeError(f"{slug} 没有适用于 {target} 的可下载文件；请在手动下载中更换版本或筛选条件")
+                raise RuntimeError(f"{slug} 所选版本没有可下载文件；请在手动下载中更换版本")
+            status(f"✅ 已下载 {filename} → {sub_dir}")
 
         self._run_download(worker)
 
@@ -2338,29 +2713,32 @@ class MainWindow(QMainWindow):
 
     # ---- 右键菜单 ----
     def _instance_menu(self, pos):
-        """实例右键:管理 / 启动 / 备份 / 打开目录 / 删除实例"""
+        """实例右键:一键配置 / 重命名 / 备份 / 打开目录 / 删除实例"""
         item = self.instance_list.itemAt(pos)
         if item is None:
             return
         inst = item.data(Qt.ItemDataRole.UserRole)
+        self._show_instance_menu(inst, self.instance_list.mapToGlobal(pos))
+
+    def _show_instance_menu(self, inst, global_pos):
+        """常规模式与 AI 模式共用同一份实例操作菜单。"""
+        if not inst or not inst.get('id'):
+            return
         menu = QMenu(self)
-        menu.addAction("实例详情…", lambda: self.open_instance_manager(inst))
+        from ui_style import popup_menu_style
+        menu.setStyleSheet(popup_menu_style())
         config_menu = menu.addMenu("一键配置")
         config_menu.addAction("Bridge Mod（推荐）…", lambda: self._one_click_bridge_for(inst))
         rcon_menu_item = config_menu.addAction("RCON（临时方案）…", lambda: self._one_click_rcon_for(inst))
         rcon_menu_item.setToolTip("临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放")
         # 联机 mod 一键配置:按实例版本+加载器判断支持才显示(不支持不出现)
         self._add_online_mod_menu_items(config_menu, inst)
-        menu.addAction("启动", self.launch_selected_instance)
         menu.addAction("重命名实例…", lambda: self._rename_instance(inst))
         menu.addAction("备份实例", lambda: self.backup_current_instance(inst))
         menu.addAction("打开实例目录", lambda: open_path(self.game_dir_for(inst["id"])))
-        mods_dir = os.path.join(self.game_dir_for(inst["id"]), "mods")
-        if os.path.isdir(mods_dir):
-            menu.addAction("打开 mods 目录", lambda: open_path(mods_dir))
         menu.addSeparator()
         menu.addAction("删除实例…", lambda: self._delete_instance(inst))
-        menu.exec(self.instance_list.mapToGlobal(pos))
+        menu.exec(global_pos)
 
     def _current_instance(self):
         """「我的版本」当前选中的实例;没选中返回 None"""
@@ -2615,77 +2993,70 @@ class MainWindow(QMainWindow):
         self._run_download(worker)
 
     def open_instance_manager(self, inst):
-        """打开「实例详情」:改为切到「实例详情」标签页(非模态)并填充该实例。"""
-        if inst is None:
-            self._hide_instance_details()
-            return
-        self._show_instance_details(inst, switch=True)
+        """打开共用详情标签中的客户端实例详情。"""
+        if inst is not None:
+            self._show_instance_details(inst)
+        else:
+            self._sync_details_tab()
+            self.main_tabs.setCurrentIndex(self._details_tab_idx)
 
     def _on_instance_selected(self, inst):
-        """首页选中实例变化 → 仅更新当前选择。
+        """同步 AI 目标；详情标签可见时同步当前客户端实例。"""
+        if (hasattr(self, 'details_stack') and self.main_tabs.currentWidget() is self.details_stack
+                and not getattr(self.home_panel, '_server_mode', False)):
+            self._sync_details_tab()
+        if hasattr(self, 'ai_dock'):
+            self.ai_dock.update_focus_target(inst)
 
-        覆盖层是「用户主动点开看」的交互(与下载详情一致):选中列表项只更新
-        当前选择卡片,不会突然糊住整个界面。要看详情请点卡片或左侧「实例详情」。
-        """
-        # 没有实例可选时,把正开着的详情收掉,避免留下过时内容。
-        if inst is None and self._details_open:
-            self._hide_instance_details()
-
-    # ---- 详情覆盖层(与「下载详情」同一套:覆盖层 + 左上角返回) ----
-    #
-    # 为什么从标签页改成覆盖层:标签页会常驻在「设置」旁边,用户切回来时看到
-    # 一个并非自己打开的页面(而且分不清是客户端还是服务端的)。覆盖层则是
-    # 点开→看→返回,与下载详情行为一致,也不占常驻标签位。
-    def _ensure_details_overlay(self):
-        """惰性创建详情覆盖层(客户端/服务端共用同一个控件,只换内容)。"""
-        if getattr(self, "_details_overlay", None) is not None:
-            return self._details_overlay
-        from ui_overlay import ContentOverlay
-        overlay = ContentOverlay(self._background)
-        overlay.backRequested.connect(self._on_details_back)
-        self._details_overlay = overlay
-        return overlay
-
-    @property
-    def _details_open(self) -> bool:
-        overlay = getattr(self, "_details_overlay", None)
-        return bool(overlay is not None and overlay.isVisible())
-
-    def _open_details_overlay(self, widget, title: str):
-        """把某个详情控件放进覆盖层并显示(同一时刻只有一个)。"""
-        overlay = self._ensure_details_overlay()
-        overlay.set_title(title)
-        overlay.set_content(widget)
-        self.main_tabs.hide()      # 隐藏主内容,让覆盖层压在壁纸上(同下载详情)
-        overlay.show_overlay()
-
-    def _on_details_back(self):
-        """覆盖层「← 返回」:收起覆盖层,回到原来的页面。"""
-        overlay = getattr(self, "_details_overlay", None)
-        if overlay is not None:
-            overlay.hide_overlay()
-            overlay.set_content(None)   # 摘掉内容,避免持有已切走的控件
-        self.main_tabs.show()
+    def _sync_details_tab(self):
+        """按首页当前模式，在同一个标签里显示客户端或服务端详情。"""
+        if getattr(self.home_panel, '_server_mode', False):
+            self.main_tabs.setTabText(self._details_tab_idx, '服务端详情')
+            server = self.home_panel.server_center.selected()
+            if server is None:
+                self.details_placeholder.setText('请先在“我的实例”中选择一个服务端。')
+                self.details_stack.setCurrentWidget(self.details_placeholder)
+            else:
+                self.server_details.set_server(server)
+                self.details_stack.setCurrentWidget(self.server_details)
+        else:
+            self.main_tabs.setTabText(self._details_tab_idx, t('INSTANCE_DETAILS'))
+            inst = self.home_panel.current_instance()
+            if inst is None:
+                self.details_placeholder.setText('请先在“我的实例”中选择一个实例。')
+                self.details_stack.setCurrentWidget(self.details_placeholder)
+            else:
+                self.instance_details.set_instance(inst, paths.GAME_DIR)
+                self.details_stack.setCurrentWidget(self.instance_details)
 
     def _show_instance_details(self, inst, switch: bool = True):
         self.instance_details.set_instance(inst, paths.GAME_DIR)
-        self._open_details_overlay(self.instance_details, t("INSTANCE_DETAILS"))
+        self.main_tabs.setTabText(self._details_tab_idx, t('INSTANCE_DETAILS'))
+        self.details_stack.setCurrentWidget(self.instance_details)
+        if switch:
+            self._details_skip_sync_once = self.main_tabs.currentWidget() is not self.details_stack
+            self.main_tabs.setCurrentIndex(self._details_tab_idx)
 
     def _hide_instance_details(self):
-        self._on_details_back()
+        self._sync_details_tab()
 
     # ---- 服务端详情(与实例详情同构) ----
     def _on_server_selected(self, server):
-        """服务端选中变化 → 仅记录;打开详情由用户点「实例详情」触发。"""
-        if not server and self._details_open:
-            self._hide_server_details()
+        """详情标签可见时同步当前服务端。"""
+        if (self.main_tabs.currentWidget() is self.details_stack
+                and getattr(self.home_panel, '_server_mode', False)):
+            self._sync_details_tab()
 
     def _show_server_details(self, server, switch: bool = True):
         self.server_details.set_server(server)
-        self._open_details_overlay(self.server_details, "服务端详情")
+        self.main_tabs.setTabText(self._details_tab_idx, '服务端详情')
+        self.details_stack.setCurrentWidget(self.server_details)
+        if switch:
+            self._details_skip_sync_once = self.main_tabs.currentWidget() is not self.details_stack
+            self.main_tabs.setCurrentIndex(self._details_tab_idx)
 
     def _hide_server_details(self):
-        self._on_details_back()
+        self._sync_details_tab()
 
     def _open_details_for_current(self):
         """左侧「实例详情」按钮:按当前左侧面板所处模式决定打开哪个详情页。
@@ -2713,14 +3084,19 @@ class MainWindow(QMainWindow):
         start_smart_import(self, path)
 
     def _on_main_tab_changed(self, idx: int):
-        """主标签页切换 → 新页淡入(250ms;关闭动画则跳过)。"""
-        from ui_anim import fade_in
-        from ui_tokens import DURATION
+        """主标签页切换时短暂显现新页面。"""
+        from ui_anim import reveal
         w = self.main_tabs.widget(idx) if 0 <= idx < self.main_tabs.count() else None
+        if w is getattr(self, 'details_stack', None):
+            if getattr(self, '_details_skip_sync_once', False):
+                self._details_skip_sync_once = False
+            else:
+                self._sync_details_tab()
         if w is not None:
-            fade_in(w, DURATION.get("tab", 250))
+            reveal(w)
         if w is self.resource_center and self.download_tab.version_tree.topLevelItemCount() == 0:
             self.load_versions()
+        self._update_mode_button()
 
     def _home_open_instance_manager(self, inst):
         """「我的版本」首页 → 实例设置/版本设置 需要打开实例管理时调用。
@@ -2841,6 +3217,33 @@ if __name__ == "__main__":
     set_theme_mode(load_settings().get('ui_theme', 'system'))
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
+    # Protect one launcher data directory across processes on Windows, Linux,
+    # and macOS. Keep the lock object alive for the full GUI lifetime.
+    _instance_lock = None
+    if not _CI_STARTUP_SMOKE:
+        _instance_lock = QLockFile(os.path.join(paths.CONFIG_DIR, "launcher.lock"))
+        _instance_lock.setStaleLockTime(0)
+        if not _instance_lock.tryLock(0):
+            if _instance_lock.error() == QLockFile.LockError.LockFailedError:
+                answer = QMessageBox.question(
+                    None,
+                    "启动器已在运行",
+                    "检测到这个数据目录已有一个启动器进程。\n\n"
+                    "仍要再启动一个吗？多个窗口可能同时修改配置、下载或操作同一实例。",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    raise SystemExit(0)
+            else:
+                QMessageBox.critical(
+                    None,
+                    "无法检查启动器是否已运行",
+                    f"无法创建单实例锁文件：{_instance_lock.fileName()}\n"
+                    "请检查 AMCL 文件夹的写入权限后重试。",
+                )
+                raise SystemExit(1)
+
     splash = startup_splash()
     splash.show()
     splash.showMessage("正在读取启动器设置…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
@@ -2868,6 +3271,7 @@ if __name__ == "__main__":
                        startup_message_color())
     app.processEvents()
     window = MainWindow()
+    app.styleHints().colorSchemeChanged.connect(window._on_system_color_scheme_changed)
     window.setWindowIcon(application_icon())
     splash.showMessage("正在扫描已有实例…", Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                        startup_message_color())

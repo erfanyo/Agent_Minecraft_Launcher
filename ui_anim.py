@@ -7,8 +7,8 @@
 - 不引第三方库;QPainter 自绘控件(下载环 / Mod 依赖力导向图)继续用 QTimer 节流,不走这里。
 - 时长/easing 读 ui_tokens.DURATION / EASING。
 """
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation
-from PySide6.QtWidgets import QGraphicsOpacityEffect
+from PySide6.QtCore import QEvent, QObject, Qt, QEasingCurve, QPropertyAnimation
+from PySide6.QtWidgets import QAbstractButton, QApplication, QGraphicsOpacityEffect
 
 from ui_tokens import DURATION, EASING
 import weakref
@@ -117,4 +117,45 @@ def fade_out(widget, duration_ms: int | None = None, on_done=None) -> None:
 def reveal(widget):
     """轻微显现：保留文字可读性，不移动布局，不延迟用户输入。"""
     if widget is not None and widget.isVisible():
-        _animate_opacity(widget, 0.88, 1.0, 140)
+        _animate_opacity(widget, 0.62, 1.0, 190)
+
+
+class InteractionFeedback(QObject):
+    """Give buttons a short press/release response without delaying their actions."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.root = root
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        if kind not in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease,
+                        QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            return False
+        if not isinstance(obj, QAbstractButton) or not self.root.isAncestorOf(obj):
+            return False
+        if not _ANIMATIONS_ENABLED or not obj.isVisible() or not obj.isEnabled():
+            return False
+        if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+            if event.button() != Qt.MouseButton.LeftButton:
+                return False
+        elif event.key() not in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return False
+        effect = obj.graphicsEffect()
+        if effect is not None and not isinstance(effect, QGraphicsOpacityEffect):
+            return False  # Keep custom shadows and effects intact.
+        if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress):
+            if kind != QEvent.Type.KeyPress or not event.isAutoRepeat():
+                obj._interaction_pressed = True
+                _animate_opacity(obj, 1.0, 0.78, 85)
+        elif getattr(obj, '_interaction_pressed', False):
+            obj._interaction_pressed = False
+            _animate_opacity(obj, 0.78, 1.0, 160)
+        return False
+
+
+def install_interaction_feedback(root):
+    """Install one nonblocking button feedback filter for a window tree."""
+    animator = InteractionFeedback(root)
+    QApplication.instance().installEventFilter(animator)
+    return animator

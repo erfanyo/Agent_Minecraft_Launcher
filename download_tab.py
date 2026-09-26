@@ -346,7 +346,11 @@ class DownloadTab(QWidget):
 
     # ================= 菜单切换 =================
     def _switch_panel(self, row):
+        previous = self.stack.currentIndex()
         self.stack.setCurrentIndex(row)
+        if previous != row:
+            from ui_anim import reveal
+            reveal(self.stack.currentWidget())
         if row == 1 and self.mc:
             self._refresh_loader_cards()   # 打开加载器面板时按版本刷新卡片可见性
             self._request_loader_versions(self.loader_key)   # 只刷当前加载器,异步

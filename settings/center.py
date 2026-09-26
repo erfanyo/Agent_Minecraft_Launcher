@@ -10,7 +10,7 @@ import uuid
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
+    QComboBox, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
     QToolButton, QVBoxLayout, QWidget,
 )
@@ -27,6 +27,7 @@ from settings import save_settings
 from ui_style import (card_btn_style, muted_color, set_style,
                       COLOR_BLIND_PRESETS, check_readability, panel_style, text_color,
                       accent_color, danger_color, success_color, current_color)
+from ui_switch import ToggleSwitch, setting_switch_row
 
 
 def _fmt_mcp_entry(c: dict) -> str:
@@ -70,44 +71,6 @@ def _parse_mcp_entries(text: str) -> list:
     return entries
 
 
-class ToggleSwitch(QWidget):
-    """iOS 风格开关(替代 QCheckBox):可点击切换,checked 状态用颜色区分。
-    用 clicked(checked_forwards) 信号替代 QCheckBox.toggled。"""
-    toggled = Signal(bool)
-
-    def __init__(self, checked=False, parent=None):
-        super().__init__(parent)
-        self._checked = checked
-        self.setFixedSize(46, 24)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def isChecked(self) -> bool:
-        return self._checked
-
-    def setChecked(self, v: bool):
-        if self._checked != v:
-            self._checked = v
-            self.update()
-            self.toggled.emit(v)
-
-    def mousePressEvent(self, e):
-        self.setChecked(not self._checked)
-
-    def paintEvent(self, _):
-        from PySide6.QtGui import QColor, QPainter
-        from PySide6.QtCore import Qt as _Qt
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        track = QColor(accent_color()) if self._checked else QColor(current_color("btn_disabled_bg"))
-        p.setPen(Qt.PenStyle.NoPen); p.setBrush(track)
-        p.drawRoundedRect(0, 0, 46, 24, 12, 12)
-        # 圆点
-        p.setBrush(QColor("#ffffff"))
-        x = 25 if self._checked else 5
-        p.drawEllipse(x, 4, 16, 16)
-        p.end()
-
-
 class SettingsCenter(QWidget):
     applied = Signal()   # 保存后发出,主窗口据此刷新(set_ui_mode / ai_dock 等)
     visual_changed = Signal()  # 轻量外观设置已自动保存，只刷新外观，不重扫实例
@@ -135,7 +98,8 @@ class SettingsCenter(QWidget):
         self.shell.add_section("个性化", self._build_ui)
         self.shell.add_section(t("SYSTEM"), self._build_system)
         self.shell.add_section("软件信息", self._build_software_info)
-        self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
+        if self._should_show_ai_settings():
+            self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
         self.shell.add_section(t("MIRROR"), self._build_mirror)
         self.shell.add_section(t("PLUGINS"), self._build_plugins)
         # 插件注册的独立设置页:在左菜单【各单开一行】(按插件名)。
@@ -182,11 +146,26 @@ class SettingsCenter(QWidget):
         bottom.addWidget(save_btn)
         lay.addLayout(bottom)
 
+    def _should_show_ai_settings(self) -> bool:
+        if (bool(self.settings.get("ai_configured", False))
+                or bool((self.settings.get("ai_cloud_api_key")
+                         or self.settings.get("ai_api_key") or "").strip())):
+            return True
+        try:
+            import model_registry
+            return model_registry.is_downloaded("qwen3.5-0.8b-xlam-q4km")
+        except Exception:
+            return False
+
+    def refresh_ai_config_visibility(self):
+        """Add the AI settings page after a model is installed or API is configured."""
+        if self._should_show_ai_settings() and not hasattr(self, "ai_form"):
+            self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
+
     # ================= 游戏 =================
     def _build_game(self) -> QWidget:
         saved_memory = int(self.settings.get('memory_gb', 0) or 0)
-        self.memory_auto_check = QCheckBox('自动分配内存（按实例历史和 Mod 数量）')
-        self.memory_auto_check.setChecked(saved_memory <= 0)
+        self.memory_auto_check = ToggleSwitch(saved_memory <= 0)
         self.memory_auto_check.setToolTip('自动：每次启动时根据当前可用内存、该实例历史峰值或 Mod 数量估算。\n手动：使用下方指定的 Java 堆上限。')
         self.memory_spin = QSpinBox()
         self.memory_spin.setRange(1, 64)
@@ -194,8 +173,7 @@ class SettingsCenter(QWidget):
         self.memory_spin.setValue(saved_memory if saved_memory > 0 else 4)
         self.memory_spin.setEnabled(not self.memory_auto_check.isChecked())
         self.memory_auto_check.toggled.connect(self._on_memory_policy_changed)
-        self.isolation_check = QCheckBox("每个版本用独立游戏目录(存档/配置/Mod 互不干扰)")
-        self.isolation_check.setChecked(self.settings.get("version_isolation", True))
+        self.isolation_check = ToggleSwitch(self.settings.get("version_isolation", True))
         self.game_dir_edit = QLineEdit(self.settings.get("game_dir") or DEFAULT_GAME_DIR)
         browse_btn = QPushButton("浏览…"); browse_btn.clicked.connect(self._browse_game_dir)
         default_btn = QPushButton("默认"); default_btn.clicked.connect(
@@ -204,7 +182,9 @@ class SettingsCenter(QWidget):
         dir_row.addWidget(browse_btn); dir_row.addWidget(default_btn)
 
         form = QFormLayout()
-        form.addRow("内存策略:", self.memory_auto_check)
+        form.setVerticalSpacing(10)
+        form.addRow("内存策略:", setting_switch_row(
+            "自动分配内存", self.memory_auto_check, "根据可用内存和实例使用情况估算"))
         form.addRow("手动内存:", self.memory_spin)
         from memory_meter import MemoryMeter
         self.memory_meter = MemoryMeter(lambda: 0 if self.memory_auto_check.isChecked() else self.memory_spin.value())
@@ -214,11 +194,12 @@ class SettingsCenter(QWidget):
         from advanced_launch import editor
         self.jvm_editor = editor(self.settings.get('jvm_args', ''))
         form.addRow('', self.jvm_editor)
-        form.addRow("版本隔离:", self.isolation_check)
+        form.addRow("版本隔离:", setting_switch_row(
+            "独立游戏目录", self.isolation_check, "各版本的存档、配置和 Mod 分开保存"))
         form.addRow("游戏目录:", dir_row)
         hint = QLabel("可以是任意位置,包括 PCL2 / 官方启动器创建的 .minecraft(自动读取里面的实例)")
         hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
-        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
         l.addLayout(form); l.addWidget(hint); l.addStretch()
         return w
 
@@ -262,19 +243,21 @@ class SettingsCenter(QWidget):
             idx = self.language_combo.findData("auto")
         self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
-        self.sync_minecraft_language_check = QCheckBox("启动游戏时同步 Minecraft 语言（跟随启动器/系统）")
-        self.sync_minecraft_language_check.setChecked(
+        self.sync_minecraft_language_check = ToggleSwitch(
             bool(self.settings.get("sync_minecraft_language", True)))
         self.sync_minecraft_language_check.setToolTip(
             "开启：每次启动前把实例 options.txt 的语言设为当前启动器语言；关闭后可在游戏内独立选择。")
 
         form = QFormLayout()
+        form.setVerticalSpacing(10)
         form.addRow("启动器语言:", self.language_combo)
         hint = QLabel("切换启动器语言后需要重启。语言同步可让新启动的实例跟随这里的选择。")
         hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
-        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
         l.addLayout(form)
-        l.addWidget(self.sync_minecraft_language_check)
+        l.addWidget(setting_switch_row("启动时同步 Minecraft 语言",
+                                       self.sync_minecraft_language_check,
+                                       "跟随启动器或系统语言；关闭后可在游戏内单独选择"))
         l.addWidget(hint)
         l.addStretch()
         return w
@@ -292,6 +275,7 @@ class SettingsCenter(QWidget):
         mode_hint.setWordWrap(True); mode_hint.setStyleSheet(f"color: {muted_color()};")
 
         form = QFormLayout()
+        form.setVerticalSpacing(10)
         form.addRow("界面模式:", self.ui_mode_combo)
         form.addRow("", mode_hint)
 
@@ -300,14 +284,14 @@ class SettingsCenter(QWidget):
             self.theme_combo.addItem(label, value)
         self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(
             self.settings.get('ui_theme', 'system'))))
-        self.theme_combo.currentIndexChanged.connect(self._queue_visual_autosave)
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_combo_changed)
         form.addRow("外观主题:", self.theme_combo)
 
-        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
         l.addLayout(form)
-        self.animations_check = QCheckBox("启用界面动画(淡入/标签切换等)")
-        self.animations_check.setChecked(bool(self.settings.get("ui_animations_enabled", True)))
-        l.addWidget(self.animations_check)
+        self.animations_check = ToggleSwitch(bool(self.settings.get("ui_animations_enabled", True)))
+        l.addWidget(setting_switch_row("界面动画", self.animations_check,
+                                       "淡入、标签切换等过渡效果"))
         l.addSpacing(8)
         # 已临时弃用 / 废案功能登记
         from settings.deprecated import get_deprecated
@@ -335,7 +319,7 @@ class SettingsCenter(QWidget):
         reset_btn.clicked.connect(self._reset_colors)
         cbtn_row.addWidget(reset_btn)
         l.addLayout(cbtn_row)
-        color_hint = QLabel("配色改完**立即覆盖整个启动器**(实时上色,不用等重启);当前设置页同步预览。")
+        color_hint = QLabel("配色修改后立即生效；自定义文字色会按所选颜色显示。")
         color_hint.setWordWrap(True); color_hint.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(color_hint)
         # 色盲/色弱友好模板(为无障碍预设,一键应用)
@@ -362,13 +346,13 @@ class SettingsCenter(QWidget):
         bg_title.setStyleSheet(f"font-weight:bold; color:{muted_color()};")
         l.addWidget(bg_title)
         self.wallpaper_source_combo = QComboBox()
-        for _lab, _val in (("关闭", "none"), ("预设渐变", "preset"),
+        for _lab, _val in (("关闭", "none"), ("内置风景", "bundled"), ("预设渐变", "preset"),
                            ("本机图片", "user")):
             self.wallpaper_source_combo.addItem(_lab, _val)
         self.wallpaper_source_combo.setCurrentIndex(
             max(0, self.wallpaper_source_combo.findData(
                 'preset' if self.settings.get('ui_wallpaper_source') == 'official'
-                else self.settings.get("ui_wallpaper_source", "none"))))
+                else self.settings.get("ui_wallpaper_source", "bundled"))))
         self.wallpaper_source_combo.currentIndexChanged.connect(
             lambda *_: self._on_wallpaper_source_changed(True))
         src_row = QHBoxLayout(); src_row.addWidget(QLabel("壁纸:"))
@@ -405,6 +389,7 @@ class SettingsCenter(QWidget):
         from ui_background import blur_strength
         self.wallpaper_blur_slider = QSlider(Qt.Orientation.Horizontal)
         self.wallpaper_blur_slider.setRange(0, 80)
+        self._wallpaper_blur_custom = self.settings.get('ui_wallpaper_blur') is not None
         self.wallpaper_blur_slider.setValue(blur_strength(self.settings))
         self.wallpaper_blur_slider.setToolTip('0 = 关闭；数值越大越模糊。调整后缓存结果，不修改原图。')
         self.wallpaper_blur_label = QLabel()
@@ -419,9 +404,11 @@ class SettingsCenter(QWidget):
         self.wallpaper_mask_slider = QSlider(Qt.Orientation.Horizontal)
         self.wallpaper_mask_slider.setRange(0, 80)
         try:
-            _mask = int(self.settings.get("ui_wallpaper_mask", 60))
+            from ui_background import mask_strength
+            _mask = round(mask_strength(self.settings) * 100)
         except Exception:
-            _mask = 60
+            _mask = 55
+        self._wallpaper_mask_custom = self.settings.get('ui_wallpaper_mask') is not None
         self.wallpaper_mask_slider.setValue(_mask)
         self.wallpaper_mask_label = QLabel(f"遮罩强度: {self.wallpaper_mask_slider.value()}%")
         self.wallpaper_mask_slider.valueChanged.connect(self._on_wallpaper_mask_changed)
@@ -429,7 +416,11 @@ class SettingsCenter(QWidget):
         mask_row.addWidget(self.wallpaper_mask_slider, 1)
         mask_row.addWidget(self.wallpaper_mask_label)
         l.addLayout(mask_row)
-        bg_hint = QLabel("遮罩让壁纸上的文字更容易看清。图片会复制到启动器缓存，原图不会被修改。")
+        reset_wallpaper_btn = QPushButton("恢复主题默认值")
+        set_style(reset_wallpaper_btn, card_btn_style)
+        reset_wallpaper_btn.clicked.connect(self._reset_wallpaper_defaults)
+        l.addWidget(reset_wallpaper_btn)
+        bg_hint = QLabel("遮罩让壁纸上的文字更容易看清。选择本机图片时会复制到启动器缓存，原图不会被修改。")
         bg_hint.setWordWrap(True); bg_hint.setStyleSheet(f"color: {muted_color()};")
         l.addWidget(bg_hint)
         self.animations_check.toggled.connect(self._queue_visual_autosave)
@@ -469,11 +460,40 @@ class SettingsCenter(QWidget):
             self._queue_visual_autosave()
 
     def _on_wallpaper_mask_changed(self, value: int):
+        self._wallpaper_mask_custom = True
         self.wallpaper_mask_label.setText(f"遮罩强度: {value}%")
         self._queue_visual_autosave()
 
     def _on_wallpaper_blur_changed(self, value: int):
+        self._wallpaper_blur_custom = True
         self.wallpaper_blur_label.setText(f'模糊强度: {value}' + ('（关闭）' if value == 0 else ''))
+        self._queue_visual_autosave()
+
+    def _on_theme_combo_changed(self, *_):
+        from ui_tokens import set_theme_mode
+        set_theme_mode(self.theme_combo.currentData())
+        self.refresh_wallpaper_defaults()
+        self._queue_visual_autosave()
+
+    def refresh_wallpaper_defaults(self):
+        """Show the current theme's defaults without turning them into overrides."""
+        from ui_background import blur_strength, mask_strength
+        if not self._wallpaper_mask_custom:
+            self.wallpaper_mask_slider.blockSignals(True)
+            self.wallpaper_mask_slider.setValue(round(mask_strength({}) * 100))
+            self.wallpaper_mask_slider.blockSignals(False)
+            self.wallpaper_mask_label.setText(f"遮罩强度: {self.wallpaper_mask_slider.value()}%")
+        if not self._wallpaper_blur_custom:
+            self.wallpaper_blur_slider.blockSignals(True)
+            self.wallpaper_blur_slider.setValue(blur_strength({}))
+            self.wallpaper_blur_slider.blockSignals(False)
+            value = self.wallpaper_blur_slider.value()
+            self.wallpaper_blur_label.setText(f'模糊强度: {value}' + ('（关闭）' if value == 0 else ''))
+
+    def _reset_wallpaper_defaults(self):
+        self._wallpaper_mask_custom = False
+        self._wallpaper_blur_custom = False
+        self.refresh_wallpaper_defaults()
         self._queue_visual_autosave()
 
     def _queue_visual_autosave(self, *_):
@@ -484,8 +504,10 @@ class SettingsCenter(QWidget):
         self.settings['ui_theme'] = self.theme_combo.currentData()
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
-        self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
-        self.settings['ui_wallpaper_blur'] = self.wallpaper_blur_slider.value()
+        self.settings["ui_wallpaper_mask"] = (self.wallpaper_mask_slider.value()
+                                               if self._wallpaper_mask_custom else None)
+        self.settings['ui_wallpaper_blur'] = (self.wallpaper_blur_slider.value()
+                                              if self._wallpaper_blur_custom else None)
         self.settings["ui_wallpaper_user_path"] = getattr(self, "_wallpaper_user_path", "")
         self.settings["ui_animations_enabled"] = self.animations_check.isChecked()
         save_settings(self.settings)
@@ -1010,16 +1032,16 @@ class SettingsCenter(QWidget):
     # ================= AI 助手 =================
     def _build_ai(self) -> QWidget:
         self.ai_form = AISettingsForm(self.settings)
-        self.mod_translate_check = QCheckBox("Mod 描述 AI 翻译(英→中)")
-        self.mod_translate_check.setChecked(bool(self.settings.get("ai_mod_translate", True)))
+        self.mod_translate_check = ToggleSwitch(bool(self.settings.get("ai_mod_translate", True)))
         self.mod_translate_source = QComboBox()
         self.mod_translate_source.addItem("本地模型（默认，离线）", "local")
         self.mod_translate_source.addItem("已配置的云端模型（更准确，消耗额度）", "cloud")
         source_idx = self.mod_translate_source.findData(self.settings.get("ai_mod_translate_source", "local"))
         self.mod_translate_source.setCurrentIndex(source_idx if source_idx >= 0 else 0)
-        self.cloud_tool_log_check = QCheckBox("记录云端 AI 工具调用训练日志（仅本机）")
+        self.mod_translate_source.setEnabled(self.mod_translate_check.isChecked())
+        self.mod_translate_check.toggled.connect(self.mod_translate_source.setEnabled)
+        self.cloud_tool_log_check = ToggleSwitch(bool(self.settings.get("ai_cloud_tool_log", True)))
         self.cloud_tool_log_check.setToolTip("记录用户请求、工具参数、工具结果和最终回复；API 密钥会自动脱敏。")
-        self.cloud_tool_log_check.setChecked(bool(self.settings.get("ai_cloud_tool_log", True)))
         self.model_dl_btn = QPushButton(t("DOWNLOAD_LOCAL_MODEL"))
         self.model_dl_status = QLabel(""); self.model_dl_status.setWordWrap(True)
         self.model_dl_status.setStyleSheet(f"color: {muted_color()};")
@@ -1033,10 +1055,20 @@ class SettingsCenter(QWidget):
                       "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
         hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
 
-        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12)
-        translate_row = QHBoxLayout(); translate_row.addWidget(self.mod_translate_check); translate_row.addWidget(self.mod_translate_source, 1)
-        l.addWidget(self.ai_form); l.addLayout(translate_row); l.addWidget(self.cloud_tool_log_check); l.addWidget(self.model_dl_btn)
-        l.addWidget(self.model_dl_status); l.addWidget(hint); l.addStretch()
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
+        source_row = QHBoxLayout()
+        source_row.setContentsMargins(12, 0, 12, 0)
+        source_row.setSpacing(10)
+        source_row.addWidget(QLabel("翻译来源:"))
+        source_row.addWidget(self.mod_translate_source, 1)
+        l.addWidget(self.ai_form)
+        l.addWidget(setting_switch_row("Mod 描述 AI 翻译", self.mod_translate_check, "将英文描述翻译成中文"))
+        l.addLayout(source_row)
+        l.addWidget(setting_switch_row("记录云端 AI 工具调用", self.cloud_tool_log_check,
+                                       "仅保存在本机，API 密钥会脱敏"))
+        l.addLayout(dl_row)
+        l.addWidget(hint)
+        l.addStretch()
         # 模型下载按钮使用未下载/下载中/已就绪三态。
         self._init_model_dl_button()
         return self._wrap_scroll(w)
@@ -1181,7 +1213,7 @@ class SettingsCenter(QWidget):
             # 行:标题(大)+ 工具/注册内容(tooltip)+ 齿轮 + 开关
             row = QHBoxLayout(); row.setSpacing(6)
             title = QLabel(pname)
-            title.setStyleSheet(f"font-weight:bold; font-size:15px; color:{text_color()};")
+            set_style(title, lambda: f"font-weight:bold; font-size:15px; color:{text_color()};")
             # 注册内容 → tooltip(悬停显示)
             contents = self._describe_plugin(name, None)
             if contents:
@@ -1197,12 +1229,13 @@ class SettingsCenter(QWidget):
                 row.addWidget(gear)
             # 开关
             tsw = ToggleSwitch(is_on)
+            tsw.setAccessibleName(f"启用插件 {pname}")
             tsw.toggled.connect(lambda ch, n=name: self._toggle_plugin(n, ch))
             row.addWidget(tsw)
             cl.addLayout(row)
             if pdesc:
                 d = QLabel(pdesc); d.setWordWrap(True)
-                d.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+                set_style(d, lambda: f"color: {muted_color()}; font-size: 11px;")
                 cl.addWidget(d)
             api_version = meta.get("api_version", 0)
             if api_version != plugin_manager.PLUGIN_API_VERSION:
@@ -1248,6 +1281,7 @@ class SettingsCenter(QWidget):
         default_on = plugin_manager.discover_plugins_meta().get(pid, {}).get("default_enabled", True)
         is_on = (pid not in disabled) and (default_on or pid in enabled_override)
         tsw = ToggleSwitch(is_on)
+        tsw.setAccessibleName(f"启用插件 {name}")
         tsw.toggled.connect(lambda ch, n=pid: self._toggle_plugin(n, ch))
         tl.addWidget(lbl, 1); tl.addWidget(QLabel("启用")); tl.addWidget(tsw)
         lay.addWidget(top)
@@ -1384,20 +1418,23 @@ class SettingsCenter(QWidget):
         self.settings["language"] = self.language_combo.currentData()
         self.settings["sync_minecraft_language"] = self.sync_minecraft_language_check.isChecked()
         self.settings["ui_mode"] = self.ui_mode_combo.currentData()
-        self.settings.update(self.ai_form.values())
-        self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
-        self.settings["ai_mod_translate_source"] = self.mod_translate_source.currentData()
-        self.settings["ai_cloud_tool_log"] = self.cloud_tool_log_check.isChecked()
+        if hasattr(self, "ai_form"):
+            self.settings.update(self.ai_form.values())
+            self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
+            self.settings["ai_mod_translate_source"] = self.mod_translate_source.currentData()
+            self.settings["ai_cloud_tool_log"] = self.cloud_tool_log_check.isChecked()
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
         self.settings["custom_mirrors"] = self._custom_mirrors
         self.settings["curseforge_api_key"] = self.curseforge_key_edit.text().strip()
         # 自定义背景(阶段 2)
         self.settings['ui_theme'] = self.theme_combo.currentData()
-        self.settings['ui_wallpaper_blur'] = self.wallpaper_blur_slider.value()
+        self.settings['ui_wallpaper_blur'] = (self.wallpaper_blur_slider.value()
+                                              if self._wallpaper_blur_custom else None)
         self.settings["ui_wallpaper_source"] = self.wallpaper_source_combo.currentData()
         self.settings["ui_wallpaper_preset"] = self.wallpaper_preset_combo.currentData()
-        self.settings["ui_wallpaper_mask"] = self.wallpaper_mask_slider.value()
+        self.settings["ui_wallpaper_mask"] = (self.wallpaper_mask_slider.value()
+                                               if self._wallpaper_mask_custom else None)
         if getattr(self, "_wallpaper_user_path", ""):
             self.settings["ui_wallpaper_user_path"] = self._wallpaper_user_path
         self.settings["ui_animations_enabled"] = self.animations_check.isChecked()

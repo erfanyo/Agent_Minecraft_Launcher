@@ -4,16 +4,14 @@
 
 - BackgroundWidget:主窗口内容区背景,重写 paintEvent 画壁纸(cover 缩放)+ 遮罩。
   **只用 paintEvent,不给父控件 setStyleSheet**(避免 v0.4.2「父控件 QSS 接管子控件渲染」教训)。
-- 壁纸源三选一:
-  1. 预设 —— 代码生成渐变/纯色(零版权、零网络、零体积);
-  2. 用户本地图片 —— 文件选择器选后**复制进** AMCL/cache/wallpapers/(遵循文件放置约定);
-  3. 官方壁纸 —— 首启下载到 AMCL/cache/wallpapers/(素材待项目方提供,离线自动降级到预设)。
+- 壁纸源:随包内置截图、代码生成的预设渐变、用户本地图片和旧版官方缓存。
 - 遮罩:深色模式用深色遮罩、浅色模式用浅色遮罩,强度 0~80%(默认深 60 / 浅 50)。
 - 决策 2:壁纸激活时,ui_tokens 把半透明面板底(panel_bg)抬高到近不透明,保证文字对比度。
 
 **边界**:不改窗口框架(标题栏/菜单栏不动)、不改实例目录、不写用户目录(唯一例外 paths 退回)。
 """
 import os
+import sys
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPixmap
@@ -33,10 +31,17 @@ PRESETS = {
     "slate_light":  ("#eef1f5", "#dfe5ec"),   # 浅色预设(浅色主题用)
 }
 DEFAULT_PRESET = "teal"
+BUNDLED_WALLPAPER = "-7878592509531134518.png"
 
-# 遮罩默认强度(0~1):深色 0.6 / 浅色 0.5(见《阶段0基线报告》§三)
-DEFAULT_MASK_DARK = 0.6
-DEFAULT_MASK_LIGHT = 0.5
+
+def bundled_wallpaper_path() -> str:
+    """Locate the shipped image in both source and PyInstaller builds."""
+    root = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(root, "assets", BUNDLED_WALLPAPER)
+
+# 遮罩默认强度(0~1):深色 0.55 / 浅色 0.65。
+DEFAULT_MASK_DARK = 0.55
+DEFAULT_MASK_LIGHT = 0.65
 
 # 超大图先降采样的阈值(长边像素;超 4K 先缩小省内存)
 _MAX_SIDE = 4096
@@ -124,8 +129,10 @@ def preset_pixmap(preset_id: str, size=(1600, 900)) -> QPixmap:
 
 def _load_wallpaper_source(settings: dict) -> QPixmap | None:
     """按设置加载当前壁纸(返回 QPixmap;无壁纸/加载失败返回 None)。
-    设置键:ui_wallpaper_source(none/preset/official/user) + 各源对应键。"""
+    设置键:ui_wallpaper_source(none/bundled/preset/official/user) + 各源对应键。"""
     src = (settings or {}).get("ui_wallpaper_source", "none") or "none"
+    if src == "bundled":
+        return _load_pixmap(bundled_wallpaper_path())
     if src == "preset":
         return preset_pixmap((settings or {}).get("ui_wallpaper_preset", DEFAULT_PRESET))
     if src == "user":
@@ -155,7 +162,9 @@ _wallpaper_blur_radius = None
 
 def blur_strength(settings: dict) -> int:
     """0 disables blur; migrate the old boolean switch to its original radius."""
-    value = (settings or {}).get('ui_wallpaper_blur', 0)
+    value = (settings or {}).get('ui_wallpaper_blur', None)
+    if value is None:
+        return 5
     if isinstance(value, bool):
         return 24 if value else 0
     try:
@@ -196,7 +205,9 @@ def load_wallpaper(settings: dict) -> QPixmap | None:
     settings = settings or {}
     src = settings.get('ui_wallpaper_source', 'none')
     path = ''
-    if src in ('user', 'official'):
+    if src == 'bundled':
+        path = bundled_wallpaper_path()
+    elif src in ('user', 'official'):
         from paths import cache_dir
         rel = settings.get('ui_wallpaper_user_path', '') if src == 'user' else os.path.join(
             'wallpapers', f"official_{settings.get('ui_wallpaper_official_id', '')}.png")
@@ -224,7 +235,7 @@ def load_wallpaper(settings: dict) -> QPixmap | None:
 
 
 def mask_strength(settings: dict) -> float:
-    """当前遮罩强度(0~1)。设置 ui_wallpaper_mask 存 0~80 的百分比;未设取默认(深 0.6 / 浅 0.5)。"""
+    """当前遮罩强度(0~1)。未自定义时深色 0.55、浅色 0.65。"""
     v = (settings or {}).get("ui_wallpaper_mask", None)
     if v is None:
         return DEFAULT_MASK_DARK if is_dark_mode() else DEFAULT_MASK_LIGHT
@@ -268,6 +279,7 @@ def scroll_surface_qss() -> str:
     handle = current_token('btn_border')
     hover = current_token('accent')
     return (
+        'QCheckBox, QRadioButton { background: transparent; }'
         'QPlainTextEdit, QTextEdit, QListWidget, QTreeWidget, QTableWidget {'
         ' border-radius: 10px; }'
         'QScrollArea > QWidget { background: transparent; }'
@@ -297,23 +309,27 @@ class BackgroundWidget(QWidget):
         self._shared = None     # 共享模式:主窗统一的缩放壁纸
         self._vx = 0            # 共享模式视口偏移(缩放坐标)
         self._vy = 0
-        self._mask = 0.6
+        self._wrap_shared = False
+        self._mask = DEFAULT_MASK_DARK
         self._enabled = False
 
-    def set_wallpaper(self, pixmap: QPixmap | None, mask: float = 0.6) -> None:
+    def set_wallpaper(self, pixmap: QPixmap | None, mask: float = DEFAULT_MASK_DARK) -> None:
         """cover 模式:壁纸 cover 缩放到自身。pixmap 为 None = 关闭。"""
         self._source = pixmap
         self._mask = max(0.0, min(1.0, mask))
         self._enabled = pixmap is not None and not pixmap.isNull()
         self._cover = None
         self._shared = None
+        self._wrap_shared = False
         self.update()
 
-    def set_shared_view(self, scaled: QPixmap | None, vx: int, vy: int, mask: float = 0.6) -> None:
+    def set_shared_view(self, scaled: QPixmap | None, vx: int, vy: int,
+                        mask: float = DEFAULT_MASK_DARK, *, wrap: bool = False) -> None:
         """共享模式:用主窗统一的缩放壁纸 + 视口偏移。scaled 为 None = 关闭。"""
         self._shared = scaled
         self._vx = int(vx)
         self._vy = int(vy)
+        self._wrap_shared = bool(wrap)
         self._mask = max(0.0, min(1.0, mask))
         self._enabled = scaled is not None and not scaled.isNull()
         self._source = None
@@ -339,12 +355,15 @@ class BackgroundWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         if self._shared is not None:
-            # 共享模式:画缩放壁纸,负偏移让对应片段落在窗口内;
-            # 偏移夹取到画布范围内,浮动移出画布时贴边(不出黑边)
+            # 浮窗可移出主窗共享画布；重复取样使拖动时仍随相对位置变化。
+            # 停靠中的视口仍按原来的边界裁切。
             w, h = self.width(), self.height()
-            sx = max(0, min(self._vx, max(0, self._shared.width() - w)))
-            sy = max(0, min(self._vy, max(0, self._shared.height() - h)))
-            p.drawPixmap(-sx, -sy, self._shared)
+            if self._wrap_shared:
+                p.drawTiledPixmap(0, 0, w, h, self._shared, self._vx, self._vy)
+            else:
+                sx = max(0, min(self._vx, max(0, self._shared.width() - w)))
+                sy = max(0, min(self._vy, max(0, self._shared.height() - h)))
+                p.drawPixmap(-sx, -sy, self._shared)
         elif self._source is not None:
             # cover 模式:cover 缩放到自身
             if self._cover is None or self._cover.size() != self.size():

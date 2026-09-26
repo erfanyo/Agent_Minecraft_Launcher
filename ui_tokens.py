@@ -23,17 +23,13 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 _THEME_MODE = 'system'
-_SYSTEM_PALETTE_DARK = None
 
 
 def set_theme_mode(mode: str) -> None:
     """Select app appearance without changing the operating-system theme."""
-    global _THEME_MODE, _SYSTEM_PALETTE_DARK
+    global _THEME_MODE
     if mode not in ('system', 'light', 'dark'):
         mode = 'system'
-    app = QApplication.instance()
-    if app is not None and _SYSTEM_PALETTE_DARK is None:
-        _SYSTEM_PALETTE_DARK = app.palette().window().color().lightness() < 128
     _THEME_MODE = mode
 
 
@@ -42,7 +38,7 @@ def theme_mode() -> str:
 
 
 def is_dark_mode() -> bool:
-    """判断当前系统主题是不是深色"""
+    """Resolve the app theme; system mode reads the OS scheme only."""
     if _THEME_MODE != 'system':
         return _THEME_MODE == 'dark'
     app = QApplication.instance()
@@ -68,9 +64,7 @@ def is_dark_mode() -> bool:
             return not bool(value)
         except OSError:
             pass
-    if _SYSTEM_PALETTE_DARK is not None:
-        return _SYSTEM_PALETTE_DARK
-    return app.palette().window().color().lightness() < 128
+    return False
 
 
 # ---------------- 颜色槽(深色默认, 浅色默认) ----------------

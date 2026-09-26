@@ -189,7 +189,7 @@ def download(resource_id: str, progress_callback=None) -> str:
         return dest
 
     os.makedirs(MODELS_DIR, exist_ok=True)
-    last_err = None
+    errors = []
     for url in _hf_candidates(res["repo"], res["file"]):
         try:
             _download_file(url, dest, progress_callback=progress_callback)
@@ -204,14 +204,18 @@ def download(resource_id: str, progress_callback=None) -> str:
             _save_manifest(manifest)
             return dest
         except Exception as e:
-            last_err = e
-    raise RuntimeError(f"下载 {res['name']} 失败(镜像与官方源都试过):{last_err}")
+            from urllib.parse import urlsplit
+            host = urlsplit(url).hostname or "本地镜像"
+            errors.append(f"{host}: {type(e).__name__}: {e}")
+    raise RuntimeError(f"下载 {res['name']} 失败。尝试结果：" + "；".join(errors))
 
 
 def _download_file(url: str, dest: str, progress_callback=None) -> None:
     """单文件流式下载;中断/失败删除半截文件,避免下次被'文件已存在'骗过"""
     try:
-        resp = requests.get(url, stream=True, timeout=30)
+        # GGUF 大文件跨境传输可能长时间没有新数据；这里设连接/读取超时，
+        # 避免默认 30 秒读取超时把仍在传输的大模型误判为失败。
+        resp = requests.get(url, stream=True, timeout=(20, 180))
         resp.raise_for_status()
         total = int(resp.headers.get("content-length", 0))
         done = 0

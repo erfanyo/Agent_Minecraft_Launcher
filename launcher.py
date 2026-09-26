@@ -261,6 +261,9 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
         "version_type": d.get("type", "release"),
         "game_directory": game_dir,
         "assets_root": assets_root,
+        "game_assets": (os.path.join(assets_root, "virtual", "legacy")
+                        if os.path.isdir(os.path.join(assets_root, "virtual", "legacy"))
+                        else assets_root),
         "assets_index_name": (d.get("assetIndex") or {}).get("id", ""),
         "natives_directory": natives_dir,
         "library_directory": os.path.join(install_dir, "libraries"),

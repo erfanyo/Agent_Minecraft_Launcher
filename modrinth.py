@@ -8,6 +8,9 @@ Modrinth(https://modrinth.com)是开源的 Mod 平台,API 免费公开:
 """
 import json
 import os
+import re
+import tomllib
+import zipfile
 
 import requests
 
@@ -163,35 +166,57 @@ def search_mods(query: str, game_version: str, loader: str | None = None,
     } for h in hits]
 
 
-def list_mod_versions(slug: str, game_version: str | None, loader: str | None) -> list:
+def list_mod_versions(slug: str, game_version: str | None, loader: str | None,
+                      detailed: bool = False) -> list:
     """某 Mod 在指定"游戏版本+加载器"下可用的版本号列表(新的在前)。
     game_version/loader 为 None 表示不按它过滤(列全部)。"""
-    resp = requests.get(BASE + f"/project/{slug}/version", params={
-        "game_versions": json.dumps([game_version] if game_version else []),
-        "loaders": json.dumps([loader] if loader else []),
-    }, timeout=20)
-    resp.raise_for_status()
-    return [v.get("version_number", "?") for v in resp.json()]
-
-
-def _find_version(slug: str, game_version: str | None, loader: str | None,
-                  version_number: str | None = None) -> dict | None:
-    """按 (版本, 加载器) 查文件信息；未指定版本时优先最新稳定版。"""
-    params = {"game_versions": json.dumps([game_version] if game_version else []),
-              "loaders": json.dumps([loader] if loader else [])}
+    params = {}
+    if game_version:
+        params["game_versions"] = json.dumps([game_version])
+    if loader:
+        params["loaders"] = json.dumps([loader])
     resp = requests.get(BASE + f"/project/{slug}/version", params=params, timeout=20)
     resp.raise_for_status()
     versions = resp.json()
-    if version_number:
-        versions = [v for v in versions if v.get("version_number") == version_number]
+    if detailed:
+        return [{"id": v.get("id"), "version_number": v.get("version_number", "?"),
+                 "label": v.get("version_number", "?"),
+                 "game_versions": v.get("game_versions", []),
+                 "loaders": v.get("loaders", []),
+                 "version_type": v.get("version_type", "release")} for v in versions]
+    return [v.get("version_number", "?") for v in versions]
+
+
+def _find_version(slug: str, game_version: str | None, loader: str | None,
+                  version_number: str | dict | None = None) -> dict | None:
+    """按 (版本, 加载器) 查文件信息；自动选择时接受正式版与 Beta。"""
+    version_id = version_number.get("id") if isinstance(version_number, dict) else None
+    requested_number = (version_number.get("version_number") if isinstance(version_number, dict)
+                        else version_number)
+    if version_id:
+        game_version = loader = None
+    params = {}
+    if game_version:
+        params["game_versions"] = json.dumps([game_version])
+    if loader:
+        params["loaders"] = json.dumps([loader])
+    resp = requests.get(BASE + f"/project/{slug}/version", params=params, timeout=20)
+    resp.raise_for_status()
+    versions = resp.json()
+    if version_id:
+        versions = [v for v in versions if v.get("id") == version_id]
+    elif requested_number:
+        versions = [v for v in versions if v.get("version_number") == requested_number]
     if not versions:
         return None
-    # Modrinth returns newest first, including alpha/beta builds. Automatic installs should
-    # prefer the newest release: a newer beta can carry incomplete dependency metadata and
-    # still fail at runtime with an otherwise compatible pack. Explicit version selection
-    # continues to allow prereleases, and prerelease-only projects still have a fallback.
-    v = versions[0] if version_number else next(
-        (row for row in versions if row.get("version_type") == "release"), versions[0])
+    # Modrinth returns newest first. Accept beta builds as normal automatic candidates so
+    # projects whose best-supported files are beta do not get stuck on an older release.
+    # Keep alpha as a fallback only when the project has no release or beta for this target.
+    if version_number:
+        v = versions[0]
+    else:
+        v = next((row for row in versions
+                  if row.get("version_type") in {"release", "beta"}), versions[0])
     primary = next((f for f in v.get("files", []) if f.get("primary")), None)
     f = primary or (v.get("files") or [{}])[0]
     return {
@@ -205,13 +230,16 @@ def _find_version(slug: str, game_version: str | None, loader: str | None,
 
 
 def get_mod_version(slug: str, game_version: str, loader: str | None,
-                    version_number: str | None = None) -> dict | None:
+                    version_number: str | dict | None = None) -> dict | None:
     """找某个 Mod 在"指定游戏版本 + 加载器"下的文件信息。
-    默认最新稳定版（没有稳定版时取最新预发布版）；version_number 指定时只在该版本里找。
+    默认按 Modrinth 新旧顺序取最新正式版或 Beta（没有时回退到最新可用版本）；
+    version_number 指定时只在该版本里找；带 ID 的版本项精确定位文件，不再按实例条件重选。
     loader 传 None = 不按加载器过滤(数据包/光影包等无加载器的项目)。
     精确找不到时逐级放宽(不限版本 → 不限加载器),提高老版本/标记不全项目的成功率。
     返回 {version_number, filename, url, size, dependencies};没有匹配返回 None。"""
-    for gv, ld in ((game_version, loader), (None, loader), (game_version, None), (None, None)):
+    filters = ((None, None),) if isinstance(version_number, dict) and version_number.get("id") else (
+        (game_version, loader), (None, loader), (game_version, None), (None, None))
+    for gv, ld in filters:
         try:
             info = _find_version(slug, gv, ld, version_number)
         except Exception:
@@ -228,8 +256,63 @@ _DEP_INCOMPAT = {"incompatible"}
 _DEP_EMBEDDED = {"embedded"}   # 内嵌依赖,通常随包发布,无需提示
 
 
+def installed_mod_identifiers(mods_dir: str) -> set[str]:
+    """Read active JAR metadata once; disabled or unreadable files do not count."""
+    identifiers = set()
+    try:
+        files = os.scandir(mods_dir)
+    except OSError:
+        return identifiers
+    with files:
+        for entry in files:
+            if not entry.is_file() or not entry.name.lower().endswith('.jar'):
+                continue
+            try:
+                with zipfile.ZipFile(entry.path) as archive:
+                    names = set(archive.namelist())
+                    for filename in ('fabric.mod.json', 'quilt.mod.json'):
+                        if filename in names and archive.getinfo(filename).file_size < 512_000:
+                            data = json.loads(archive.read(filename))
+                            quilt = data.get('quilt_loader') or {}
+                            mod_id = data.get('id') or quilt.get('id')
+                            if isinstance(mod_id, str):
+                                identifiers.add(re.sub(r'[^a-z0-9]', '', mod_id.lower()))
+                            for provided in data.get('provides') or quilt.get('provides') or []:
+                                provided_id = (provided if isinstance(provided, str) else
+                                               provided.get('id') if isinstance(provided, dict) else None)
+                                if isinstance(provided_id, str):
+                                    identifiers.add(re.sub(r'[^a-z0-9]', '', provided_id.lower()))
+                    for filename in ('META-INF/mods.toml', 'META-INF/neoforge.mods.toml'):
+                        if filename in names and archive.getinfo(filename).file_size < 512_000:
+                            data = tomllib.loads(archive.read(filename).decode('utf-8'))
+                            for mod in data.get('mods') or []:
+                                mod_id = mod.get('modId')
+                                if isinstance(mod_id, str):
+                                    identifiers.add(re.sub(r'[^a-z0-9]', '', mod_id.lower()))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                    UnicodeError, zipfile.BadZipFile):
+                continue
+    return identifiers
+
+
+_DEPENDENCY_MOD_ID_ALIASES = {
+    'architectury-api': ('architectury',),
+    'cloth-config': ('cloth_config', 'cloth-config2'),
+    'owo-lib': ('owo',),
+    'yacl': ('yet_another_config_lib_v3',),
+}
+
+
+def dependency_is_installed(dependency: dict, identifiers: set[str]) -> bool:
+    """Match a declared project to known local mod IDs, not a loose filename prefix."""
+    slug = str(dependency.get('slug') or '').lower()
+    candidates = (slug, *_DEPENDENCY_MOD_ID_ALIASES.get(slug, ()))
+    return any(re.sub(r'[^a-z0-9]', '', candidate) in identifiers
+               for candidate in candidates if candidate)
+
+
 def resolve_dependencies(slug: str, game_version: str, loader: str | None,
-                         version_number: str | None = None) -> dict:
+                         version_number: str | dict | None = None) -> dict:
     """解析某版本的正向依赖(灵感 #4):把 dependencies 的 project_id 解析成标题。
     返回 {"required": [...], "optional": [...], "incompatible": [...]},每项含 title/slug/project_id。
     解析失败(网络/非 mod)时各列为空——不阻塞下载,只作为提示。"""
@@ -264,10 +347,10 @@ def resolve_dependencies(slug: str, game_version: str, loader: str | None,
 
 
 def download_mod(slug: str, game_version: str, loader: str, mods_dir: str,
-                 version_number: str | None = None,
+                 version_number: str | dict | None = None,
                  progress_callback=None, strict=False) -> str | None:
     """下载某 Mod 到 mods 目录,返回保存的文件名;失败返回 None。
-    version_number 不传 → 最新稳定版（无稳定版时取最新预发布版）；传了 → 指定版本。"""
+    version_number 不传 → 最新正式版或 Beta（均无时取最新可用版）；传了 → 指定版本。"""
     info = (_find_version(slug, game_version, loader, version_number) if strict else
             get_mod_version(slug, game_version, loader, version_number))
     if info is None or not info["url"]:
