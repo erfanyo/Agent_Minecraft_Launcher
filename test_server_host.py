@@ -10,6 +10,11 @@ from server_host_client import managed_status, send_server_command
 
 
 class ServerHostTests(unittest.TestCase):
+    def test_removed_server_directory_has_no_managed_session(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing = Path(root, 'removed-server')
+            self.assertIsNone(managed_status(missing))
+
     def test_detached_host_reconnects_logs_and_commands(self):
         with tempfile.TemporaryDirectory() as root:
             script = Path(root, 'fake_server.py')

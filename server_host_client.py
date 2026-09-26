@@ -22,7 +22,10 @@ def _runtime_dir(root, create=False):
 
 
 def _read_state(root):
-    root, runtime = _runtime_dir(root)
+    try:
+        root, runtime = _runtime_dir(root)
+    except FileNotFoundError:
+        return None  # A selected server may have been removed while the UI timer is running.
     path = runtime / 'host.json'
     if not path.is_file() or path.is_symlink() or path.stat().st_size > 256 * 1024:
         return None

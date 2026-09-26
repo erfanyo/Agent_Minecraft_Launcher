@@ -98,6 +98,7 @@ class InstanceTests(unittest.TestCase):
         window._on_download_progress = lambda *a: None
         window._on_download_cancelled = lambda: None
         window._on_launch_prepare_failed = lambda error: None
+        window._start_launch_button_animation = lambda: None
         delivered = []
         window._start_prepared_game = lambda plan, version: delivered.append(plan)
         def prepare(*a, **kw):

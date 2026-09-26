@@ -425,6 +425,7 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
         # 超限截断:保通用(前 3 个)+ 本请求命中组里"核心查询/解析"工具,
         # 砍掉排后的(通常是次要的操作/写工具),避免关键工具被挤掉导致模型选不到。
         core = {"resolve_mod_concept", "search_mods", "search_modpacks", "list_instances",
+                "install_mod", "install_instance", "install_modpack",
                 "get_settings", "get_recipe_path", "read_instance_log", "read_crash_report",
                 "list_server_instances", "read_server_candidate_report", "list_server_mods",
                 "read_server_log", "set_server_mod_enabled", "suggest_server_removals"}
