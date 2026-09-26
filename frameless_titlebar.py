@@ -107,10 +107,10 @@ class FramelessTitleBar(QWidget):
         for button in self.findChildren(QPushButton):
             if button.property('titleNav'):
                 button.setStyleSheet(
-                    f'QPushButton {{ background: {current_color("panel_bg")};'
+                    f'QPushButton {{ background: {current_color("btn_bg")};'
                     f' color: {text_color()}; border: 1px solid {current_color("panel_border")};'
                     ' border-radius: 7px; font-size: 12px; padding: 0 7px; }'
-                    f'QPushButton:hover {{ background: {current_color("hover")}; }}'
+                    f'QPushButton:hover {{ background: {current_color("btn_bg_pressed")}; }}'
                     f'QPushButton:pressed {{ background: {current_color("sel_bg")}; }}'
                     f'QPushButton:disabled {{ color: {muted_color()}; }}')
                 continue

@@ -1200,6 +1200,7 @@ class MainWindow(QMainWindow):
             self._close_settings()
         self._online_restore = {
             'dock_visible': self.ai_dock.isVisible(),
+            'dock_width': self.ai_dock.width(),
             'strip_visible': self.ai_strip_dock.isVisible(),
         }
         self.ai_dock.hide()
@@ -1221,14 +1222,15 @@ class MainWindow(QMainWindow):
         saved = getattr(self, '_online_restore', {})
         self.ai_dock.setVisible(saved.get('dock_visible', False))
         self.ai_strip_dock.setVisible(saved.get('strip_visible', False))
+        if saved.get('dock_visible') and not self.ai_dock.isFloating():
+            width = saved.get('dock_width', self.ai_dock.width())
+            QTimer.singleShot(0, lambda: self.resizeDocks(
+                [self.ai_dock], [width], Qt.Orientation.Horizontal)
+                if self.ai_dock.isVisible() and not self.ai_dock.isFloating() else None)
         self._online_restore = None
         from ui_anim import reveal
         reveal(self._central_stack.currentWidget())
         self._recompute_wallpaper()
-        if self._ai_focus_mode and self.ai_dock.isVisible():
-            QTimer.singleShot(0, lambda: self.resizeDocks(
-                [self.ai_dock], [max(320, self.width() - 320)],
-                Qt.Orientation.Horizontal))
         self._update_mode_button()
 
     def _toggle_online_center(self):
