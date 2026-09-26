@@ -11,6 +11,35 @@
 > 说明:早期开发历史在本地重装系统时丢失,故 v0.2.0 起汇总记录全部已实现功能,
 > 后续版本只记录增量。
 
+## [v1.0.0] - 2026-09-26
+
+> 首个正式版本。玩家版见 `RELEASE_NOTES_1.0.0.md`；本节记录相对 v0.7.0 的主要技术变更。
+
+### 界面与会话
+
+- `main.py`、`ai_focus_mode.py`：加入常规／AI 双模式的顶部入口和转场；AI 模式复用现有对话 dock，保持会话、工具和输入状态。
+- `main.py`、`chat_archive.py`：AI 会话按实例归档，并允许不关联实例的纯会话；实例详情和服务端详情合并为同一标签入口。
+- `main.py`、`online_center.py`：联机改为右侧抽屉；关闭时恢复 AI dock 可见性和打开前宽度。
+- `ui_tokens.py`、`ui_style.py`、`ui_background.py`、`frameless_titlebar.py`：统一深浅主题、全局壁纸画布和标题栏按钮；修复 Linux 浅色标题按钮与窗口拖动问题。
+
+### 下载、实例与 AI 工具
+
+- `modrinth.py`、`curseforge.py`、`resource_center.py`、`resource_compatibility.py`：资源筛选与文件版本选择分离，支持 Beta 更新候选、手动选择可能不兼容的文件，并对光影包等资源放宽筛选。
+- `instance_install_service.py`、`loaders.py`、`launcher.py`：梳理原版、加载器及文件下载路径，补充老版本 Forge 和运行时兼容处理。
+- `assistant.py`、`agent_tools.py`：AI 工具按请求挂载；安装 Mod、实例和整合包时保留关键工具，写入动作继续受权限与确认机制约束。
+- `server_service.py`、`server_host_client.py`、`main.py`：服务端管理抽为可供 CLI 和 MCP 调用的无 Qt 服务层，补充服务端日志、导出与托管状态处理。
+
+### 分发与验证
+
+- `build_release.ps1`、`tools/build_local_ai_bundle.py`、`DISTRIBUTION.md`：Windows 标准单 exe 与预装本地 AI ZIP 分开构建；模型入包前按固定 SHA-256 校验。
+- `tools/build_linux.sh` 与 `.github/workflows/ci.yml`：Linux 成品打包、离屏与 Xvfb 启动检查；Windows 和 Linux 手动打包作业在三平台源码测试通过后执行。
+- `test_ci_download_matrix.py`、`test_ci_ai_tools.py`：本地 HTTP 服务覆盖 1.7.10 至 1.21.1 的实例文件下载及多类资源，覆盖 AI 工具暴露、确认和执行；测试不依赖远端服务实时可用性。
+
+### 已知范围
+
+- macOS 目前只运行源码 CI，没有正式打包产物。
+- 离线下载测试验证文件传输、校验与落盘；真实账号登录和第三方服务的实时可用性仍取决于外部服务与用户环境。
+
 ## [v0.7.0] - 2026-09-04 (测试版,待正式发布)
 
 > ⭐ **本期亮点:AI 上下文置顶(图钉)**。用户最直接感知的新交互——把关心的上下文"钉住",

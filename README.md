@@ -1,13 +1,22 @@
-# Agent Minecraft Launcher 🤖⛏️
+# Agent Minecraft Launcher · AMCL
+
+[下载 v1.0.0](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.0.0) · [简明更新说明](RELEASE_NOTES_1.0.0.md) · [技术更新日志](CHANGELOG.md) · [构建说明](BUILDING.md)
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
-**AI 助手型 Minecraft 启动器**——不只下载、启动游戏，还能跟 AI 聊天，让 AI 帮你装 Mod、查合成配方、发游戏指令、诊断崩溃日志。
+**能启动 Minecraft，也能帮你处理 Mod、实例和报错的 AI 启动器。** 常规模式保留完整的启动器操作；AI 模式把会话放在主窗口，两个模式共享实例、下载和设置。
 
-> 📜 **许可**:本项目采用 **GNU GPL-3.0-only** 开源许可(详见仓库根 [LICENSE](LICENSE))。
+## 下载
 
-> ⚠️ **测试阶段声明**:本启动器目前处于**测试阶段**,功能迭代频繁、可能有 bug,
-> 建议开发者/尝鲜者使用。微软正版登录与离线模式均已实现；正式发布前仍需继续验证登录续期、打包与旧版本兼容。
+| 平台与版本 | 文件 | 使用方法 |
+| --- | --- | --- |
+| Windows 标准版 | `AgentMinecraftLauncher.exe` | 双击运行；启动器会在旁边按需创建 `AMCL` 数据文件夹。 |
+| Windows 预装本地 AI 版 | `AgentMinecraftLauncher-Windows-LocalAI.zip` | 解压后运行 exe；模型已放在 `AMCL/models`，需要桌面快捷方式时运行包内的 `CreateDesktopShortcut.bat`。移动文件夹后需重新运行该脚本。 |
+| Linux x86_64 | `AgentMinecraftLauncher-linux-x86_64.tar.gz` | 解压后运行包内的 `AgentMinecraftLauncher`。 |
+
+安装包与 `SHA256SUMS` 校验文件见 [v1.0.0 Release](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.0.0)。macOS 已运行源码 CI 测试，当前没有 macOS 安装包。
+
+> 本项目采用 [GNU GPL-3.0-only](LICENSE) 许可。Windows 包没有商业代码签名证书；GPG 签名用于验证来源，不能消除 SmartScreen 提示。
 
 ## ✨ 功能一览
 
@@ -20,7 +29,7 @@
   - 查合成配方(套娃展开)、查按键绑定、生成符合版本语法的游戏指令
 - **权限控制**:只读(默认)/ **工作区可写**(可改启动器目录内文件);AI 装 Mod、发游戏指令等写操作需切到工作区可写(切前有确认)。
 - **游戏内 AI**:进游戏敲 `/ai` 也能让 AI 问答、发指令(按**游戏类型**判权限:单机/局域网房主允许,连的专用服务器只看 OP)。
-- **📌 AI 上下文置顶(本期亮点)**:把关心的上下文"钉住",AI 回答更贴合当前场景(仅注入上下文,**不**额外授予操作权限)。
+- **📌 上下文置顶**:常规模式可把关心的内容"钉"给 AI；AI 模式可引用选中的对话片段并添加注释(上下文操作**不**额外授予执行权限)。
 - **技能系统**:崩溃看门狗(自动诊断)、自动重启、备份提醒、指令指南(版本感知)
 
 ### 📦 实例管理(PCL2 风格)
@@ -57,6 +66,10 @@
 
 ## 🚀 快速开始
 
+1. 在上方表格选择与你的系统对应的包，从 [v1.0.0 Release](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.0.0) 下载。
+2. Windows 标准版直接运行 exe；本地 AI 版先解压 ZIP；Linux 版解压 tar.gz 后运行包内程序。
+3. 在首次引导中选好游戏目录和登录方式。AI 可选填 API Key，或使用预装本地 AI 版。
+
 ### 下载状态与反馈日志
 - 下载详情支持取消和重试。取消在下载分块、解压和 Forge 补丁步骤中生效；正在等待网络响应时需等待响应或超时。重试复用校验通过的文件。
 - 整合包导入未完成时保留文件，并暂不列入可启动实例；重新导入同一个压缩包可以继续补齐。CF 清单未下载的 Mod 会明确报未完成。
@@ -67,23 +80,11 @@
 - 历史日志不会自动清洗；提交 Issues 前仍请检查内容，尤其是旧日志和个人聊天文字。脱敏不能识别所有形式的个人信息。
 - 整合包的文件路径会检查目录跳转、Windows 盘符、特殊文件名及链接越界；检测到不安全路径会停止导入。
 
-### 方式一:直接运行 exe(给朋友/普通用户)
-**下载渠道(任选其一)**
-- [GitHub Releases](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases)(更新最快,海外/开发)
-- **夸克网盘**:https://pan.quark.cn/s/ca03e5694367?pwd=MaXY (提取码 `MaXY`,需夸克 App/扫码)
-- **123云盘**:https://1848479766.share.123pan.cn/123pan/bvdAvd-i73Yh (**可直接网页下载**,免装客户端,国内推荐)
+### Windows 首次运行提示
 
-解压后双击 **`AgentMinecraftLauncher.exe`**(Windows,无需安装 Python)即用。
-- 或开发机自己打包:
-```bash
-# 开发机打包(一次性)
-pip install pyinstaller
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name AgentMinecraftLauncher main.py
-# 产物:dist\AgentMinecraftLauncher.exe,直接拷给朋友即可
-```
-> 提示:exe 会把游戏目录 `.minecraft` 建在**自己旁边**;首次启动稍慢(单文件自解压)属正常。
+Windows 单文件程序首次启动会先解压运行组件，可能比后续启动稍慢。
 
-#### ⚠️ 首次运行出现「Windows 已保护你的电脑 / 是否保留」提示?
+#### ⚠️ 出现「Windows 已保护你的电脑 / 是否保留」提示?
 这是 Windows SmartScreen 对**未签名 + 下载量较少**的免费软件的标准确认(不是病毒,只是还没被足够多人运行过),按下面处理即可:
 
 1. 出现蓝色提示 → 点「**更多信息**」→「**仍要运行**」,之后启动器正常打开;
@@ -128,7 +129,10 @@ D2D1 0D7F 7FC3 E2AF FA76  88E9 1A89 9932 9DC6 5331
 > 说明:GPG 签名是**来源/完整性证明**(给较真的人),**不能**消除 Windows SmartScreen 的
 > "是否保留"提示(那是另一回事,靠代码签名证书/信誉,见上方)。
 
-### 方式二:从源码运行(给开发者)
+### 从源码运行(给开发者)
+
+正式打包使用固定依赖和仓库内的构建脚本；见 [BUILDING.md](BUILDING.md)。
+
 ```bash
 python -m venv .venv            # 创建虚拟环境
 .venv\Scripts\Activate.ps1      # 激活(Windows)
@@ -210,11 +214,11 @@ python main.py
 
 ## 📋 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)。
+玩家版见 [v1.0.0 更新说明](RELEASE_NOTES_1.0.0.md)；完整技术版见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 🔄 自动更新
 
-启动器内置更新检查(**帮助 → 检查更新**):从 GitHub Releases 拉取最新版本对比,
+启动器内置更新检查(**设置 → 系统 → 检查更新**):从 GitHub Releases 拉取最新版本对比,
 发现新版可一键下载并自动替换重启;同时显示 bridge-mod 的发布情况。
 **发版规范**:AMCL 打 `vX.Y.Z` tag + Release(附 `AgentMinecraftLauncher.exe`);
 bridge-mod 单独 tag(如 `v0.1.0`),附 `agentmc-bridge-fabric/neoforge-*.jar` 资产。
