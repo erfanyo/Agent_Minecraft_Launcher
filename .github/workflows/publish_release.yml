@@ -1,0 +1,83 @@
+name: Publish release from verified CI artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful manual CI run containing both release artifacts
+        required: true
+        type: string
+      version:
+        description: Release tag, for example v1.0.0
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check source run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '{conclusion,head_sha,event}' > run.json
+          test "$(jq -r .conclusion run.json)" = success
+          test "$(jq -r .event run.json)" = workflow_dispatch
+          test "$(jq -r .head_sha run.json)" = "$(git rev-parse HEAD^)" || \
+            test "$(jq -r .head_sha run.json)" = "$(git rev-parse HEAD)"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: AgentMinecraftLauncher-windows
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release/windows
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: AgentMinecraftLauncher-linux-x86_64
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release/linux
+
+      - name: Verify assets and prepare notes
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          (cd release/windows && sha256sum -c SHA256SUMS.txt)
+          (cd release/linux && sha256sum -c SHA256SUMS-linux.txt)
+          mkdir -p release/assets
+          cp release/windows/AgentMinecraftLauncher.exe release/assets/
+          cp release/windows/AgentMinecraftLauncher-Windows-LocalAI.zip release/assets/
+          cp release/windows/SHA256SUMS.txt release/assets/
+          cp release/linux/AgentMinecraftLauncher-linux-x86_64.tar.gz release/assets/
+          cp release/linux/SHA256SUMS-linux.txt release/assets/
+          cp erfanyo.asc release/assets/
+          {
+            cat RELEASE_NOTES_1.0.0.md
+            printf '\n<details>\n<summary>技术版更新日志</summary>\n\n'
+            sed -n '/^## \[v1\.0\.0\]/,/^## \[v0\.7\.0\]/{ /^## \[v0\.7\.0\]/d; p; }' CHANGELOG.md
+            printf '\n</details>\n'
+          } > release/body.md
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="$(jq -r .head_sha run.json)"
+          gh release create "$VERSION" release/assets/* \
+            --target "$SOURCE_SHA" \
+            --title "AMCL $VERSION · 正式版" \
+            --notes-file release/body.md \
+            --draft
