@@ -54,14 +54,16 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          (cd release/windows && sha256sum -c SHA256SUMS.txt)
-          (cd release/linux && sha256sum -c SHA256SUMS-linux.txt)
+          WINDOWS_DIR="$(dirname "$(find release/windows -name SHA256SUMS.txt -print -quit)")"
+          LINUX_DIR="$(dirname "$(find release/linux -name SHA256SUMS-linux.txt -print -quit)")"
+          (cd "$WINDOWS_DIR" && sha256sum -c SHA256SUMS.txt)
+          (cd "$LINUX_DIR" && sha256sum -c SHA256SUMS-linux.txt)
           mkdir -p release/assets
-          cp release/windows/AgentMinecraftLauncher.exe release/assets/
-          cp release/windows/AgentMinecraftLauncher-Windows-LocalAI.zip release/assets/
-          cp release/windows/SHA256SUMS.txt release/assets/
-          cp release/linux/AgentMinecraftLauncher-linux-x86_64.tar.gz release/assets/
-          cp release/linux/SHA256SUMS-linux.txt release/assets/
+          cp "$WINDOWS_DIR/AgentMinecraftLauncher.exe" release/assets/
+          cp "$WINDOWS_DIR/AgentMinecraftLauncher-Windows-LocalAI.zip" release/assets/
+          cp "$WINDOWS_DIR/SHA256SUMS.txt" release/assets/
+          cp "$LINUX_DIR/AgentMinecraftLauncher-linux-x86_64.tar.gz" release/assets/
+          cp "$LINUX_DIR/SHA256SUMS-linux.txt" release/assets/
           cp erfanyo.asc release/assets/
           {
             cat RELEASE_NOTES_1.0.0.md
