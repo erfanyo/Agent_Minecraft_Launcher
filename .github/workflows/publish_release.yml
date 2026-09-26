@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Check source run
         env:
@@ -33,8 +33,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '{conclusion,head_sha,event}' > run.json
           test "$(jq -r .conclusion run.json)" = success
           test "$(jq -r .event run.json)" = workflow_dispatch
-          test "$(jq -r .head_sha run.json)" = "$(git rev-parse HEAD^)" || \
-            test "$(jq -r .head_sha run.json)" = "$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "$(jq -r .head_sha run.json)" HEAD
 
       - uses: actions/download-artifact@v4
         with:
