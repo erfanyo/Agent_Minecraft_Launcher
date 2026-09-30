@@ -25,6 +25,21 @@ from PySide6.QtWidgets import (
 
 from ui_style import card_btn_style, hint_style, set_style, text_color, current_color
 
+
+def _export_check_style() -> str:
+    """Use the launcher palette for both the file tree and the launcher checkbox."""
+    icon = os.path.join(os.path.dirname(__file__), "icons", "check_white.svg").replace("\\", "/")
+    return (
+        f"QTreeWidget::indicator, QCheckBox::indicator {{ width: 16px; height: 16px;"
+        f" border: 1px solid {current_color('btn_border')}; border-radius: 4px;"
+        f" background: {current_color('bg0')}; }}"
+        f"QTreeWidget::indicator:checked, QCheckBox::indicator:checked {{"
+        f" background: {current_color('accent')}; border-color: {current_color('accent')};"
+        f" image: url(\"{icon}\"); }}"
+        f"QTreeWidget::indicator:disabled, QCheckBox::indicator:disabled {{"
+        f" background: {current_color('bg1')}; border-color: {current_color('border_soft')}; }}"
+    )
+
 # 顶层目录里「个人游玩记录」类(默认不勾选)
 _RECORD_DIRS = {"saves", "logs", "crash-reports", "backups", "schematics",
                 "backup", "world", "playerdata"}
@@ -105,6 +120,7 @@ class PackExportDialog(QDialog):
         self.include_launcher = QCheckBox("是否带上启动器(两层压缩包):外包 = 启动器 exe + 本整合包;"
                                           "关 = 只打包整合包内容,不含启动器")
         self.include_launcher.setChecked(False)
+        self.include_launcher.setStyleSheet(_export_check_style())
         self.include_launcher.setToolTip("开:导出的 zip 里含 AgentMinecraftLauncher.exe + 实例内容,朋友解压即装;"
                                          "关:只导整合包内容(适合已装启动器的人)")
         layout.addWidget(self.include_launcher)
@@ -130,7 +146,8 @@ class PackExportDialog(QDialog):
         self.tree.setHeaderHidden(True)
         self.tree.setColumnCount(1)
         self.tree.setStyleSheet(f"QTreeWidget {{ background:{current_color('bg0')}; color:{text_color()};"
-                                f" border:1px solid {current_color('btn_border')}; border-radius:8px; }}")
+                                f" border:1px solid {current_color('btn_border')}; border-radius:8px; }}"
+                                + _export_check_style())
         layout.addWidget(self.tree, 1)
 
         # ③ 底部:全选/全不选 + 目标路径 + 导出

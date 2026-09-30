@@ -24,17 +24,20 @@ DEFAULTS = {
     "java_paths": {},            # Java 大版本首选路径，如 {"8": ".../java.exe"};实例设置可覆盖
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
+    "backup_remind_on_exit": True,
+    "backup_auto_on_exit": False,
     "language": "auto",          # 界面语言:auto(跟随系统)/ zh / en / 语言包id(如玩梗版;见 i18n.py)
     "sync_minecraft_language": True,  # 启动前用启动器/系统语言同步实例 options.txt 的 lang 项
     "ui_mode": "beginner",       # 界面模式:beginner=全面(多提示/科普)/ expert=摘要(精简)。
                                  # 对外显示名叫「全面 / 摘要」(不用"新手/专家",免得显得看不起新手);
                                  # 值保持 beginner/expert 以兼容旧配置。
-    "microsoft_login": True,     # 正版登录开关(默认 True,正式版将要求正版登录)。
-                                 # 无 GUI 设置项;想跳过正版登录可手动改 config.json 的 microsoft_login=false;
-                                 # 也可以让 AI 关掉(告诉它"关掉正版登录")。
+    "microsoft_login": True,
+
     "login_method": "offline",   # 登录方式:offline(离线昵称) / microsoft(微软正版)。
                                  # 正版登录后这里变成 microsoft,启动游戏用正版凭证。
     "ms_credentials": {},        # 微软正版凭证(登录成功后存 refresh_token/username/uuid/access_token 摘要)。
+    "microsoft_accounts": [],    # 已添加的正版账户；ms_credentials 指向当前选中的账户
+    "offline_accounts": [],      # 已添加的离线昵称；username 指向当前选中的昵称
                                  # 敏感,只存本机;不随包分享。
     "ms_client_id": "",          # 微软 OAuth client_id(可选覆盖;留空=用官方白名单 id 00000000441cc96b)。
                                  # 微软已收回 Mojang 公开 id,自注册应用后填这里即可正版登录;敏感,只存本机。
@@ -222,5 +225,14 @@ def update_setting(key: str, value) -> dict:
     with _SETTINGS_LOCK:
         data = load_settings()
         data[str(key)] = value
+        save_settings(data)
+        return data
+
+
+def update_settings(change) -> dict:
+    """在同一把配置锁下读取、修改并保存多个相关字段。"""
+    with _SETTINGS_LOCK:
+        data = load_settings()
+        change(data)
         save_settings(data)
         return data

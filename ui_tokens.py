@@ -72,7 +72,7 @@ def is_dark_mode() -> bool:
 # 名字与值与原 ui_style.py 完全一致,保持不变(第三方 import / 旧配置兼容)。
 COLOR_SLOTS = {
     "text": ("#e7ecf5", "#1f2430"),
-    "muted": ("#8b96a8", "#6b7280"),
+    "muted": ("#8b96a8", "#626a78"),
     "hover": ("rgba(255,255,255,0.08)", "rgba(0,0,0,0.05)"),
     "panel_bg": ("rgba(255,255,255,0.045)", "rgba(0,0,0,0.035)"),
     "panel_border": ("rgba(255,255,255,0.11)", "rgba(20,30,60,0.12)"),
@@ -104,8 +104,8 @@ COLOR_TOKENS = {
     "bg2": ("#2b2f3a", "#f4f6fa"),        # 卡片/按钮底(等价旧 btn_bg)
     # 文本分层
     "text0": ("#e7ecf5", "#1f2430"),      # 正文(= text)
-    "text1": ("#8b96a8", "#6b7280"),      # 次要(= muted)
-    "text2": ("#aab3c0", "#8a93a0"),      # 辅助/占位(更弱一级)
+    "text1": ("#8b96a8", "#626a78"),      # 次要(= muted)
+    "text2": ("#aab3c0", "#858e9b"),      # 辅助/占位(更弱一级)
     # 边框 / 状态
     "border": ("#3a4150", "#cfd5e0"),     # 边框(= btn_border)
     "border_soft": ("rgba(255,255,255,0.10)", "rgba(20,30,60,0.14)"),

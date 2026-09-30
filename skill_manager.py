@@ -5,28 +5,29 @@
 - 每个技能是一个 Skill 子类,挂在游戏生命周期的钩子上:
     on_game_start(游戏启动) / on_game_log(每行日志) / on_game_stop(游戏退出)
 - 启用状态持久化在 config.json 的 skills 字段({技能id: true/false})
-- 以后新增辅助功能:在 BUILTIN_SKILLS 列表里加一个 Skill 子类即可,
-  菜单"技能 → 技能管理"会自动出现它的开关。
+- 以后新增内置辅助功能:在 BUILTIN_SKILLS 列表里加一个 Skill 子类即可;
+  插件也可注册用户自定义技能,两者会分别出现在技能管理里。
 
 内置技能(示例,验证框架):
   1. 崩溃自动重启 —— 游戏异常退出后询问是否一键重启(带防循环)
-  2. 备份提醒   —— 正常退出后,如果存档比上次备份新,提醒备份(灵感 #6 联动)
+  2. 世界备份   —— 本次游玩修改了本地世界后，按全局设置提醒或自动备份
 """
 import os
 
-from ui_style import muted_color
+from ui_style import muted_color, current_color
+from ui_switch import ToggleSwitch
 from PySide6.QtWidgets import (
     QDialog,
+    QCheckBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt
 
 
 class Skill:
@@ -90,47 +91,77 @@ class AutoRestart(Skill):
 
 
 class BackupReminder(Skill):
-    """备份提醒:正常退出后,若存档比上次备份新,提醒备份(灵感 #6)"""
+    """只在本次游玩修改了本地世界后提醒或自动备份。"""
     id = "backup_reminder"
     name = "备份提醒"
-    description = ("游戏正常退出后,如果检测到存档(saves)比最近一次备份更新,\n"
-                   "提醒你备份存档,防坏档。")
+    description = "游戏正常退出且本地存档发生变化后，提醒或自动备份。可在设置 → 备份调整。"
     category = "存档安全"
     default_enabled = True
 
+    def __init__(self, manager):
+        super().__init__(manager)
+        self._baseline = None
+        self._instance_id = None
+
+    @staticmethod
+    def _snapshot(saves_dir):
+        """记录世界文件的增删与元数据；服务器游玩不会改变这份快照。"""
+        result = {}
+        if not os.path.isdir(saves_dir):
+            return result
+        for root, _dirs, files in os.walk(saves_dir):
+            for name in files:
+                path = os.path.join(root, name)
+                try:
+                    stat = os.stat(path)
+                    result[os.path.relpath(path, saves_dir)] = (stat.st_size, stat.st_mtime_ns)
+                except OSError:
+                    continue
+        return result
+
+    def on_game_start(self, process, instance_id: str):
+        self._instance_id = instance_id
+        self._baseline = self._snapshot(os.path.join(self._inst_dir(instance_id), "saves"))
+
     def on_game_stop(self, exit_code):
-        if exit_code != 0:
-            return   # 异常退出由自动 debug 处理
-        main = self.manager.main
-        inst_id = getattr(main, "_running_instance_id", None)
-        if not inst_id:
+        baseline, inst_id = self._baseline, self._instance_id
+        self._baseline = None
+        self._instance_id = None
+        if exit_code != 0 or baseline is None or not inst_id:
             return
+        main = self.manager.main
         inst_dir = main.game_dir_for(inst_id)
         saves_dir = os.path.join(inst_dir, "saves")
-        if not os.path.isdir(saves_dir):
+        if not os.path.isdir(saves_dir) or self._snapshot(saves_dir) == baseline:
             return
-        latest_save = 0.0
-        for name in os.listdir(saves_dir):
-            p = os.path.join(saves_dir, name)
-            if os.path.isdir(p):
-                latest_save = max(latest_save, os.path.getmtime(p))
-
-        from backup import list_backups
+        from backup import backup_instance
+        from settings import load_settings, update_setting
         import paths
-        baks = list_backups(inst_id, paths.GAME_DIR)
-        latest_bak = max((os.path.getmtime(b["path"]) for b in baks), default=0.0)
-        if latest_save > latest_bak:
-            ret = QMessageBox.question(
-                main, "备份提醒",
-                "检测到存档比最近一次备份更新,建议备份防坏档。\n现在备份吗?")
-            if ret == QMessageBox.StandardButton.Yes:
-                from backup import backup_instance
-                try:
-                    out = backup_instance(inst_id, paths.GAME_DIR)
-                    main.statusBar().showMessage(f"已备份到:{out}")
-                except Exception as e:
-                    main.statusBar().showMessage(f"备份失败:{e}")
-
+        settings = load_settings()
+        if settings.get("backup_auto_on_exit", False):
+            should_backup = True
+        elif settings.get("backup_remind_on_exit", True):
+            dialog = QMessageBox(main)
+            dialog.setWindowTitle("给世界留个存档点")
+            dialog.setText("本次游玩的本地世界有变化。你也不希望坏档时没有存档点吧？")
+            dialog.setInformativeText("现在备份这个实例的世界吗？")
+            dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            dialog.button(QMessageBox.StandardButton.Yes).setText("现在备份")
+            dialog.button(QMessageBox.StandardButton.No).setText("这次不用")
+            skip = QCheckBox("以后不再提醒（可在设置 → 备份中恢复）", dialog)
+            dialog.setCheckBox(skip)
+            should_backup = dialog.exec() == QMessageBox.StandardButton.Yes
+            if skip.isChecked():
+                update_setting("backup_remind_on_exit", False)
+                main.settings["backup_remind_on_exit"] = False
+        else:
+            return
+        if should_backup:
+            try:
+                out = backup_instance(inst_id, paths.GAME_DIR, instance_dir=inst_dir)
+                main.statusBar().showMessage(f"已备份到：{out}")
+            except Exception as error:
+                QMessageBox.warning(main, "备份失败", str(error))
 
 class CommandGuide(Skill):
     """指令指南:按游戏版本生成正确的原版指令(重点: NBT/组件写法)"""
@@ -435,7 +466,8 @@ class SkillManager:
     def __init__(self, main_window, settings: dict):
         self.main = main_window
         self.settings = settings
-        self.skills = [cls(self) for cls in BUILTIN_SKILLS]
+        self.builtin_skills = [cls(self) for cls in BUILTIN_SKILLS]
+        self.skills = list(self.builtin_skills)
         # 插件注册的技能(plugin_manager.SKILLS):附属到内置技能之后,同样受启停控制
         try:
             import plugin_manager
@@ -448,6 +480,9 @@ class SkillManager:
             pass
 
     def is_enabled(self, skill_id: str) -> bool:
+        if skill_id == "backup_reminder":
+            return bool(self.settings.get("backup_remind_on_exit", True)
+                        or self.settings.get("backup_auto_on_exit", False))
         s = self.settings.get("skills", {}) or {}
         if skill_id in s:
             return bool(s[skill_id])
@@ -462,10 +497,11 @@ class SkillManager:
         save_settings(self.settings)
 
     def list(self) -> list:
-        """[{id, name, description, category, enabled}]"""
+        """[{id, name, description, category, enabled, source}]"""
         return [{"id": sk.id, "name": sk.name, "description": sk.description,
-                 "category": sk.category, "enabled": self.is_enabled(sk.id)}
-                for sk in self.skills]
+                 "category": sk.category, "enabled": self.is_enabled(sk.id),
+                 "source": "builtin" if i < len(self.builtin_skills) else "custom"}
+                for i, sk in enumerate(self.skills) if sk.id != "backup_reminder"]
 
     def get(self, skill_id: str):
         return next((sk for sk in self.skills if sk.id == skill_id), None)
@@ -504,7 +540,7 @@ class SkillManager:
 # ================= 管理对话框 =================
 
 class SkillManagerDialog(QDialog):
-    """技能与可选功能管理:列表勾选启停,下方显示说明。"""
+    """技能与可选功能管理：内置与自定义分组，开关即时保存。"""
 
     def __init__(self, manager: SkillManager, parent=None):
         super().__init__(parent)
@@ -512,14 +548,25 @@ class SkillManagerDialog(QDialog):
         self.setWindowTitle("技能与可选功能")
         self.setMinimumSize(520, 420)
 
-        self.list_widget = QListWidget()
-        self.desc_label = QLabel("")
-        self.desc_label.setWordWrap(True)
-
         hint = QLabel("这里既有游戏运行辅助，也有实验性的可选工作流。\n"
-                      "勾选即启用、取消即恢复原流程；涉及写入时仍会单独预览和确认。")
+                      "开关立即生效；涉及写入时仍会单独预览和确认。")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {muted_color()};")
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(2, 2, 8, 2)
+        content_layout.setSpacing(8)
+        infos = self.mgr.list()
+        self._add_section(content_layout, "内置 Skill",
+                          [i for i in infos if i["source"] == "builtin"])
+        self._add_section(content_layout, "用户自定义 Skill",
+                          [i for i in infos if i["source"] == "custom"])
+        content_layout.addStretch()
+        scroll.setWidget(content)
 
         close_btn = QPushButton("关闭")
         close_btn.clicked.connect(self.accept)
@@ -528,44 +575,42 @@ class SkillManagerDialog(QDialog):
         row.addWidget(close_btn)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("技能与可选功能:"))
-        layout.addWidget(self.list_widget, 1)
-        layout.addWidget(self.desc_label)
+        layout.addWidget(scroll, 1)
         layout.addWidget(hint)
         layout.addLayout(row)
 
-        self.list_widget.itemChanged.connect(self._on_item_changed)
-        self.list_widget.currentItemChanged.connect(self._on_current_changed)
-        self._reload()
-        if self.list_widget.count():
-            self.list_widget.setCurrentRow(0)
-
-    def _reload(self):
-        self.list_widget.blockSignals(True)
-        self.list_widget.clear()
-        for info in self.mgr.list():
-            item = QListWidgetItem(f"[{info['category']}] {info['name']}")
-            item.setData(Qt.ItemDataRole.UserRole, info["id"])
-            item.setCheckState(Qt.CheckState.Checked if info["enabled"]
-                               else Qt.CheckState.Unchecked)
-            self.list_widget.addItem(item)
-        self.list_widget.blockSignals(False)
-
-    def _on_item_changed(self, item):
-        sid = item.data(Qt.ItemDataRole.UserRole)
-        self.mgr.set_enabled(sid, item.checkState() == Qt.CheckState.Checked)
-        # 更新说明
-        for info in self.mgr.list():
-            if info["id"] == sid:
-                self.desc_label.setText(
-                    f"{info['name']}({'已启用' if info['enabled'] else '已停用'}):\n{info['description']}")
-
-    def _on_current_changed(self, current, _prev):
-        if current is None:
+    def _add_section(self, layout: QVBoxLayout, title: str, infos: list):
+        heading = QLabel(f"{title} ({len(infos)})")
+        heading.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(heading)
+        if not infos:
+            empty = QLabel("暂无。插件注册的自定义 Skill 会在下次启动后显示。")
+            empty.setWordWrap(True)
+            empty.setStyleSheet(f"color: {muted_color()};")
+            layout.addWidget(empty)
             return
-        sid = current.data(Qt.ItemDataRole.UserRole)
-        for info in self.mgr.list():
-            if info["id"] == sid:
-                self.desc_label.setText(
-                    f"{info['name']}({'已启用' if info['enabled'] else '已停用'}):\n{info['description']}")
-                break
+        for info in infos:
+            card = QFrame()
+            card.setObjectName("skillCard")
+            card.setStyleSheet(
+                f"QFrame#skillCard {{ border: 1px solid {current_color('panel_border')};"
+                " border-radius: 6px; }}")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(10, 8, 10, 8)
+            card_layout.setSpacing(4)
+            title_row = QHBoxLayout()
+            name = QLabel(info["name"])
+            name.setStyleSheet("font-weight: bold;")
+            title_row.addWidget(name, 1)
+            switch = ToggleSwitch(info["enabled"])
+            switch.setToolTip("启用或停用此 Skill")
+            switch.setAccessibleName(f"{info['name']}开关")
+            switch.toggled.connect(
+                lambda enabled, sid=info["id"]: self.mgr.set_enabled(sid, enabled))
+            title_row.addWidget(switch)
+            card_layout.addLayout(title_row)
+            detail = QLabel(f"{info['category']} · {info['description']}")
+            detail.setWordWrap(True)
+            detail.setStyleSheet(f"color: {muted_color()};")
+            card_layout.addWidget(detail)
+            layout.addWidget(card)

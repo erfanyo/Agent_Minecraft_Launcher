@@ -18,12 +18,12 @@ from PySide6.QtWidgets import (
 from assistant import AISettingsForm
 from background_tasks import BackgroundTask
 from center_shell import CenterShell
-from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES
+from downloader import MIRROR_SOURCES, MIRROR_STRATEGIES, MIRROR_REGION_PRESETS
 from i18n import t
 import paths
 from paths import DEFAULT_GAME_DIR
 from os_platform.openpath import open_path
-from settings import save_settings
+from settings import update_settings
 from ui_style import (card_btn_style, muted_color, set_style,
                       COLOR_BLIND_PRESETS, check_readability, panel_style, text_color,
                       accent_color, danger_color, success_color, current_color)
@@ -93,6 +93,7 @@ class SettingsCenter(QWidget):
 
         self.shell = CenterShell(self, menu_width=150)
         self.shell.add_section(t("GAME"), self._build_game)
+        self.shell.add_section("备份", self._build_backup)
         self.shell.add_section("Java", self._build_java)
         self.shell.add_section("语言", self._build_language)
         self.shell.add_section("个性化", self._build_ui)
@@ -211,6 +212,35 @@ class SettingsCenter(QWidget):
         if d:
             self.game_dir_edit.setText(d)
 
+    def _build_backup(self) -> QWidget:
+        self.backup_remind_check = ToggleSwitch(self.settings.get("backup_remind_on_exit", True))
+        self.backup_auto_check = ToggleSwitch(self.settings.get("backup_auto_on_exit", False))
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
+        layout.addWidget(setting_switch_row(
+            "退出时提醒备份", self.backup_remind_check,
+            "只在本次游玩修改了本地世界后提醒；在提醒里勾选不再提示后，可在这里恢复。"))
+        layout.addWidget(setting_switch_row(
+            "退出时自动备份", self.backup_auto_check,
+            "每次退出且本地世界有变化时自动备份；启用后不再弹出提醒。"))
+        hint = QLabel("备份保存在游戏目录的 backups/<实例名>/ 下。联机服务器游玩不会触发本地世界备份。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {muted_color()};")
+        layout.addWidget(hint)
+        layout.addStretch()
+        return panel
+
+    def refresh_backup_settings(self):
+        from settings import load_settings
+        current = load_settings()
+        for name, key in (("backup_remind_check", "backup_remind_on_exit"),
+                          ("backup_auto_check", "backup_auto_on_exit")):
+            control = getattr(self, name, None)
+            if control is not None:
+                control.setChecked(bool(current.get(key, key == "backup_remind_on_exit")))
+
     def _on_memory_policy_changed(self, automatic: bool):
         self.memory_spin.setEnabled(not automatic)
 
@@ -292,16 +322,6 @@ class SettingsCenter(QWidget):
         self.animations_check = ToggleSwitch(bool(self.settings.get("ui_animations_enabled", True)))
         l.addWidget(setting_switch_row("界面动画", self.animations_check,
                                        "淡入、标签切换等过渡效果"))
-        l.addSpacing(8)
-        # 已临时弃用 / 废案功能登记
-        from settings.deprecated import get_deprecated
-        for d in get_deprecated():
-            info = QLabel(f"<b>{d.get('name')}</b>  ·  状态:{d.get('status','')}<br>"
-                          f"<span style='color:{muted_color()};'>{d.get('note','')}</span>")
-            info.setWordWrap(True); info.setTextFormat(Qt.TextFormat.RichText)
-            row = QHBoxLayout(); row.addWidget(info, 1)
-            # 老版教程(基础版)已移除:不再提供「临时查看」入口,只保留新版「重播引导教程」
-            l.addLayout(row)
         # 配色(自定义主题):改 强调色/文字色/次要文字/背景色
         l.addSpacing(12)
         theme_title = QLabel("🎨 配色(自定义主题,文字颜色也可以改):")
@@ -499,6 +519,16 @@ class SettingsCenter(QWidget):
     def _queue_visual_autosave(self, *_):
         self._visual_save_timer.start()
 
+    def _save_preserving_accounts(self):
+        """其他设置页的旧快照不能覆盖登录卡片刚切换的账户。"""
+        account_keys = {"username", "offline_accounts", "login_method",
+                        "ms_credentials", "microsoft_accounts"}
+        def change(live):
+            live.update({key: value for key, value in self.settings.items()
+                         if key not in account_keys})
+            self.settings = live
+        update_settings(change)
+
     def _save_visual_settings(self):
         """只保存可即时回退的外观项，不触发实例重扫或 AI 重载。"""
         self.settings['ui_theme'] = self.theme_combo.currentData()
@@ -510,7 +540,7 @@ class SettingsCenter(QWidget):
                                               if self._wallpaper_blur_custom else None)
         self.settings["ui_wallpaper_user_path"] = getattr(self, "_wallpaper_user_path", "")
         self.settings["ui_animations_enabled"] = self.animations_check.isChecked()
-        save_settings(self.settings)
+        self._save_preserving_accounts()
         try:
             from ui_anim import set_animations_enabled
             set_animations_enabled(self.settings["ui_animations_enabled"])
@@ -623,7 +653,7 @@ class SettingsCenter(QWidget):
         from ui_style import set_custom_colors
         set_custom_colors(cols)
         self.settings["ui_custom_colors"] = cols
-        save_settings(self.settings)
+        self._save_preserving_accounts()
         self._notify_visual_saved()
         self._refresh_color_btn_text()
         self._retheme()
@@ -641,7 +671,7 @@ class SettingsCenter(QWidget):
         cols = dict(cur); cols[slot] = c.name()
         set_custom_colors(cols)
         self.settings["ui_custom_colors"] = cols
-        save_settings(self.settings)
+        self._save_preserving_accounts()
         self._notify_visual_saved()
         self._refresh_color_btn_text()
         self._retheme()
@@ -651,7 +681,7 @@ class SettingsCenter(QWidget):
         from ui_style import clear_custom_colors
         clear_custom_colors()
         self.settings["ui_custom_colors"] = {}
-        save_settings(self.settings)
+        self._save_preserving_accounts()
         self._notify_visual_saved()
         self._refresh_color_btn_text()
         self._retheme()
@@ -837,10 +867,14 @@ class SettingsCenter(QWidget):
             ("Qwen3.5-0.8B", "按需下载模型", "Apache-2.0",
              "为本地 AI 提供基础模型；只在用户选择本地模型时下载。", "https://huggingface.co/Qwen/Qwen3.5-0.8B",
              "https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/LICENSE"),
-            ("EasyTier", "按需下载联机组件", "LGPL-3.0",
-             "为虚拟局域网联机提供底层组网能力。它是独立项目，仅在用户选择使用时下载或连接。",
+            ("EasyTier", "启用联机插件后自动准备", "LGPL-3.0",
+             "为虚拟局域网联机提供底层组网能力。它是独立项目；启动房间由用户操作触发。",
              "https://github.com/EasyTier/EasyTier",
              "https://github.com/EasyTier/EasyTier/blob/main/LICENSE"),
+            ("Terracotta / 陶瓦联机", "启用联机插件后自动准备", "AGPL-3.0-or-later（含独立程序集成例外）",
+             "感谢 burningtnt 开发陶瓦联机，为跨启动器 Minecraft 房间码联机提供能力。AMCL 下载原版程序并通过其进程间接口连接。",
+             "https://github.com/burningtnt/Terracotta",
+             "https://github.com/burningtnt/Terracotta/blob/master/LICENSE"),
             ("PyInstaller", "仅用于构建", "GPL-2.0-or-later（含启动器例外）",
              "把开发版本构建为可分发的 Windows 程序。", "https://pyinstaller.org/",
              "https://pyinstaller.org/en/stable/license.html"),
@@ -990,7 +1024,7 @@ class SettingsCenter(QWidget):
         preferred = dict(self.settings.get("java_paths") or {})
         preferred[str(int(major))] = path
         self.settings["java_paths"] = preferred
-        save_settings(self.settings)
+        self._save_preserving_accounts()
         self.runtime_changed.emit()
         self.java_status.setText(f"已把 Java {major} 设为该大版本首选。")
         QTimer.singleShot(0, self._refresh_java_list)
@@ -1015,7 +1049,7 @@ class SettingsCenter(QWidget):
         if preferred.get(str(info["major"])) == info["path"]:
             preferred.pop(str(info["major"]), None)
             self.settings["java_paths"] = preferred
-            save_settings(self.settings)
+            self._save_preserving_accounts()
             self.runtime_changed.emit()
         self._refresh_java_list()
 
@@ -1140,6 +1174,14 @@ class SettingsCenter(QWidget):
 
     # ================= 镜像源 =================
     def _build_mirror(self) -> QWidget:
+        self.mirror_region_combo = QComboBox()
+        self.mirror_region_combo.addItem("选择地区推荐…", None)
+        for key, (label, _strategy, _mirror) in MIRROR_REGION_PRESETS.items():
+            self.mirror_region_combo.addItem(label, key)
+        self.mirror_region_combo.currentIndexChanged.connect(self._apply_mirror_region_preset)
+        region_hint = QLabel("地区推荐只填写下方策略和镜像站；欧洲、美洲、非洲与中东优先使用官方 CDN。")
+        region_hint.setWordWrap(True)
+        region_hint.setStyleSheet(f"color: {muted_color()};")
         self.strategy_combo = QComboBox()
         for key, info in MIRROR_STRATEGIES.items():
             self.strategy_combo.addItem(info["name"], key)
@@ -1168,6 +1210,8 @@ class SettingsCenter(QWidget):
         del_row = QHBoxLayout(); del_row.addStretch(); del_row.addWidget(del_btn)
 
         form = QFormLayout()
+        form.addRow("地区推荐:", self.mirror_region_combo)
+        form.addRow("", region_hint)
         form.addRow("下载策略:", self.strategy_combo)
         form.addRow("", self.strategy_hint)
         form.addRow("镜像站:", self.mirror_combo)
@@ -1178,6 +1222,19 @@ class SettingsCenter(QWidget):
         l.addWidget(QLabel("自定义镜像(与 BMCLAPI 同构:填 base 地址,自动映射 libraries/ assets/ version/ 等路径)"))
         l.addLayout(add_row); l.addWidget(self.custom_list); l.addLayout(del_row); l.addStretch()
         return w
+
+    def _apply_mirror_region_preset(self):
+        key = self.mirror_region_combo.currentData()
+        preset = MIRROR_REGION_PRESETS.get(key)
+        if not preset:
+            return
+        _, strategy, mirror = preset
+        strategy_idx = self.strategy_combo.findData(strategy)
+        mirror_idx = self.mirror_combo.findData(mirror)
+        if strategy_idx >= 0:
+            self.strategy_combo.setCurrentIndex(strategy_idx)
+        if mirror_idx >= 0:
+            self.mirror_combo.setCurrentIndex(mirror_idx)
 
     def _build_plugins(self) -> QWidget:
         """插件管理:列出 plugins/*.py(开关启停)。整页放进滚动条,避免垂直拥挤。
@@ -1414,6 +1471,9 @@ class SettingsCenter(QWidget):
             return
         self.settings["memory_gb"] = 0 if self.memory_auto_check.isChecked() else self.memory_spin.value()
         self.settings["version_isolation"] = self.isolation_check.isChecked()
+        if hasattr(self, "backup_remind_check"):
+            self.settings["backup_remind_on_exit"] = self.backup_remind_check.isChecked()
+            self.settings["backup_auto_on_exit"] = self.backup_auto_check.isChecked()
         self.settings["game_dir"] = self.game_dir_edit.text().strip()
         self.settings["language"] = self.language_combo.currentData()
         self.settings["sync_minecraft_language"] = self.sync_minecraft_language_check.isChecked()
@@ -1453,7 +1513,7 @@ class SettingsCenter(QWidget):
                 mcp_edit = None
         if mcp_edit is not None:
             self.settings["mcp_clients"] = _parse_mcp_entries(mcp_edit.text())
-        save_settings(self.settings)
+        self._save_preserving_accounts()
         paths.set_game_dir(self.settings["game_dir"])
         try:
             import i18n

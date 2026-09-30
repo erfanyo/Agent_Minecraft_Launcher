@@ -59,8 +59,13 @@ def first_game_steps():
             'text': '⑧ 以后想重看这段引导，在「设置 → 系统」点「重播引导教程」就行。',
         },
         {
-            'route': [('maintab', instances), ('btn', t('VERSION_HOME_LAUNCH_GAME'))],
+            'route': [('maintab', instances), ('btn', 'launch_game_button')],
             'arrow': 'above',
             'text': '⑨ 回到「我的实例」，选中刚下载的实例，再点「启动游戏」。现在可以开始玩了！',
+        },
+        {
+            'route': [('btn', 'AI 模式')],
+            'arrow': 'below',
+            'text': '⑩ 顶部「AI 模式」可以用对话让助手找 Mod、整理实例和分析崩溃。AI 可能判断错误或执行不完整；先核对目标实例和改动，必要时返工修正后再用。',
         },
     ]

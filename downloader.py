@@ -94,16 +94,34 @@ def download_file(url: str, dest: str, sha1: str | None = None,
 
 # ---------------------------------------------------------------------------
 # 镜像站:预设 + 自定义(自定义镜像存 config.json 的 custom_mirrors,见 settings.py)。
-# 换源统一规则:把官方地址按路径映射到镜像站的 libraries/ assets/ version/ 等目录,
-# 自定义镜像与 BMCLAPI 同构,填入 base 地址即可。
+# BMCLAPI 和自定义镜像按 BMCLAPI 路径映射；其他预设使用各自公布的路径规则。
 # 注意:这里只登记"镜像站","要不要用官方"由下载策略 MIRROR_STRATEGIES 决定。
 # ---------------------------------------------------------------------------
 MIRROR_SOURCES = {
     "bmclapi": {
-        "name": "BMCLAPI(推荐,国内加速)",
+        "name": "BMCLAPI · 中国大陆",
         "base": "https://bmclapi2.bangbang93.com",
-        "desc": "国内社区维护的老牌镜像站,内容与官方一致,下载速度快",
+        "desc": "适合中国大陆；提供 Minecraft 版本、资源和依赖文件镜像。",
     },
+    "granodiorite": {
+        "name": "Granodiorite · 亚太",
+        "base": "https://granodiorite.ferris.love",
+        "desc": "面向亚太地区；提供 Minecraft 版本、资源和依赖文件镜像。",
+    },
+    "fastmcmirror": {
+        "name": "FastMinecraftMirror · 备用",
+        "base": "https://fastmcmirror.org",
+        "desc": "提供部分 Mojang 域名的替换地址；未覆盖的文件仍使用官方源。",
+    },
+}
+
+# 地区只决定初始建议，不代表镜像站在每个大洲都有节点。
+MIRROR_REGION_PRESETS = {
+    "cn": ("中国大陆", "mirror_first", "bmclapi"),
+    "apac": ("亚洲其他地区与大洋洲", "mirror_first", "granodiorite"),
+    "europe": ("欧洲", "smart_official", "granodiorite"),
+    "americas": ("美洲", "smart_official", "granodiorite"),
+    "africa": ("非洲与中东", "smart_official", "granodiorite"),
 }
 
 # 下载策略:决定"官方源"和"镜像站"谁先用、谁兜底、用不用
@@ -169,6 +187,26 @@ def mirror_url(url: str, version_id: str | None = None, mirror: str | None = Non
     base = _mirror_base(mirror)
     if not base:
         return url
+    key = mirror or _active_mirror()
+    parsed = urlparse(url)
+    host, path = parsed.netloc.lower(), parsed.path
+    if key == "granodiorite":
+        if host == "libraries.minecraft.net":
+            return base + "/libraries" + path
+        if host == "resources.download.minecraft.net":
+            return base + "/assets" + path
+        if host in ("piston-data.mojang.com", "piston-meta.mojang.com"):
+            return base + path
+        return url
+    if key == "fastmcmirror":
+        hosts = {
+            "launcher.mojang.com": "launcher.fastmcmirror.org",
+            "launchermeta.mojang.com": "launchermeta.fastmcmirror.org",
+            "resources.download.minecraft.net": "resources.fastmcmirror.org",
+            "libraries.mojang.com": "libraries.fastmcmirror.org",
+        }
+        replacement = hosts.get(host)
+        return parsed._replace(netloc=replacement).geturl() if replacement else url
     if "libraries.minecraft.net" in url:
         return base + "/libraries/" + url.split("libraries.minecraft.net/")[-1]
     if "launcher.mojang.com/maven" in url:
@@ -190,6 +228,8 @@ def mirror_manifest_url(mirror: str | None = None) -> str | None:
     base = _mirror_base(mirror)
     if not base:
         return None
+    if (mirror or _active_mirror()) == "fastmcmirror":
+        return "https://launchermeta.fastmcmirror.org/mc/game/version_manifest_v2.json"
     return base + "/mc/game/version_manifest_v2.json"
 
 
@@ -197,6 +237,14 @@ def mirror_version_json_url(url: str, mirror: str | None = None) -> str:
     """把版本详情 JSON 的官方地址换成镜像地址(镜像站按版本 id 提供 /version/<id>/json)"""
     base = _mirror_base(mirror)
     if not base:
+        return url
+    key = mirror or _active_mirror()
+    parsed = urlparse(url)
+    if key == "granodiorite":
+        return base + parsed.path if parsed.netloc.lower() == "piston-meta.mojang.com" else url
+    if key == "fastmcmirror":
+        if parsed.netloc.lower() == "launchermeta.mojang.com":
+            return parsed._replace(netloc="launchermeta.fastmcmirror.org").geturl()
         return url
     if ("piston-meta.mojang.com" in url or "launchermeta.mojang.com" in url
             or "launcher.mojang.com" in url):
@@ -296,7 +344,10 @@ def download_maven(path: str, dest: str, sha1: str | None = None,
     按下载策略安排镜像 Maven 仓库的位置(镜像站一般也镜像了 Maven 仓库)。"""
     strat = strategy or _active_strategy()
     base = _mirror_base(mirror)
-    mirror_repo = (base + "/maven/{path}") if base else None
+    mirror_key = mirror or _active_mirror()
+    # /maven/ 是 BMCLAPI 的路径约定，不能套用到其他预设。
+    mirror_repo = (base + "/maven/{path}") if base and (
+        mirror_key == "bmclapi" or mirror_key.startswith("custom:")) else None
     repos = _maven_repos_for_path(path)
     if strat == "official_only":
         pass                        # 只用官方仓库,顺序不变

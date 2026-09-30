@@ -240,11 +240,18 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
         "get_recipe_path(查配方)、compare_items(比物品)、get_key_bindings(查按键)。"
         "执行结果要反馈给玩家。" % instance)
     if not can_exec:
+        missing_identity = not str(ctx.get("server_type") or "").strip() or \
+            ctx.get("is_integrated_owner") is None
+        permission_hint = (
+            "当前 bridge-mod 未上报游戏类型或房主身份，启动器无法确认单人世界房主；"
+            "这是旧版桥接协议的问题，不代表你没有存档文件权限。需要更新 bridge-mod。"
+            if missing_identity else
+            "该玩家没有执行改动指令的游戏权限；在服务器或局域网客人身份下，需要 OP 权限。")
         tool_note = (
             "你正在【游戏内】响应玩家,当前运行实例:「%s」。"
             "当前身份无法安全执行改动指令:你只能用【只读】工具(查配方/get_command_guide/查按键/比物品),"
             "【不能】执行任何改动的游戏指令(send_game_command 不可用)。"
-            "若这是旧版 bridge-mod，请先在启动器里更新它；否则需要 OP 权限或请服主操作。" % instance)
+            "%s" % (instance, permission_hint))
     parts.append(tool_note)
     return "\n\n".join(parts)
 

@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (QLabel, QPushButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
-from ui_style import (accent_color, card_btn_style, current_color,
+from ui_style import (accent_color, card_btn_style, current_color, launch_btn_style,
                       muted_color, set_style, text_color)
 from ui_background import BackgroundWidget
 from version_home import LoginCard
@@ -56,11 +56,29 @@ class AIFocusSidebar(BackgroundWidget):
         save_button.clicked.connect(self._save_session)
         layout.addWidget(save_button)
 
-        self.launch_button = QPushButton("▶ 启动选中实例")
-        set_style(self.launch_button, card_btn_style)
-        self.launch_button.clicked.connect(launcher.launch_selected_instance)
+        self.launch_button = QPushButton("启动游戏")
+        self.launch_button.setMinimumHeight(56)
+        self.launch_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_style(self.launch_button, launch_btn_style)
+        self.launch_button.clicked.connect(
+            lambda _checked=False: launcher.launch_selected_instance(
+                launcher.home_panel.current_instance()))
+        launcher.instance_list.currentItemChanged.connect(
+            lambda _current, _previous: self.set_launch_state(self._launch_state))
         layout.addWidget(self.launch_button)
+        self._launch_state = "idle"
         self.refresh_sessions()
+
+    def set_launch_state(self, state: str):
+        self._launch_state = state
+        inst = self.launcher.home_panel.current_instance()
+        name = (inst or {}).get("name") or (inst or {}).get("id", "")
+        labels = {"idle": "启动游戏", "starting": "启动中…",
+                  "success": "✓ 启动成功", "failed": "启动失败 · 重试"}
+        self.launch_button.setText(labels.get(state, labels["idle"]))
+        self.launch_button.setToolTip(f"将启动：{name}" if name else "请先选择一个实例")
+        self.launch_button.setEnabled(state in ("idle", "failed") and
+                                      inst is not None)
 
     def refresh_from_home(self):
         self.login_card.refresh()
@@ -94,7 +112,7 @@ class AIFocusSidebar(BackgroundWidget):
             item.setData(0, Qt.ItemDataRole.UserRole, ('session', session['path']))
             item.setToolTip(0, session.get('created_at', ''))
         self.sessions.expandAll()
-        self.launch_button.setEnabled(source.currentItem() is not None)
+        self.set_launch_state(self._launch_state)
 
     def _activate_item(self, item, _column):
         kind, value = item.data(0, Qt.ItemDataRole.UserRole) or (None, None)
@@ -136,7 +154,7 @@ class AIFocusSidebar(BackgroundWidget):
             original = source.item(index)
             if (original.data(Qt.ItemDataRole.UserRole) or {}).get('id') == instance_id:
                 source.setCurrentItem(original)
-                self.launch_button.setEnabled(True)
+                self.set_launch_state(self._launch_state)
                 return
 
 

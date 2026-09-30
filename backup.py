@@ -15,12 +15,12 @@ from datetime import datetime
 import paths
 
 
-def backup_instance(instance_id: str, game_dir: str = None) -> str:
+def backup_instance(instance_id: str, game_dir: str = None, instance_dir: str = None) -> str:
     """备份一个实例,返回备份目录路径。
-    game_dir 缺省时用当前生效的游戏目录(paths.GAME_DIR)。"""
+    game_dir 缺省时用当前生效的游戏目录(paths.GAME_DIR)；instance_dir 是实际存档目录。"""
     if game_dir is None:
         game_dir = paths.GAME_DIR
-    inst_dir = os.path.join(game_dir, "versions", instance_id)
+    inst_dir = instance_dir or os.path.join(game_dir, "versions", instance_id)
     saves_dir = os.path.join(inst_dir, "saves")
     mods_dir = os.path.join(inst_dir, "mods")
 

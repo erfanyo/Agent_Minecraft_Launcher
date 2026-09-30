@@ -11,7 +11,8 @@ Agent Minecraft Launcher 感谢以下开源项目及服务。此清单记录启�
 | [pywebview](https://github.com/r0x0r/pywebview) | 可选界面；使用系统 WebView | [BSD-3-Clause](https://github.com/r0x0r/pywebview/blob/master/LICENSE) |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) | 本地 AI 运行时；随支持本地 AI 的发行包提供 | [MIT](https://github.com/ggml-org/llama.cpp/blob/master/LICENSE) |
 | [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) | 按需下载；本地 AI 基础模型 | [Apache-2.0](https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/main/LICENSE) |
-| [EasyTier](https://github.com/EasyTier/EasyTier) | 按需下载；虚拟局域网联机 | [LGPL-3.0](https://github.com/EasyTier/EasyTier/blob/main/LICENSE) |
+| [EasyTier](https://github.com/EasyTier/EasyTier) | 启用联机插件后自动准备；虚拟局域网联机 | [LGPL-3.0](https://github.com/EasyTier/EasyTier/blob/main/LICENSE) |
+| [Terracotta / 陶瓦联机](https://github.com/burningtnt/Terracotta)（© burningtnt） | 启用联机插件后自动下载原版程序；通过进程间接口提供跨启动器房间码联机 | [AGPL-3.0-or-later，含独立程序集成例外](https://github.com/burningtnt/Terracotta/blob/master/LICENSE) |
 | [PyInstaller](https://pyinstaller.org/) | 仅用于构建 Windows 发行包 | [GPL-2.0-or-later，含启动器例外](https://pyinstaller.org/en/stable/license.html) |
 
 ## 外部服务

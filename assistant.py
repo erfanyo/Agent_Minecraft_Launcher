@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDockWidget,
+    QFrame,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -65,7 +66,8 @@ from agent_tools import TOOL_FUNCS
 from assistant_ui import (
     _esc,
     _ChatInput,
-    AskUserDialog,
+    ChoicePopupButton,
+    AskUserPanel,
     collect_screenshots,
     ContextRing,
     estimate_tokens,
@@ -958,7 +960,8 @@ class _Signals(QObject):
     no_tool = Signal()
     self_test = Signal(bool)
     tool_called = Signal(str, dict, str)   # 工具调用过程展示(从 worker 线程 emit,主线程渲染)
-    user_ask = Signal(str, list, object, object)   # (问题, 选项, 结果列表引用, 事件) 主线程弹窗
+    user_ask = Signal(str, list, object, object)   # (问题, 选项, 结果列表引用, 事件) 主线程显示卡片
+    user_ask_cancel = Signal()
     action_confirm = Signal(str, str, object, object)  # (工具名, 预览文本, 结果列表, 事件) 主线程确认
     local_dl_start = Signal()              # 需要开始下载本地模型 → 主线程开下载(带进度弹窗)
     local_dl_progress = Signal(int, int)   # 本地模型下载进度(done, total)(跨线程)
@@ -1136,19 +1139,13 @@ class AISettingsForm(QWidget):
         self.permission = QComboBox()
         for label, value in PERMISSIONS:
             self.permission.addItem(label, value)
-        self.response_style = QComboBox()
-        self.response_style.addItem("普通用户语言（推荐）", "plain")
-        self.response_style.addItem("技术详情", "technical")
+        self.response_style = ChoicePopupButton([
+            ("普通用户语言（推荐）", "plain", "重点说明能不能玩、改了什么，以及功能有什么影响。"),
+            ("技术详情", "technical", "同时显示日志证据、版本、路径和内部处理信息。"),
+        ])
         self.response_style.setToolTip(
             "普通用户语言：重点告诉你能不能玩、改了什么、功能有什么影响。\n"
             "技术详情：同时显示日志证据、版本、路径和内部处理信息。")
-        self.confirmation_mode = QComboBox()
-        self.confirmation_mode.addItem("每项都确认（稳妥）", "per_action")
-        self.confirmation_mode.addItem("备份后连续处理（少打断）", "backup_continue")
-        self.confirmation_mode.setToolTip(
-            "每项都确认：每次修改前都询问。\n"
-            "备份后连续处理：先保存可恢复副本，再持续修到可玩、失败或达到本轮时间预算；"
-            "改用新实例、恢复旧状态或改变世界时仍会询问。")
         self.context_window = QSpinBox()
         self.context_window.setRange(1000, 1000000)
         self.context_window.setSingleStep(1024)
@@ -1168,7 +1165,6 @@ class AISettingsForm(QWidget):
         common = QGroupBox("通用")
         cf = QFormLayout(common)
         cf.addRow("回答方式:", self.response_style)
-        cf.addRow("操作确认:", self.confirmation_mode)
         cf.addRow("文件权限:", self.permission)
         cf.addRow("上下文窗口:", self.context_window)
         cf.addRow("图片输入:", setting_switch_row("允许发送图片", self.vision_check,
@@ -1281,8 +1277,6 @@ class AISettingsForm(QWidget):
         self.permission.setCurrentIndex(idx if idx >= 0 else 0)
         idx = self.response_style.findData(s.get("ai_response_style", "plain"))
         self.response_style.setCurrentIndex(idx if idx >= 0 else 0)
-        idx = self.confirmation_mode.findData(s.get("ai_confirmation_mode", "per_action"))
-        self.confirmation_mode.setCurrentIndex(idx if idx >= 0 else 0)
         # 权限下拉:从只读切到"工作区可写"弹二级确认+免责声明;取消则回只读
         self.permission.currentIndexChanged.connect(self._on_permission_combo_changed)
         self.context_window.setValue(int(s.get("context_window", 65536) or 65536))
@@ -1515,7 +1509,6 @@ class AISettingsForm(QWidget):
             # 通用
             "ai_permission": self.permission.currentData(),
             "ai_response_style": self.response_style.currentData(),
-            "ai_confirmation_mode": self.confirmation_mode.currentData(),
             "context_window": self.context_window.value(),
             "ai_multimodal": self.vision_check.isChecked(),
             "ai_in_game": "on" if self.ai_in_game.isChecked() else "off",
@@ -1918,8 +1911,9 @@ class AIChatDock(QDockWidget):
         self.signals.self_test.connect(self._on_self_test)
         # 工具调用过程展示:worker 线程只 emit 信号,渲染回到主线程(跨线程操作 UI 会崩)
         self.signals.tool_called.connect(self._show_tool)
-        # ask_user 交互:worker 线程请求 → 主线程弹窗 → 结果回传
+        # ask_user 交互:worker 线程请求 → 主线程显示输入框上方卡片 → 结果回传
         self.signals.user_ask.connect(self._on_user_ask_ui)
+        self.signals.user_ask_cancel.connect(self._cancel_user_ask)
         self.signals.action_confirm.connect(self._on_action_confirm_ui)
         # 本地模型下载(跨线程发信号,主线程更新进度弹窗,避免跨线程碰 UI)
         self.signals.local_dl_start.connect(self._start_local_download)
@@ -2001,6 +1995,42 @@ class AIChatDock(QDockWidget):
             f" border-radius: 6px; padding: 3px 8px; }}"
             f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         self.perm_label = QLabel("")
+        self.response_style = ChoicePopupButton([
+            ("普通回答", "plain", "重点说明结果、影响和下一步。"),
+            ("技术详情", "technical", "附带日志证据、版本、路径和处理细节。"),
+        ], current=(1 if self.settings.get("ai_response_style") == "technical" else 0))
+        self.response_style.currentIndexChanged.connect(self._set_response_style)
+        self.confirmation_mode = ChoicePopupButton([
+            ("每项都确认（稳妥）", "per_action", "每次操作前都由你确认。"),
+            ("备份后连续处理（少打断）", "backup_continue", "先备份再连续处理；恢复旧状态、换实例或改变世界时仍会询问。"),
+        ], current=(1 if self.settings.get("ai_confirmation_mode") == "backup_continue" else 0))
+        self.confirmation_mode.setToolTip(
+            "每项都确认：每次修改前都询问。\n"
+            "备份后连续处理：先保存可恢复副本，再持续处理；"
+            "改用新实例、恢复旧状态或改变世界时仍会询问。")
+        self._refresh_confirmation_mode()
+        self.confirmation_mode.currentIndexChanged.connect(self._set_confirmation_mode)
+        self.input_preferences = QFrame(self.input)
+        self.input_preferences.setObjectName("inputPreferences")
+        self.input_preferences.setStyleSheet(
+            f"QFrame#inputPreferences {{ background: {current_color('panel_bg')};"
+            f" color: {text_color()}; border: 1px solid {current_color('panel_border')};"
+            " border-radius: 12px; }")
+        self.input_preferences.setFixedWidth(360)
+        pref_layout = QVBoxLayout(self.input_preferences)
+        pref_layout.setContentsMargins(12, 10, 12, 10)
+        pref_layout.setSpacing(8)
+        for label, control in (("回答方式", self.response_style),
+                               ("操作确认", self.confirmation_mode)):
+            pref_row = QHBoxLayout()
+            pref_row.addWidget(QLabel(label))
+            pref_row.addStretch()
+            pref_row.addWidget(control)
+            pref_layout.addLayout(pref_row)
+        self.input.preferences_panel = self.input_preferences
+        self.input.preferencesClicked.connect(self._toggle_input_preferences)
+        self.input_preferences.hide()
+
         perm_row = QHBoxLayout()
         perm_row.setContentsMargins(2, 0, 2, 0)
         perm_row.addWidget(QLabel("文件权限:"))
@@ -2058,6 +2088,10 @@ class AIChatDock(QDockWidget):
         irl.addLayout(self.thumb_row)
         irl.addStretch()
         self.img_row_widget = img_row_widget
+        self.ask_user_panel = AskUserPanel()
+        self.ask_user_panel.submitted.connect(self._finish_user_ask)
+        self.ask_user_panel.canceled.connect(self._cancel_user_ask)
+        self._pending_user_ask = None
 
         container = BackgroundWidget()   # 壁纸模式下 AI dock 内容区也画同张壁纸+遮罩(不割裂)
         layout = QVBoxLayout(container)
@@ -2104,6 +2138,7 @@ class AIChatDock(QDockWidget):
         self.context_pins = ContextPins(self)
         chat_lay.addWidget(self.context_pins)
         chat_lay.addWidget(self.img_row_widget)  # 图片缩略图 + 上下文环
+        chat_lay.addWidget(self.ask_user_panel)
         chat_lay.addLayout(row)                 # 输入行
         self.tabs.addTab(chat_tab, "💬 聊天")
         # Tab1: 聊天记录·归档
@@ -2503,6 +2538,46 @@ class AIChatDock(QDockWidget):
                   "launcher_write": "日常可写（AMCL 与 .minecraft）",
                   "workspace_write": "工作区可写（可生成插件/改源码）"}
         self._append_system(f"文件权限已切换为：{labels[nxt]}")
+
+    def _refresh_confirmation_mode(self):
+        mode = self.settings.get("ai_confirmation_mode", "per_action")
+        index = self.confirmation_mode.findData(mode)
+        self.confirmation_mode.blockSignals(True)
+        self.confirmation_mode.setCurrentIndex(index if index >= 0 else 0)
+        self.confirmation_mode.blockSignals(False)
+
+    def _toggle_input_preferences(self):
+        panel = self.input_preferences
+        if panel.isVisible():
+            panel.hide()
+            return
+        panel.adjustSize()
+        panel.move(6, max(6, self.input.height() - self.input.preferences_btn.height() - 18 - panel.height()))
+        panel.show()
+        panel.raise_()
+        self.input.preferences_btn.raise_()
+
+    def _set_response_style(self, _index: int):
+        style = self.response_style.currentData()
+        if style not in {"plain", "technical"}:
+            return
+        from settings import update_settings
+        update_settings(lambda live: live.__setitem__("ai_response_style", style))
+        self.settings["ai_response_style"] = style
+        self.main.settings["ai_response_style"] = style
+        if getattr(self.main, "settings_center", None) is not None:
+            self.main.settings_center.settings["ai_response_style"] = style
+
+    def _set_confirmation_mode(self, _index: int):
+        mode = self.confirmation_mode.currentData()
+        if mode not in {"per_action", "backup_continue"}:
+            return
+        from settings import update_settings
+        update_settings(lambda live: live.__setitem__("ai_confirmation_mode", mode))
+        self.settings["ai_confirmation_mode"] = mode
+        self.main.settings["ai_confirmation_mode"] = mode
+        if getattr(self.main, "settings_center", None) is not None:
+            self.main.settings_center.settings["ai_confirmation_mode"] = mode
 
     # ---- 聊天记录·归档 tab ----
     def _build_archive_tab(self) -> QWidget:
@@ -3525,14 +3600,15 @@ class AIChatDock(QDockWidget):
             "说明当前模型不支持工具调用(小模型常见),建议换更强的模型,"
             "或用 🛠 自测确认。")
 
-    # ---- ask_user 交互:AI 不确定时弹选择框(多选 + 输入补充) ----
+    # ---- ask_user 交互:AI 不确定时显示输入框上方的选择卡片 ----
     def on_user_ask(self, question: str, options: list) -> str:
-        """worker 线程调用:请求主线程弹窗,阻塞等用户选择,返回选择文本"""
+        """worker 线程调用:等待主线程卡片返回选择文本。"""
         result_box = []
         ev = threading.Event()
         self.signals.user_ask.emit(question, options, result_box, ev)
         while not ev.wait(0.2):
             if getattr(self, '_agent_cancel', threading.Event()).is_set():
+                self.signals.user_ask_cancel.emit()
                 return '用户已停止任务'
         picked = result_box[0] if result_box else []
         if not picked:
@@ -3637,15 +3713,30 @@ class AIChatDock(QDockWidget):
         dlg.exec()
 
     def _on_user_ask_ui(self, question, options, result_box, ev):
-        """主线程:弹 AskUserDialog,结果放回 result_box 并唤醒 worker"""
-        try:
-            dlg = AskUserDialog(question, options, self)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                result_box.append(dlg.selected())
-            else:
-                result_box.append([])
-        finally:
+        """主线程:显示卡片，提交后唤醒 worker。"""
+        if getattr(self, '_agent_cancel', threading.Event()).is_set():
+            result_box.append([])
             ev.set()
+            return
+        self._cancel_user_ask()
+        self._pending_user_ask = (result_box, ev)
+        self.show()
+        self.raise_()
+        self.tabs.setCurrentIndex(0)
+        self.ask_user_panel.show_question(question, options)
+
+    def _finish_user_ask(self, picked: list):
+        pending = self._pending_user_ask
+        if pending is None:
+            return
+        self._pending_user_ask = None
+        self.ask_user_panel.hide()
+        result_box, ev = pending
+        result_box.append(picked)
+        ev.set()
+
+    def _cancel_user_ask(self):
+        self._finish_user_ask([])
 
     # ---- 自测工具调用 ----
     def self_test_tools(self):
@@ -3709,6 +3800,11 @@ class AIChatDock(QDockWidget):
         self.settings = settings
         self._rebuild_strategy_menu()
         self._update_permission_label()
+        response_index = self.response_style.findData(settings.get("ai_response_style", "plain"))
+        self.response_style.blockSignals(True)
+        self.response_style.setCurrentIndex(response_index if response_index >= 0 else 0)
+        self.response_style.blockSignals(False)
+        self._refresh_confirmation_mode()
         self.update_vision_ui()
         self.update_local_status()
         self.maybe_preload_local()

@@ -8,7 +8,7 @@ AI 助手的纯表现层 UI 单元(从 assistant.py 拆分而来,降低主文件
 
 放入本模块的元素(均不引用 assistant 的 TOOLS/executor/worker):
 - 纯函数:_esc / estimate_tokens / model_supports_vision(+_VISION_MODEL_HINTS) / collect_screenshots
-- 纯 UI 类:ContextRing / SendWithRing / RecentScreenshotsDialog / AskUserDialog / _ChatInput
+- 纯 UI 类:ContextRing / SendWithRing / RecentScreenshotsDialog / AskUserDialog / AskUserPanel / _ChatInput
 
 被 assistant.py 经 `from assistant_ui import ...` 复用。
 """
@@ -16,21 +16,24 @@ import html
 import os
 import time
 
-from ui_style import muted_color, success_color, warning_color, danger_color, accent_color
+from ui_style import muted_color, success_color, warning_color, danger_color, accent_color, current_color
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 
@@ -280,6 +283,83 @@ class RecentScreenshotsDialog(QDialog):
             self.accept()
 
 
+class ChoicePopupButton(QPushButton):
+    """无箭头的文字选择按钮，弹出带标题、说明和选中标记的菜单。"""
+
+    currentIndexChanged = Signal(int)
+
+    def __init__(self, choices=(), current=0, parent=None):
+        super().__init__(parent)
+        self._choices = []
+        self._current = -1
+        self._menu = QMenu(self)
+        self._menu.setStyleSheet(
+            f"QMenu {{ background: {current_color('panel_bg')}; color: {current_color('text')};"
+            f" border: 1px solid {current_color('panel_border')}; border-radius: 12px; padding: 6px; }}")
+        self._menu.aboutToShow.connect(self._populate_menu)
+        self.clicked.connect(self._show_menu)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(
+            f"QPushButton {{ color: {current_color('text')}; background: {current_color('panel_bg')};"
+            f" border: 1px solid {current_color('panel_border')}; border-radius: 16px; padding: 6px 12px; }}"
+            f"QPushButton:hover {{ border-color: {accent_color()}; }}")
+        for choice in choices:
+            self.addItem(*choice)
+        if self._choices:
+            self.setCurrentIndex(current)
+
+    def addItem(self, label: str, value, description: str = ""):
+        self._choices.append((str(label), value, str(description)))
+
+    def findData(self, value) -> int:
+        return next((i for i, choice in enumerate(self._choices) if choice[1] == value), -1)
+
+    def setCurrentIndex(self, index: int):
+        if not self._choices:
+            return
+        index = max(0, min(int(index), len(self._choices) - 1))
+        changed = index != self._current
+        self._current = index
+        self.setText(self._choices[index][0])
+        if changed:
+            self.currentIndexChanged.emit(index)
+
+    def currentIndex(self) -> int:
+        return self._current
+
+    def currentData(self):
+        return self._choices[self._current][1] if self._current >= 0 else None
+
+    def _show_menu(self):
+        self._menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def _populate_menu(self):
+        self._menu.clear()
+        for index, (label, _value, description) in enumerate(self._choices):
+            row = QPushButton()
+            row.setMinimumWidth(310)
+            row.setMinimumHeight(60)
+            mark = "✓" if index == self._current else ""
+            row.setText(
+                f"<table width='100%'><tr><td><b>{_esc(label)}</b></td>"
+                f"<td align='right'>{mark}</td></tr>"
+                f"<tr><td colspan='2'><span style='color:{muted_color()}'>"
+                f"{_esc(description)}</span></td></tr></table>")
+            row.setToolTip(description)
+            row.setStyleSheet(
+                f"QPushButton {{ text-align: left; color: {current_color('text')};"
+                f" background: transparent; border: none; border-radius: 8px; padding: 8px 10px; }}"
+                f"QPushButton:hover {{ background: {current_color('btn_bg')}; }}")
+            action = QWidgetAction(self._menu)
+            action.setDefaultWidget(row)
+            self._menu.addAction(action)
+            row.clicked.connect(lambda _checked=False, i=index: self._choose(i))
+
+    def _choose(self, index: int):
+        self.setCurrentIndex(index)
+        self._menu.hide()
+
+
 class AskUserDialog(QDialog):
     """AI 拿不准用户意图时弹出:多选选项 + 可输入补充(保留输入框)。
     返回:用户勾选的选项 + 手动输入的补充。"""
@@ -325,6 +405,65 @@ class AskUserDialog(QDialog):
         return picked
 
 
+class AskUserPanel(QFrame):
+    """在聊天输入框上方回答 ask_user，保留多选和自由补充。"""
+
+    submitted = Signal(list)
+    canceled = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AskUserPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"QFrame#AskUserPanel {{ border: 1px solid {muted_color()};"
+            f" border-radius: 8px; background: {current_color('panel_bg')}; }}")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+        self.question_label = QLabel()
+        self.question_label.setWordWrap(True)
+        layout.addWidget(self.question_label)
+        self.options_layout = QVBoxLayout()
+        layout.addLayout(self.options_layout)
+        self.checks = []
+        self.input = QLineEdit()
+        self.input.setPlaceholderText("选项不够？可以补充说明")
+        self.input.returnPressed.connect(self._submit)
+        layout.addWidget(self.input)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.canceled.emit)
+        ok_btn = QPushButton("确定")
+        ok_btn.clicked.connect(self._submit)
+        buttons.addWidget(cancel_btn)
+        buttons.addWidget(ok_btn)
+        layout.addLayout(buttons)
+        self.hide()
+
+    def show_question(self, question: str, options: list):
+        self.question_label.setText(question or "你想要哪个？")
+        while self.options_layout.count():
+            item = self.options_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.checks = [QCheckBox(str(option)) for option in (options or [])]
+        for check in self.checks:
+            self.options_layout.addWidget(check)
+        self.input.clear()
+        self.show()
+        self.input.setFocus()
+
+    def _submit(self):
+        picked = [check.text() for check in self.checks if check.isChecked()]
+        extra = self.input.text().strip()
+        if extra:
+            picked.append(extra)
+        self.submitted.emit(picked)
+
+
 class _ChatInput(QPlainTextEdit):
     """AI 输入框:多行 + 自带滚动条,Enter 发送、Shift+Enter 换行;
     右下角内置圆形 ↑ 发送按钮 + 🛠 工具测试按钮 + 📷 图片按钮(挨着发送)。
@@ -335,6 +474,7 @@ class _ChatInput(QPlainTextEdit):
     imageClicked = Signal()
     recentClicked = Signal()
     voiceClicked = Signal()          # 🎤 语音输入(现为占位,ASR 接入后可用)
+    preferencesClicked = Signal()
     imagePasted = Signal(QImage)   # 从剪贴板粘贴了图片
 
     def __init__(self, parent=None):
@@ -385,6 +525,15 @@ class _ChatInput(QPlainTextEdit):
             " font-size:14px; border:none;}"
             "QPushButton:hover{background:rgba(128,128,128,160);}")
         self.voice_btn.clicked.connect(self.voiceClicked.emit)
+        self.preferences_btn = QPushButton("偏好", self)
+        self.preferences_btn.setFixedHeight(24)
+        self.preferences_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.preferences_btn.setToolTip("回答方式与操作确认")
+        self.preferences_btn.setStyleSheet(
+            f"QPushButton {{ color: {current_color('text')}; background: rgba(128,128,128,70);"
+            " border: none; border-radius: 11px; padding: 2px 9px; }"
+            "QPushButton:hover { background: rgba(128,128,128,130); }")
+        self.preferences_btn.clicked.connect(self.preferencesClicked.emit)
         # 右下角按钮顺序(从右到左):发送环 → 🛠 → 📷 → 🖼 → 🎤
         # 📷/🖼 是图片相关按钮,模型不支持多模态时隐藏(见 set_vision_enabled)
         self._corner_btns = [self.send_btn, self.test_btn, self.img_btn, self.recent_btn, self.voice_btn]
@@ -440,6 +589,10 @@ class _ChatInput(QPlainTextEdit):
                 continue
             x -= b.width() + m
             b.move(x, self.height() - b.height() - m)
+        self.preferences_btn.move(8, self.height() - self.preferences_btn.height() - 6)
+        panel = getattr(self, "preferences_panel", None)
+        if panel is not None and panel.isVisible():
+            panel.move(6, max(6, self.height() - self.preferences_btn.height() - 18 - panel.height()))
 
     def showEvent(self, e):
         super().showEvent(e)

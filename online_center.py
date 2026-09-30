@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QTabWidget,
     QVBoxLayout,
@@ -42,20 +43,20 @@ def _open_lan_bridge_settings(owner: QWidget):
     if not hasattr(root, "online_center"):
         root = root.parentWidget() or root
     online = getattr(root, "online_center", None)
-    if online is not None and online.shell.switch_by_label("EasyTier 设置"):
+    if online is not None and online.shell.switch_by_label("陶瓦联机"):
         root.open_online_center()
         return
     settings_center = getattr(root, "settings_center", None)
     if settings_center is None:
         return
-    if settings_center.shell.switch_by_label("插件:EasyTier兼容"):
+    if settings_center.shell.switch_by_label("插件:联机"):
         root.open_settings()
         return
     settings_center.shell.switch_by_label(t("PLUGINS"))
     root.open_settings()
     QMessageBox.information(
-        root, "EasyTier兼容",
-        "EasyTier兼容目前未启用。请在这里启用它并重启启动器；重启后可从联机页或设置页进入配置。",
+        root, "联机",
+        "联机插件目前未启用。请在这里启用它并重启启动器；下次启动会自动下载陶瓦和 EasyTier。",
     )
 
 # --------------------------------------------------------------------------
@@ -414,7 +415,7 @@ class RecommendWizard(QWidget):
         self.et_status.setStyleSheet(f"color: {muted_color()};")
         self.et_gen = QPushButton(t("GENERATE_ROOM_SHARE"))
         self.et_gen.clicked.connect(self._easytier_gen)
-        self.et_config = QPushButton("配置 EasyTier兼容")
+        self.et_config = QPushButton("配置联机")
         self.et_config.clicked.connect(lambda: _open_lan_bridge_settings(self))
         et.addWidget(self.et_status)
         et.addWidget(self.et_gen)
@@ -589,7 +590,15 @@ class OnlineCenter(QWidget):
         super().__init__(parent)
 
         from center_shell import CenterShell
-        self.shell = CenterShell(self, menu_width=150)
+        self.shell = CenterShell(self, menu_width=138)
+        self.shell.setMinimumWidth(0)
+        self.shell.stack.setMinimumWidth(0)
+        self.shell.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        from plugin_manager import CENTER_PAGES
+        pages = list(CENTER_PAGES.get('online', []))
+        easytier_pages = [page for page in pages if page[0] == 'lan_bridge' or 'easytier' in page[2].lower()]
+        for plugin_id, page_id, label, builder in easytier_pages:
+            self.shell.add_section(label, lambda b=builder: self._build_plugin_page(b), lazy=True)
         # 首页:总览描述 + 「开始推荐」(T/F 选择入口)
         self.shell.add_section(t("HOME"), self._build_home)
         # 帮我推荐(第二步最常用,方便拿不准的玩家)
@@ -604,8 +613,9 @@ class OnlineCenter(QWidget):
                                    lazy=True)
         # 教程与资料
         self.shell.add_section(t("TUTORIALS"), build_tutorials_tab, lazy=True)
-        from plugin_manager import CENTER_PAGES
-        for plugin_id, page_id, label, builder in CENTER_PAGES.get('online', []):
+        for plugin_id, page_id, label, builder in pages:
+            if (plugin_id, page_id, label, builder) in easytier_pages:
+                continue
             # Avoid shadowing built-in navigation labels.
             title = label if label not in self.shell.menu.items() else f'{label} ({plugin_id})'
             self.shell.add_section(title, lambda b=builder: self._build_plugin_page(b), lazy=True)
@@ -618,6 +628,8 @@ class OnlineCenter(QWidget):
     def _build_plugin_page(self, builder) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(0)
+        scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }"
                             "QScrollArea > QWidget > QWidget { background: transparent; }")

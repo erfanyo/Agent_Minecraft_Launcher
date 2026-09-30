@@ -281,9 +281,10 @@ class MainWindow(QMainWindow):
         self.instance_list = tab_a.instance_list    # 版本列表(兼容旧引用:右键/视图/双击)
         self.launch_btn = tab_a.launch_btn          # 启动游戏大按钮
         # 双击仍直接启动；左侧主按钮由 VersionHome 按客户端/服务端模式分派。
-        self.instance_list.itemDoubleClicked.connect(self.launch_selected_instance)
+        self.instance_list.itemDoubleClicked.connect(
+            lambda item: self.launch_selected_instance(item.data(Qt.ItemDataRole.UserRole)))
         # 键盘导航(遥控器式):实例列表按回车 → 启动选中实例(itemActivated)
-        tab_a.launch_requested.connect(lambda _inst: self.launch_selected_instance())
+        tab_a.launch_requested.connect(self.launch_selected_instance)
         tab_a.refresh_requested.connect(self.refresh_instances)
         # 新首页抛出的信号 → 启动器处理
         tab_a.open_instance_manager_requested.connect(self._home_open_instance_manager)
@@ -346,6 +347,7 @@ class MainWindow(QMainWindow):
         self.online_dock = QDockWidget("联机", self)
         self.online_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
         self.online_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
+        self.online_dock.setMinimumWidth(0)
         from ui_style import current_color
         set_style(self.online_dock, lambda: (
             f'QDockWidget {{ background: {current_color("panel_bg")};'
@@ -363,9 +365,11 @@ class MainWindow(QMainWindow):
         self.online_dock.setTitleBarWidget(online_header)
         from ui_background import BackgroundWidget
         self.online_surface = BackgroundWidget(self.online_dock)
+        self.online_surface.setMinimumWidth(0)
         online_body = QVBoxLayout(self.online_surface)
         online_body.setContentsMargins(0, 0, 0, 0)
         self.online_center = OnlineCenter(self.online_surface)
+        self.online_center.setMinimumWidth(0)
         self.online_center.setObjectName("online_center")
         online_body.addWidget(self.online_center)
         self.online_dock.setWidget(self.online_surface)
@@ -556,6 +560,7 @@ class MainWindow(QMainWindow):
     # ---- 设置 ----
     def open_settings(self, tab: str | None = None):
         """在主窗口中打开两种模式共用的设置页。"""
+        self.settings_center.refresh_backup_settings()
         if tab == "mirror":
             self.settings_center.shell.switch_by_label(t("MIRROR"))
         if self._settings_open:
@@ -1209,7 +1214,8 @@ class MainWindow(QMainWindow):
         from ui_anim import reveal
         QTimer.singleShot(0, lambda: reveal(self.online_surface)
                           if self.online_dock.isVisible() else None)
-        width = max(480, self.width() - 320) if self._ai_focus_mode else min(560, max(400, self.width() // 2))
+        width = (max(760, self.width() - 320) if self._ai_focus_mode
+                 else min(1000, max(800, self.width() - 280)))
         QTimer.singleShot(0, lambda: self.resizeDocks(
             [self.online_dock], [width], Qt.Orientation.Horizontal)
             if self.online_dock.isVisible() else None)
@@ -1383,7 +1389,8 @@ class MainWindow(QMainWindow):
             list_widget.setViewMode(QListWidget.ViewMode.ListMode)
             list_widget.setIconSize(QSize(20, 20))
         self.settings[f"view_icons_{key}"] = icon_mode
-        save_settings(self.settings)
+        from settings import update_setting
+        update_setting(f"view_icons_{key}", icon_mode)
 
     # ---- 文件菜单动作 ----
     def open_game_dir(self):
@@ -2121,6 +2128,7 @@ class MainWindow(QMainWindow):
         self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
         self._launch_button_frame = 0
         self.launch_btn.setText('启动中…')
+        self.ai_focus_sidebar.set_launch_state("starting")
         if is_animations_enabled():
             self._launch_button_timer.start()
 
@@ -2135,7 +2143,8 @@ class MainWindow(QMainWindow):
         if timer is not None:
             timer.stop()
         if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
-            self.launch_btn.setText(t('VERSION_HOME_LAUNCH_GAME'))
+            self.home_panel._update_client_launch_target(self.home_panel.current_instance())
+        self.ai_focus_sidebar.set_launch_state("idle")
 
     def _show_launch_button_success(self):
         timer = getattr(self, '_launch_button_timer', None)
@@ -2145,6 +2154,7 @@ class MainWindow(QMainWindow):
         generation = self._launch_button_generation
         if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
             self.launch_btn.setText('✓ 启动成功')
+        self.ai_focus_sidebar.set_launch_state("success")
         QTimer.singleShot(1800, lambda: self._stop_launch_button_animation()
                           if self._launch_button_generation == generation else None)
 
@@ -2166,12 +2176,14 @@ class MainWindow(QMainWindow):
 
         v = dict(v)
         from copy import deepcopy
-        from settings import update_setting
-        launch_settings = deepcopy(self.settings)
+        from accounts import update_refreshed_microsoft_credentials
+        launch_settings = deepcopy(load_settings())
         game_root, runtime_root = paths.GAME_DIR, paths.RUNTIME_DIR
         service = GameLaunchService(
             lambda: game_root, lambda: runtime_root, lambda: launch_settings,
-            lambda changed: update_setting('ms_credentials', changed.get('ms_credentials', {})),
+            lambda changed: update_refreshed_microsoft_credentials(
+                (launch_settings.get('ms_credentials') or {}).get('uuid', ''),
+                changed.get('ms_credentials', {})),
             lambda identity: os.path.join(game_root, 'versions', identity)
             if launch_settings.get('version_isolation') else game_root)
         task = BackgroundTask(lambda current: service.prepare(
@@ -2194,12 +2206,15 @@ class MainWindow(QMainWindow):
 
     def _on_launch_prepare_failed(self, error):
         self._stop_launch_button_animation()
+        self.ai_focus_sidebar.set_launch_state("failed")
         self.launch_btn.setEnabled(True)
         self.dl_indicator.set_failed(True)
         self.dl_indicator.setToolTip("启动准备失败，点击查看状态与日志")
         QMessageBox.warning(self, "启动准备没完成", redact_text(error, self.settings))
 
     def _start_prepared_game(self, plan, v):
+        # 准备阶段可能刷新了正版令牌；下次启动须读取刚保存的凭证。
+        self.settings = load_settings()
         from memory_launch_card import offer_memory_actions
         if offer_memory_actions(self, plan, v, self._start_game_after_memory):
             return
@@ -2237,6 +2252,7 @@ class MainWindow(QMainWindow):
                 self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
         except Exception as e:
             self._stop_launch_button_animation()
+            self.ai_focus_sidebar.set_launch_state("failed")
             self.statusBar().showMessage(f"启动失败: {e}")
             self.dl_indicator.set_failed(True)
             self.dl_indicator.setToolTip("启动失败，点击查看状态与日志")
@@ -2254,7 +2270,8 @@ class MainWindow(QMainWindow):
         if self.settings.get("last_played_instance") != v["id"]:
             self.settings["last_played_instance"] = v["id"]
             try:
-                save_settings(self.settings)
+                from settings import update_setting
+                update_setting("last_played_instance", v["id"])
             except Exception:
                 pass
 
@@ -2702,13 +2719,14 @@ class MainWindow(QMainWindow):
         """兼容旧调用；写入实例记录并保留用户备注。"""
         self.instance_catalog.write_record(instances)
 
-    def launch_selected_instance(self):
+    def launch_selected_instance(self, inst=None):
         """启动"我的版本"里选中的实例(双击或按钮)"""
-        item = self.instance_list.currentItem()
-        if item is None:
+        if inst is None:
+            item = self.instance_list.currentItem()
+            inst = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(inst, dict) or not inst.get('id'):
             self.statusBar().showMessage("请先选一个实例(双击也可以直接启动)")
             return
-        inst = item.data(Qt.ItemDataRole.UserRole)
         self.selected_version = {**inst, "local": True, "type": "instance"}
         self.statusBar().showMessage(f"启动实例: {inst['id']}")
         self.launch_selected()
@@ -3114,6 +3132,8 @@ class MainWindow(QMainWindow):
         """首页登录卡片改了离线昵称 → 重读设置,刷新登录显示。"""
         self.settings = load_settings()
         self.home_panel.refresh_login()
+        if hasattr(self, "ai_focus_sidebar"):
+            self.ai_focus_sidebar.login_card.refresh()
         self.statusBar().showMessage(t("LOGIN_INFO_UPDATED"))
 
     def backup_current_instance(self, inst):

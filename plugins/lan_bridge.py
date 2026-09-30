@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""EasyTier 命令行桥接（可选插件）。
+"""EasyTier 与 Terracotta 联机桥接（可选插件）。
 
-插件可按用户请求下载官方 easytier-core，或选择已安装的程序。
+插件可下载官方 EasyTier / Terracotta 程序，或选择已安装的程序。
 下载不会自动启动联机，也不把“生成房间名”误报为已经组网。
 """
 import os
@@ -14,9 +14,9 @@ import time
 import base64
 
 PLUGIN_ID = "lan_bridge"
-PLUGIN_NAME = "EasyTier兼容"
-PLUGIN_DESCRIPTION = "下载或选择 EasyTier 创建联机网络，可与使用 EasyTier 的其他启动器及独立客户端互联。"
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_NAME = "联机"
+PLUGIN_DESCRIPTION = "启用后自动下载陶瓦和 EasyTier；可用房间码或虚拟局域网跨启动器联机。"
+PLUGIN_VERSION = "0.5.0"
 PLUGIN_API_VERSION = 1
 PLUGIN_DEFAULT_ENABLED = False
 
@@ -26,6 +26,439 @@ _elevated_pid = None
 _process_lock = threading.Lock()
 _download_lock = threading.Lock()
 _session = None
+_terracotta_path = ""
+_terracotta_port = None
+_terracotta_process = None
+_terracotta_lock = threading.RLock()
+_terracotta_download_lock = threading.Lock()
+_install_state = {'terracotta': '', 'easytier': ''}
+
+
+def _save_join_address_to_selected_instance(page, address):
+    """Store a guest endpoint in the active Minecraft instance server list."""
+    from minecraft_servers import add_server
+    window = page.window()
+    home = getattr(window, 'home_panel', None)
+    inst = home.current_instance() if home is not None else None
+    if not inst or not inst.get('id'):
+        return '选择一个游戏实例后，可把地址加入它的多人游戏列表。'
+    game_dir = window.game_dir_for(inst['id'])
+    added = add_server(game_dir, 'Terracotta 房间', address)
+    return ('已加入当前实例的多人游戏列表；若游戏已打开，请重新进入多人游戏页面。'
+            if added else '当前实例的多人游戏列表已有此地址。')
+
+
+def _terracotta_request(route, params=None):
+    import json
+    import urllib.parse
+    import urllib.request
+    with _terracotta_lock:
+        port = _terracotta_port
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise RuntimeError('Terracotta 尚未连接')
+    query = '?' + urllib.parse.urlencode(params) if params else ''
+    url = f'http://127.0.0.1:{port}/state/{route}{query}'
+    with urllib.request.urlopen(url, timeout=4) as response:
+        body = response.read(256 * 1024 + 1)
+        if len(body) > 256 * 1024:
+            raise ValueError('Terracotta 状态数据过大')
+        return json.loads(body) if route == '' else None
+
+
+def terracotta_connect(path):
+    """Use Terracotta's documented HMCL IPC mode, including its existing-instance path."""
+    import json
+    import tempfile
+    path = os.path.abspath(os.path.expanduser(str(path or '').strip()))
+    if not os.path.isfile(path):
+        raise ValueError('请先选择 Terracotta 官方程序')
+    global _terracotta_port, _terracotta_process
+    with _terracotta_lock:
+        if _terracotta_port:
+            try:
+                _terracotta_request('')
+                return
+            except Exception:
+                _terracotta_port = None
+        with tempfile.TemporaryDirectory(prefix='amcl-terracotta-') as temporary:
+            port_file = os.path.join(temporary, 'port.json')
+            flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            process = subprocess.Popen([path, '--hmcl', port_file],
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                       creationflags=flags)
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline:
+                if os.path.isfile(port_file):
+                    with open(port_file, 'r', encoding='utf-8') as stream:
+                        port = json.load(stream).get('port')
+                    if not isinstance(port, int) or not 1 <= port <= 65535:
+                        raise ValueError('Terracotta 返回了无效的本地端口')
+                    _terracotta_port = port
+                    _terracotta_process = process if process.poll() is None else None
+                    _terracotta_request('')
+                    return
+                if process.poll() is not None and os.name != 'nt':
+                    break
+                time.sleep(0.1)
+        raise RuntimeError('Terracotta 未能启动；请检查程序版本与系统权限')
+
+
+def terracotta_state():
+    return _terracotta_request('')
+
+
+def terracotta_host():
+    _terracotta_request('scanning')
+
+
+def terracotta_join(room):
+    room = str(room or '').strip()
+    if not room or len(room) > 256:
+        raise ValueError('请输入有效的 Terracotta 房间码')
+    _terracotta_request('guesting', {'room': room})
+
+
+def terracotta_leave():
+    _terracotta_request('ide')
+
+
+def download_terracotta(destination, report=lambda message: None):
+    global _terracotta_path
+    _terracotta_download_lock.acquire()
+    try:
+        if _terracotta_path and os.path.isfile(_terracotta_path):
+            return _terracotta_path
+        _terracotta_path = _download_terracotta(destination, report)
+        return _terracotta_path
+    finally:
+        _terracotta_download_lock.release()
+
+
+def _download_terracotta(destination, report):
+    """Install the unmodified official binary from a verified GitHub release asset."""
+    import hashlib
+    import json
+    import platform
+    import re
+    import tarfile
+    import tempfile
+    import urllib.request
+    import uuid
+
+    system = {'Windows': 'windows', 'Linux': 'linux'}.get(platform.system())
+    machine = {'amd64': 'x86_64', 'x86_64': 'x86_64',
+               'arm64': 'arm64', 'aarch64': 'arm64'}.get(platform.machine().lower())
+    if not system or not machine:
+        raise ValueError('此平台暂不支持插件内下载；请从官方发布页下载并选择程序。')
+
+    def request(url):
+        return urllib.request.urlopen(urllib.request.Request(
+            url, headers={'User-Agent': 'AMCL-Terracotta',
+                          'Accept': 'application/vnd.github+json'}), timeout=30)
+
+    report('正在读取 Terracotta 官方发布信息…')
+    with request('https://api.github.com/repos/burningtnt/Terracotta/releases/latest') as response:
+        raw = response.read(4 * 1024 * 1024 + 1)
+    if len(raw) > 4 * 1024 * 1024:
+        raise ValueError('发布信息大小异常。')
+    release = json.loads(raw)
+    version = str(release.get('tag_name') or '').removeprefix('v')
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9]+)*', version):
+        raise ValueError('官方发布版本号无法识别。')
+    name = f'terracotta-{version}-{system}-{machine}-pkg.tar.gz'
+    asset = next((item for item in release.get('assets', []) if item.get('name') == name), None)
+    if asset is None:
+        raise ValueError('官方发布中没有匹配本机的程序包。')
+    url = str(asset.get('browser_download_url') or '')
+    digest = str(asset.get('digest') or '')
+    expected_url = f'https://github.com/burningtnt/Terracotta/releases/download/{release["tag_name"]}/{name}'
+    if url != expected_url or not re.fullmatch(r'sha256:[a-fA-F0-9]{64}', digest):
+        raise ValueError('官方发布信息缺少可验证的下载地址或 SHA-256。')
+    if not isinstance(asset.get('size'), int) or not 0 < asset['size'] <= 100 * 1024 * 1024:
+        raise ValueError('程序包大小异常。')
+
+    os.makedirs(destination, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.terracotta-download-', dir=destination) as stage:
+        archive_path = os.path.join(stage, 'package.tar.gz')
+        calculated = hashlib.sha256()
+        done = 0
+        with request(url) as response, open(archive_path, 'wb') as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                done += len(chunk)
+                if done > 100 * 1024 * 1024:
+                    raise ValueError('下载包过大，已停止。')
+                output.write(chunk)
+                calculated.update(chunk)
+                report(f'正在下载 Terracotta… {done // (1024 * 1024)} MB')
+        if done != asset['size'] or calculated.hexdigest() != digest.split(':', 1)[1].lower():
+            raise ValueError('Terracotta 下载不完整或 SHA-256 校验失败。')
+        report('校验通过，正在提取程序…')
+        executable = 'terracotta.exe' if system == 'windows' else 'terracotta'
+        with tarfile.open(archive_path, 'r:gz') as archive:
+            matches = [member for member in archive.getmembers()
+                       if member.isfile() and os.path.basename(member.name).lower() == executable]
+            if len(matches) != 1 or matches[0].size > 100 * 1024 * 1024:
+                raise ValueError('程序包中未找到唯一的 Terracotta 可执行文件。')
+            source = archive.extractfile(matches[0])
+            if source is None:
+                raise ValueError('无法读取 Terracotta 可执行文件。')
+            staged_binary = os.path.join(stage, executable)
+            with source, open(staged_binary, 'wb') as output:
+                shutil.copyfileobj(source, output)
+        if system != 'windows':
+            os.chmod(staged_binary, 0o755)
+        final = os.path.join(destination, f'{version}-{system}-{machine}-{uuid.uuid4().hex[:8]}')
+        os.mkdir(final)
+        final_binary = os.path.join(final, executable)
+        os.replace(staged_binary, final_binary)
+        return final_binary
+
+
+def _add_terracotta_ui(layout, page, api):
+    from PySide6.QtCore import QTimer, QObject, Signal
+    from PySide6.QtWidgets import QApplication, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton
+
+    layout.addWidget(QLabel('Terracotta · 跨启动器房间码'))
+    info = QLabel('房主先在游戏中开放局域网，再创建房间。访客输入房间码，连接成功后会把本机地址加入当前实例的多人游戏列表。EasyTier 房间名与密钥不是 Terracotta 房间码。')
+    info.setWordWrap(True)
+    layout.addWidget(info)
+    credit = QLabel('Terracotta © burningtnt · AGPL-3.0-or-later · <a href="https://github.com/burningtnt/Terracotta">项目主页 / 查看源码</a>')
+    credit.setOpenExternalLinks(True)
+    credit.setWordWrap(True)
+    layout.addWidget(credit)
+
+    path_row = QHBoxLayout()
+    path = QLineEdit(_terracotta_path)
+    path.setPlaceholderText('选择 Terracotta 官方程序')
+    choose = QPushButton('选择程序')
+    download = QPushButton('插件内下载')
+    path_row.addWidget(path, 1)
+    path_row.addWidget(choose)
+    path_row.addWidget(download)
+    layout.addLayout(path_row)
+    for control in (path, choose, download):
+        control.hide()
+    room_row = QHBoxLayout()
+    room = QLineEdit()
+    room.setPlaceholderText('访客输入房主分享的房间码')
+    copy_room = QPushButton('复制房间码')
+    copy_room.setEnabled(False)
+    room_row.addWidget(room, 1)
+    room_row.addWidget(copy_room)
+    layout.addLayout(room_row)
+    buttons = QHBoxLayout()
+    host = QPushButton('创建房间')
+    join = QPushButton('加入房间')
+    leave = QPushButton('退出房间')
+    for button in (host, join, leave):
+        buttons.addWidget(button)
+    buttons.addStretch()
+    layout.addLayout(buttons)
+    address_row = QHBoxLayout()
+    address = QLineEdit()
+    address.setReadOnly(True)
+    address.setPlaceholderText('加入成功后显示本机游戏地址')
+    copy_address = QPushButton('复制地址')
+    copy_address.setEnabled(False)
+    address_row.addWidget(address, 1)
+    address_row.addWidget(copy_address)
+    layout.addLayout(address_row)
+    status = QLabel(_install_state['terracotta'] or '创建或加入房间时会自动准备 Terracotta。')
+    status.setWordWrap(True)
+    layout.addWidget(status)
+    copy_room.clicked.connect(lambda: QApplication.clipboard().setText(room.text().strip()))
+    copy_address.clicked.connect(lambda: QApplication.clipboard().setText(address.text().strip()))
+    address.textChanged.connect(lambda value: copy_address.setEnabled(bool(value.strip())))
+
+    busy = {'value': False}
+    saved_address = {'value': ''}
+
+    def show_recovery():
+        for control in (path, choose, download):
+            control.show()
+
+    def hide_recovery():
+        for control in (path, choose, download):
+            control.hide()
+    class Signals(QObject):
+        result = Signal(object)
+        progress = Signal(str)
+        installed = Signal(str)
+        auto_installed = Signal(str)
+        download_failed = Signal(str)
+    signals = Signals(page)
+    page._terracotta_signals = signals
+
+    def show_state(state):
+        if not isinstance(state, dict):
+            status.setText('Terracotta 返回了无法识别的状态')
+            return
+        stage = str(state.get('state') or '')
+        if stage in ('host-scanning', 'host-starting', 'host-ok'):
+            code = str(state.get('room') or '')
+            if code:
+                room.setText(code)
+            copy_room.setEnabled(stage == 'host-ok' and bool(code))
+        else:
+            copy_room.setEnabled(False)
+        address.setText(str(state.get('url') or '') if stage == 'guest-ok' else '')
+        messages = {
+            'waiting': '已就绪，可创建或加入房间。',
+            'host-scanning': '正在查找游戏开放的局域网端口…',
+            'host-starting': '已找到游戏，正在建立房间…',
+            'host-ok': '房间已就绪，请分享房间码。',
+            'guest-connecting': '正在连接房间…',
+            'guest-starting': '正在建立本机连接…',
+            'guest-ok': '已连接；在 Minecraft 多人游戏中直接连接下方地址。',
+        }
+        message = 'Terracotta：' + messages.get(stage, str(state.get('message') or stage or '未知状态'))
+        guest_address = address.text().strip()
+        if stage == 'guest-ok' and guest_address and guest_address != saved_address['value']:
+            try:
+                save_message = _save_join_address_to_selected_instance(page, guest_address)
+                message += '\n' + save_message
+                if not save_message.startswith('选择一个游戏实例'):
+                    saved_address['value'] = guest_address
+            except Exception as exc:
+                message += f'\n无法写入多人游戏列表：{exc}'
+        status.setText(message)
+
+    def ready(result):
+        busy['value'] = False
+        for button in (host, join, leave, choose):
+            button.setEnabled(True)
+        if isinstance(result, Exception):
+            status.setText('Terracotta：' + str(result))
+            if not _terracotta_path or not os.path.isfile(_terracotta_path):
+                show_recovery()
+        else:
+            show_state(result)
+    signals.result.connect(ready)
+    signals.progress.connect(status.setText)
+
+    def installed(binary):
+        global _terracotta_path
+        busy['value'] = False
+        _terracotta_path = binary
+        path.setText(binary)
+        api.set_config('terracotta_binary', binary)
+        download.setEnabled(True)
+        choose.setEnabled(True)
+        for button in (host, join, leave):
+            button.setEnabled(True)
+        status.setText('Terracotta 已下载并通过 SHA-256 校验；可直接创建或加入房间。')
+        hide_recovery()
+    signals.installed.connect(installed)
+
+    def auto_installed(binary):
+        global _terracotta_path
+        _terracotta_path = binary
+        path.setText(binary)
+        api.set_config('terracotta_binary', binary)
+        hide_recovery()
+    signals.auto_installed.connect(auto_installed)
+
+    def download_failed(message):
+        busy['value'] = False
+        download.setEnabled(True)
+        choose.setEnabled(True)
+        for button in (host, join, leave):
+            button.setEnabled(True)
+        status.setText('下载失败：' + message)
+        show_recovery()
+    signals.download_failed.connect(download_failed)
+
+    def start_download():
+        if busy['value']:
+            return
+        busy['value'] = True
+        download.setEnabled(False)
+        choose.setEnabled(False)
+        for button in (host, join, leave):
+            button.setEnabled(False)
+        destination = api.data_path('terracotta')
+        def work():
+            try:
+                binary = download_terracotta(destination, signals.progress.emit)
+                signals.installed.emit(binary)
+            except Exception as exc:
+                try:
+                    signals.download_failed.emit(str(exc))
+                except RuntimeError:
+                    pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def run(action):
+        if busy['value']:
+            return
+        busy['value'] = True
+        for button in (host, join, leave, choose):
+            button.setEnabled(False)
+        if action != 'poll':
+            status.setText('Terracotta：正在处理…')
+        selected_path, code = path.text().strip(), room.text().strip()
+        def work():
+            try:
+                binary_path = selected_path
+                if action != 'leave' and not os.path.isfile(binary_path):
+                    signals.progress.emit('正在自动准备 Terracotta…')
+                    binary_path = download_terracotta(api.data_path('terracotta'), signals.progress.emit)
+                    signals.auto_installed.emit(binary_path)
+                terracotta_connect(binary_path)
+                if action == 'host':
+                    terracotta_host()
+                elif action == 'join':
+                    terracotta_join(code)
+                elif action == 'leave':
+                    terracotta_leave()
+                result = terracotta_state()
+            except Exception as exc:
+                result = exc
+            try:
+                signals.result.emit(result)
+            except RuntimeError:
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def choose_binary():
+        global _terracotta_path
+        selected, _ = QFileDialog.getOpenFileName(page, '选择 Terracotta 官方程序', path.text(), '程序 (*.exe);;所有文件 (*)')
+        if selected:
+            _terracotta_path = selected
+            path.setText(selected)
+            api.set_config('terracotta_binary', selected)
+            status.setText('程序已选择；创建或加入房间时启动 Terracotta。')
+            hide_recovery()
+
+    choose.clicked.connect(choose_binary)
+    download.clicked.connect(start_download)
+    host.clicked.connect(lambda: run('host'))
+    join.clicked.connect(lambda: run('join'))
+    leave.clicked.connect(lambda: run('leave'))
+    seen_install = {'message': ''}
+    def refresh_install():
+        if _terracotta_path and os.path.isfile(_terracotta_path) and not path.hasFocus():
+            path.setText(_terracotta_path)
+        message = _install_state['terracotta']
+        if message and message != seen_install['message']:
+            seen_install['message'] = message
+            if _terracotta_port is None and not busy['value']:
+                status.setText(message)
+                if '失败' in message:
+                    show_recovery()
+    timer = QTimer(page)
+    timer.setInterval(2500)
+    def tick():
+        if not page.isVisible():
+            return
+        refresh_install()
+        if _terracotta_port:
+            run('poll')
+    timer.timeout.connect(tick)
+    timer.start()
 
 
 def _parse_virtual_ip(output):
@@ -154,9 +587,11 @@ def download_core(destination, report=lambda message: None):
     import platform
     import tempfile
     import urllib.request
-    if not _download_lock.acquire(blocking=False):
-        raise ValueError('另一页已经在下载 EasyTier，请稍等。')
+    global _configured_core
+    _download_lock.acquire()
     try:
+        if _configured_core and os.path.isfile(_configured_core):
+            return _configured_core
         def request(url):
             return urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'AMCL-EasyTier', 'Accept': 'application/vnd.github+json'}), timeout=30)
         report('正在读取 EasyTier 官方发布信息…')
@@ -196,7 +631,8 @@ def download_core(destination, report=lambda message: None):
             import uuid
             final = os.path.join(destination, asset['name'][:-4] + '-' + uuid.uuid4().hex[:8])
             os.rename(unpacked, final)
-            return os.path.join(final, relative)
+            _configured_core = os.path.join(final, relative)
+            return _configured_core
     finally:
         _download_lock.release()
 # 取自 EasyTier 官方 README 的共享节点示例；后续可扩展为用户自建节点。
@@ -392,9 +828,41 @@ def stop_easytier() -> bool:
     return True
 
 
+def _start_auto_install(api):
+    """After the plugin is enabled, fetch missing runtimes without blocking startup."""
+    def work():
+        global _terracotta_path, _configured_core
+        if _terracotta_path and os.path.isfile(_terracotta_path):
+            _install_state['terracotta'] = '陶瓦已就绪'
+        else:
+            try:
+                _install_state['terracotta'] = '正在自动下载陶瓦…'
+                binary = download_terracotta(api.data_path('terracotta'))
+                _terracotta_path = binary
+                api.set_config('terracotta_binary', binary)
+                _install_state['terracotta'] = '陶瓦已下载并校验'
+            except Exception as exc:
+                _install_state['terracotta'] = f'陶瓦自动下载失败：{exc}'
+        found = _find_core()
+        if found:
+            _install_state['easytier'] = 'EasyTier 已就绪'
+        else:
+            try:
+                _install_state['easytier'] = '正在自动下载 EasyTier…'
+                binary = download_core(api.data_path('easytier'))
+                _configured_core = binary
+                api.set_config('easytier_core', binary)
+                _install_state['easytier'] = 'EasyTier 已下载并校验'
+            except Exception as exc:
+                _install_state['easytier'] = f'EasyTier 自动下载失败：{exc}'
+    threading.Thread(target=work, name='amcl-online-install', daemon=True).start()
+
+
 def register(api):
-    global _configured_core
+    global _configured_core, _terracotta_path
     _configured_core = str(api.get_config("easytier_core", "") or "")
+    _terracotta_path = str(api.get_config("terracotta_binary", "") or "")
+    _install_state.update(terracotta='', easytier='')
 
     def lan_status(args: dict):
         kind = (args or {}).get("kind", "easytier")
@@ -420,7 +888,7 @@ def register(api):
         handler=lan_setup, write=True, confirm=True,
     )
 
-    def build_settings_page():
+    def build_easytier_page():
         from PySide6.QtCore import QTimer, QObject, Signal, Qt
         from PySide6.QtWidgets import QApplication, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 
@@ -430,8 +898,8 @@ def register(api):
         page.setStyleSheet('QWidget#easyTierSettingsPage { background: transparent; }')
         layout = QVBoxLayout(page)
         layout.setContentsMargins(16, 12, 16, 12)
-        layout.addWidget(QLabel("EasyTier兼容"))
-        info = QLabel("可自动下载官方核心到 AMCL 文件夹，或选择已有程序。下载不会启动联机；启动/停止时可能弹出 UAC 授权，停止只影响本插件启动的进程。")
+        layout.addWidget(QLabel("EasyTier 虚拟局域网"))
+        info = QLabel("启动房间时会自动准备 EasyTier。启动/停止时可能弹出 UAC 授权，停止只影响本插件启动的进程。")
         info.setWordWrap(True)
         layout.addWidget(info)
         compatibility = QLabel(
@@ -445,8 +913,15 @@ def register(api):
         core_path.setPlaceholderText("easytier-core.exe 路径（留空则自动检测）")
         choose = QPushButton("选择程序")
         download = QPushButton("自动下载 EasyTier")
-        path_row.addWidget(core_path, 1); path_row.addWidget(choose); path_row.addWidget(download)
+        path_row.addWidget(core_path, 1)
         layout.addLayout(path_row)
+        path_buttons = QHBoxLayout()
+        path_buttons.addWidget(choose)
+        path_buttons.addWidget(download)
+        path_buttons.addStretch()
+        layout.addLayout(path_buttons)
+        for control in (core_path, choose, download):
+            control.hide()
         status = QLabel("检测中…")
         status.setWordWrap(True)
         layout.addWidget(status)
@@ -457,27 +932,49 @@ def register(api):
             node = Signal(object)
         signals = DownloadSignals(page)
         page._download_signals = signals
+        downloading = {'value': False}
+        pending_start = {'value': False}
+
+        def show_recovery():
+            for control in (core_path, choose, download):
+                control.show()
+
+        def hide_recovery():
+            for control in (core_path, choose, download):
+                control.hide()
 
         def download_done(path):
             global _configured_core
+
+            downloading['value'] = False
             _configured_core = path
             core_path.setText(path)
             api.set_config('easytier_core', path)
             download.setEnabled(True)
             choose.setEnabled(True)
             status.setText('下载完成，SHA-256 校验通过；程序路径已保存。点击“启动房间”才会联机。')
+            hide_recovery()
+            if pending_start['value']:
+                pending_start['value'] = False
+                start_room()
 
         def download_error(message):
+            downloading['value'] = False
             download.setEnabled(True)
             choose.setEnabled(True)
             status.setText('下载失败：' + message + '\n可以重试；若 GitHub 连不上，换个网络或手动选择程序。')
+            pending_start['value'] = False
+            show_recovery()
 
         signals.progress.connect(status.setText)
         signals.done.connect(download_done)
         signals.error.connect(download_error)
 
         def start_download():
+            if downloading['value']:
+                return
             destination = api.data_path('easytier')
+            downloading['value'] = True
             download.setEnabled(False)
             choose.setEnabled(False)
             def emit(signal, message):
@@ -500,7 +997,7 @@ def register(api):
         layout.addLayout(button_row)
         room_name, room_secret, virtual_ip = QLineEdit(), QLineEdit(), QLineEdit()
         room_fields = QFormLayout()
-        room_fields.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        room_fields.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         for title, control in (("房间名：", room_name), ("密钥：", room_secret), ("虚拟 IP：", virtual_ip)):
             control.setReadOnly(True)
             control.setPlaceholderText("启动房间后显示")
@@ -609,11 +1106,16 @@ def register(api):
         layout.addWidget(copy_room)
 
         def refresh():
+            if _configured_core and os.path.isfile(_configured_core) and not core_path.hasFocus():
+                core_path.setText(_configured_core)
             current = easytier_status()
             if current["installed"]:
                 status.setText(f"EasyTier: ✅ 已找到 {current['path']}" + ("（运行中）" if current["running"] else ""))
+                hide_recovery()
             else:
-                status.setText("EasyTier: ❌ 未找到；请自行下载 easytier-core 后在上方选择程序")
+                status.setText(_install_state['easytier'] or "EasyTier: ❌ 未找到；可重试下载或手动选择程序")
+                if '失败' in _install_state['easytier']:
+                    show_recovery()
 
         def choose_core():
             global _configured_core
@@ -625,6 +1127,11 @@ def register(api):
                 refresh()
 
         def start_room():
+            if not _find_core():
+                pending_start['value'] = True
+                status.setText('正在自动准备 EasyTier…')
+                start_download()
+                return
             room = "AMCL-" + "".join(random.choices(string.ascii_lowercase, k=5))
             secret = "".join(random.choices(string.ascii_letters + string.digits, k=12))
             result = setup_easytier(room, secret)
@@ -652,9 +1159,44 @@ def register(api):
         start.clicked.connect(start_room)
         stop.clicked.connect(stop_room)
         QTimer.singleShot(0, refresh)
+        install_timer = QTimer(page)
+        install_timer.setInterval(2000)
+        seen_install = {'value': (_configured_core, _install_state['easytier'])}
+        def refresh_install():
+            current = (_configured_core, _install_state['easytier'])
+            if (page.isVisible() and _session is None and not downloading['value']
+                    and current != seen_install['value']):
+                seen_install['value'] = current
+                refresh()
+        install_timer.timeout.connect(refresh_install)
+        install_timer.start()
         layout.addStretch()
         return page
 
+    def build_terracotta_page():
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        page = QWidget()
+        page.setObjectName('terracottaSettingsPage')
+        page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        page.setStyleSheet('QWidget#terracottaSettingsPage { background: transparent; }')
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 12, 16, 12)
+        _add_terracotta_ui(layout, page, api)
+        layout.addStretch()
+        return page
+
+    def build_settings_page():
+        from PySide6.QtWidgets import QTabWidget
+        from ui_style import set_style, tab_style
+        tabs = QTabWidget()
+        set_style(tabs, tab_style)
+        tabs.addTab(build_terracotta_page(), '陶瓦联机')
+        tabs.addTab(build_easytier_page(), 'EasyTier 设置')
+        return tabs
+
     api.register_settings_page(build_settings_page)
     if hasattr(api, 'register_center_page'):
-        api.register_center_page('online', 'settings', 'EasyTier 设置', build_settings_page)
+        api.register_center_page('online', 'terracotta', '陶瓦联机', build_terracotta_page)
+        api.register_center_page('online', 'easytier', 'EasyTier 设置', build_easytier_page)
+    _start_auto_install(api)

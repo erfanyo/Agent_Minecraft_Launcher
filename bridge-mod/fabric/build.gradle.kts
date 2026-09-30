@@ -37,8 +37,9 @@ tasks.withType<JavaCompile>().configureEach {
 tasks.processResources {
     inputs.property("minecraftRange", v.range)
     inputs.property("mixinCompat", v.mixin)
+    inputs.property("version", project.version)
     filesMatching("fabric.mod.json") {
-        expand(mapOf("minecraftRange" to v.range))
+        expand(mapOf("minecraftRange" to v.range, "version" to project.version))
     }
     filesMatching("agentmc_bridge.mixins.json") {
         expand(mapOf("mixinCompat" to v.mixin))

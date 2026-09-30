@@ -6,7 +6,8 @@ from PySide6.QtCore import Qt, QUrl, QTimer, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QListWidget, QListWidgetItem, QLabel, QFileDialog, QMessageBox, QPlainTextEdit,
-    QDialog, QDialogButtonBox, QInputDialog, QLineEdit, QProgressBar, QTextBrowser)
+    QDialog, QDialogButtonBox, QInputDialog, QLineEdit, QProgressBar, QTextBrowser,
+    QMenu)
 from background_tasks import BackgroundTask
 from archive_inspection import inspect_archive
 from server_packs import list_servers, import_server_pack
@@ -16,6 +17,7 @@ from server_host_client import (managed_status, send_server_command,
                                 start_managed_server)
 from server_service import select_server_java  # Qt-free domain layer
 import paths
+from ui_style import popup_menu_style, set_style
 
 
 class MinecraftEulaDialog(QDialog):
@@ -65,6 +67,7 @@ class ServerCenter(QWidget):
     selection_changed = Signal(object)
     running_changed = Signal(bool)
     repair_finished = Signal(object)
+    details_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,6 +89,8 @@ class ServerCenter(QWidget):
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._selection_changed)
         self.list.itemDoubleClicked.connect(lambda _: self.launch())
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._show_server_menu)
         layout.addWidget(self.list)
         self.task_status = QLabel('就绪')
         self.task_status.setWordWrap(True)
@@ -148,6 +153,25 @@ class ServerCenter(QWidget):
     def selected(self):
         item = self.list.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
+
+    def _show_server_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if item is None:
+            return
+        self.list.setCurrentItem(item)
+        server = self.selected()
+        if not server:
+            return
+        menu = QMenu(self.list)
+        set_style(menu, popup_menu_style)
+        running = self.is_running(server)
+        menu.addAction('停止服务端' if running else '启动服务端',
+                       self.stop if running else self.launch)
+        menu.addAction('打开服务端文件夹', self.open_folder)
+        menu.addAction('服务端详情', self.details_requested.emit)
+        menu.addSeparator()
+        menu.addAction('刷新服务端列表', self.refresh)
+        menu.exec(self.list.viewport().mapToGlobal(pos))
 
     def is_running(self, server=None):
         server = server or self.selected()
@@ -573,7 +597,12 @@ class ServerCenter(QWidget):
     def open_folder(self):
         server = self.selected()
         if server:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(server['path']))
+            folder = Path(server['path'])
+            if not folder.is_dir():
+                QMessageBox.warning(self, '无法打开服务端文件夹', '服务端目录不存在，请刷新列表后重试。')
+                return
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+                QMessageBox.warning(self, '无法打开服务端文件夹', str(folder))
 
     def choose_launch_jar(self):
         server = self.selected()

@@ -32,13 +32,13 @@ BRIDGE_MOD_VERSION = "0.2.0"
 BRIDGE_MOD_RELEASES = {
     "fabric": {
         "1.20.1": {
-            "version": BRIDGE_MOD_VERSION,
+            "version": "0.1.0",
             "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
                     "v0.1.0/agentmc-bridge-fabric-1.20.1-0.1.0.jar"),
             "sha1": "a014570661f3b5b07a272759960461e42dbbd9bf",
         },
         "1.21.1": {
-            "version": BRIDGE_MOD_VERSION,
+            "version": "0.1.0",
             "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
                     "v0.1.0/agentmc-bridge-fabric-1.21.1-0.1.0.jar"),
             "sha1": "65fa0a51c7691aea1b42648d3b6f8119550c243b",
@@ -46,7 +46,7 @@ BRIDGE_MOD_RELEASES = {
     },
     "forge": {
         "1.20.1": {
-            "version": BRIDGE_MOD_VERSION,
+            "version": "0.1.0",
             "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
                     "v0.1.0/agentmc-bridge-forge-1.20.1-0.1.0.jar"),
             "sha1": "402dc735cf8bc37c7f7701c7d1aed87e587e9174",
@@ -54,7 +54,7 @@ BRIDGE_MOD_RELEASES = {
     },
     "neoforge": {
         "1.21.1": {
-            "version": BRIDGE_MOD_VERSION,
+            "version": "0.1.0",
             "url": ("https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/download/"
                     "v0.1.0/agentmc-bridge-neoforge-1.21.1-0.1.0.jar"),
             "sha1": "227d01ffba887eb76a1ce13e36c1685b5e67dc2f",
@@ -162,8 +162,11 @@ def _github_candidates(loader: str, mc: str) -> list:
 def bridge_mod_info(loader: str, mc_version: str) -> dict | None:
     """查该 加载器+MC版本 是否有可用的 bridge-mod(自动发现优先,版本表兜底)。
     返回 {version, url?, sha1?, source, name?} 或 None(该组合不支持)。"""
-    # ① 自动发现:本地/在线
-    for cand in _offline_candidates(loader, mc_version) + _github_candidates(loader, mc_version):
+    # 离线包不一定最新。两边都发现时必须比较版本，否则旧内置 JAR 会
+    # 把新的发布资产遮住，更新检查也会误报“已是最新版”。
+    candidates = _offline_candidates(loader, mc_version) + _github_candidates(loader, mc_version)
+    if candidates:
+        cand = max(candidates, key=lambda item: _version_key(item["version"]))
         return {"version": cand["version"], "source": cand["source"]}
     # ② 版本表兜底(仅当自动发现拿不到,但表里有这个组合)
     info = BRIDGE_MOD_RELEASES.get(loader, {}).get(mc_version)
@@ -241,9 +244,12 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
     mods_dir = os.path.join(inst_dir, "mods")
     os.makedirs(mods_dir, exist_ok=True)
 
-    # ① 离线候选:直接复制(零联网)
+    # 离线包与 GitHub 发布包选择较新版本；同版本优先离线，保证零联网安装。
     offline = _offline_candidates(loader, mc_version)
-    if offline:
+    gh = _github_candidates(loader, mc_version)
+    use_offline = bool(offline) and (not gh or
+                    _version_key(offline[0]["version"]) >= _version_key(gh[0]["version"]))
+    if use_offline:
         cand = offline[0]
         dest = os.path.join(mods_dir, cand["name"])
         if not os.path.exists(dest) or not _installed_bridge_jar(inst_dir):
@@ -252,8 +258,7 @@ def download_bridge_mod(inst_dir: str, loader: str, mc_version: str,
         _remove_replaced_bridge_jars(mods_dir, cand["name"], loader, mc_version)
         return cand["name"]
 
-    # ② GitHub 自动发现并下载
-    gh = _github_candidates(loader, mc_version)
+    # GitHub 有较新版本时下载更新版。
     if gh and gh[0].get("url"):
         cand = gh[0]
         dest = os.path.join(mods_dir, cand["name"])

@@ -377,8 +377,7 @@ class InstanceManagerDialog(QWidget):
             from PySide6.QtWidgets import QApplication
             mw = QApplication.activeWindow()
             if mw is not None and hasattr(mw, "launch_selected_instance"):
-                mw._current_instance = lambda: self._inst_dict()
-                mw.launch_selected_instance()
+                mw.launch_selected_instance(self._inst_dict())
             else:
                 self.status_msg("请到主窗口「我的实例」启动")
         except Exception as e:
@@ -1114,7 +1113,7 @@ class InstanceManagerDialog(QWidget):
         hint.setStyleSheet(hint_style())
 
         btn = QToolButton()
-        btn.setText("一键配置 ▾")
+        btn.setText("一键配置")
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         menu = QMenu(btn)

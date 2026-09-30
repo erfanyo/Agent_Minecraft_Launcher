@@ -21,6 +21,7 @@ import json
 import random
 import string
 import time
+import threading
 import urllib.parse
 import urllib.request
 
@@ -66,9 +67,9 @@ def _post_json(url: str, data: dict, headers=None) -> dict:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         txt = e.read().decode("utf-8", "replace")
-        raise RuntimeError(f"HTTP {e.code}: {txt[:300]}")
+        raise RuntimeError(f"{urllib.parse.urlparse(url).hostname} 返回 HTTP {e.code}: {txt[:300]}")
     except Exception as e:
-        raise RuntimeError(f"网络请求失败: {type(e).__name__}: {e}")
+        raise RuntimeError(f"连接 {urllib.parse.urlparse(url).hostname} 失败: {type(e).__name__}: {e}")
 
 
 def _post_json_body(url: str, obj: dict, headers=None) -> dict:
@@ -89,9 +90,9 @@ def _post_json_body(url: str, obj: dict, headers=None) -> dict:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         txt = e.read().decode("utf-8", "replace")
-        raise RuntimeError(f"HTTP {e.code}: {txt[:300]}")
+        raise RuntimeError(f"{urllib.parse.urlparse(url).hostname} 返回 HTTP {e.code}: {txt[:300]}")
     except Exception as e:
-        raise RuntimeError(f"网络请求失败: {type(e).__name__}: {e}")
+        raise RuntimeError(f"连接 {urllib.parse.urlparse(url).hostname} 失败: {type(e).__name__}: {e}")
 
 
 def _get(url: str, headers=None) -> dict:
@@ -106,9 +107,9 @@ def _get(url: str, headers=None) -> dict:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         txt = e.read().decode("utf-8", "replace")
-        raise RuntimeError(f"HTTP {e.code}: {txt[:300]}")
+        raise RuntimeError(f"{urllib.parse.urlparse(url).hostname} 返回 HTTP {e.code}: {txt[:300]}")
     except Exception as e:
-        raise RuntimeError(f"网络请求失败: {type(e).__name__}: {e}")
+        raise RuntimeError(f"连接 {urllib.parse.urlparse(url).hostname} 失败: {type(e).__name__}: {e}")
 
 
 def _random_device_id() -> str:
@@ -132,6 +133,10 @@ class MsAuth:
         self._device_id = _random_device_id()
         self._ms_token = None       # 微软 access_token
         self._ms_refresh = None
+        self._cancelled = threading.Event()
+
+    def cancel(self):
+        self._cancelled.set()
 
     def start_device_code(self) -> dict:
         """启动设备码流,返回 {user_code, verification_uri, interval, message}。"""
@@ -141,6 +146,8 @@ class MsAuth:
             "response_type": "device_code",
         }
         r = _post_json(_DEVICE_CODE_URL, data)
+        if not r.get("device_code") or not r.get("user_code"):
+            raise RuntimeError("微软设备码接口没有返回有效代码，请稍后重试。")
         self._device_code = r.get("device_code")
         self._interval = int(r.get("interval", 5))
         return {
@@ -158,6 +165,8 @@ class MsAuth:
             raise RuntimeError("请先调用 start_device_code()")
         deadline = time.time() + timeout
         while time.time() < deadline:
+            if self._cancelled.is_set():
+                raise RuntimeError("已取消登录")
             try:
                 r = _post_json(_TOKEN_URL + "?client_id=" + urllib.parse.quote(get_client_id()), {
                     "client_id": get_client_id(),
@@ -177,7 +186,7 @@ class MsAuth:
                     pass       # 过期/太快,继续(按 interval 重试)
                 else:
                     raise
-            time.sleep(self._interval)
+            self._cancelled.wait(self._interval)
         raise TimeoutError("授权超时(用户未在浏览器完成授权)")
 
     def _finish(self) -> dict:
@@ -226,7 +235,7 @@ class MsAuth:
                        headers={"Authorization": "Bearer %s" % mc_token})
             items = ent.get("items", [])
         except Exception as e:
-            raise RuntimeError(f"查询 Minecraft 所有权失败(请重试登录): {type(e).__name__}")
+            raise RuntimeError(f"查询 Minecraft 所有权失败：{e}") from e
         if not items:
             raise RuntimeError("该账号没有 Minecraft Java 版所有权(未购买/未迁移)。")
 
