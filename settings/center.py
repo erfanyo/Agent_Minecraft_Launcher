@@ -98,6 +98,7 @@ class SettingsCenter(QWidget):
         self.shell.add_section("语言", self._build_language)
         self.shell.add_section("个性化", self._build_ui)
         self.shell.add_section(t("SYSTEM"), self._build_system)
+        self.shell.add_section("模型", self._build_models)
         self.shell.add_section("软件信息", self._build_software_info)
         if self._should_show_ai_settings():
             self.shell.add_section(t("AI_ASSISTANT"), self._build_ai)
@@ -1064,47 +1065,53 @@ class SettingsCenter(QWidget):
             p.open_tutorial()
 
     # ================= AI 助手 =================
+    def _build_models(self) -> QWidget:
+        """模型管理独立页(DSH 风格卡片):服务商/API 密钥/模型目录 + 内置模型卡片。"""
+        from model_cards import ModelCardsPanel
+        self.model_cards = ModelCardsPanel(self.settings)
+        self.model_cards.changed.connect(lambda: None)
+        hint = QLabel("· 每张卡片 = 一个模型来源;点「编辑」展开配置 API 密钥 / 模型目录;\n"
+                      "· 「内置」卡片是启动器自带的离线小模型,展开内容为下载状态与推理后端;\n"
+                      "· 「+ 添加模型」可新增服务商(DeepSeek、Ollama、LM Studio、自定义等)。")
+        hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
+        w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
+        l.addWidget(self.model_cards, 1)
+        l.addWidget(hint)
+        return self._wrap_scroll(w)
+
     def _build_ai(self) -> QWidget:
         self.ai_form = AISettingsForm(self.settings)
         self.mod_translate_check = ToggleSwitch(bool(self.settings.get("ai_mod_translate", True)))
         self.mod_translate_source = QComboBox()
-        self.mod_translate_source.addItem("本地模型（默认，离线）", "local")
-        self.mod_translate_source.addItem("已配置的云端模型（更准确，消耗额度）", "cloud")
+        self.mod_translate_source.addItem("本地模型", "local")
+        self.mod_translate_source.addItem("已配置的云端模型", "cloud")
         source_idx = self.mod_translate_source.findData(self.settings.get("ai_mod_translate_source", "local"))
         self.mod_translate_source.setCurrentIndex(source_idx if source_idx >= 0 else 0)
         self.mod_translate_source.setEnabled(self.mod_translate_check.isChecked())
         self.mod_translate_check.toggled.connect(self.mod_translate_source.setEnabled)
         self.cloud_tool_log_check = ToggleSwitch(bool(self.settings.get("ai_cloud_tool_log", True)))
         self.cloud_tool_log_check.setToolTip("记录用户请求、工具参数、工具结果和最终回复；API 密钥会自动脱敏。")
-        self.model_dl_btn = QPushButton(t("DOWNLOAD_LOCAL_MODEL"))
-        self.model_dl_status = QLabel(""); self.model_dl_status.setWordWrap(True)
-        self.model_dl_status.setStyleSheet(f"color: {muted_color()};")
-        self.model_dl_btn.clicked.connect(self._start_model_download)
-        dl_row = QHBoxLayout(); dl_row.addWidget(self.model_dl_btn); dl_row.addWidget(self.model_dl_status, 1)
 
         hint = QLabel("· 云/本地两块分开配:顶部选「当前使用(AI 策略)」哪档,AI 对话就走哪边;\n"
                       "· ⚠️ 本地是小模型:只懂直白指令,理解不了模糊需求(如\"按功能找 mod\"),甚至会选错工具;"
                       "这类要靠云端,想要稳定体验请配云端(如 DeepSeek);\n"
-                      "· 发图片(多模态):只有所选模型本身会看图才有效,内置本地模型自动关闭;\n"
-                      "· 本地模型约 500MB,首次用到时后台自动下载(镜像优先)。")
+                      "· 发图片(多模态):只有所选模型本身会看图才有效,内置本地模型自动关闭。")
         hint.setWordWrap(True); hint.setStyleSheet(f"color: {muted_color()};")
 
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(16, 12, 16, 12); l.setSpacing(10)
         source_row = QHBoxLayout()
         source_row.setContentsMargins(12, 0, 12, 0)
         source_row.setSpacing(10)
-        source_row.addWidget(QLabel("翻译来源:"))
+        _src_lbl = QLabel("翻译来源:"); _src_lbl.setStyleSheet(f"color:{text_color()}; font-weight:bold;")
+        source_row.addWidget(_src_lbl)
         source_row.addWidget(self.mod_translate_source, 1)
         l.addWidget(self.ai_form)
         l.addWidget(setting_switch_row("Mod 描述 AI 翻译", self.mod_translate_check, "将英文描述翻译成中文"))
         l.addLayout(source_row)
         l.addWidget(setting_switch_row("记录云端 AI 工具调用", self.cloud_tool_log_check,
                                        "仅保存在本机，API 密钥会脱敏"))
-        l.addLayout(dl_row)
         l.addWidget(hint)
         l.addStretch()
-        # 模型下载按钮使用未下载/下载中/已就绪三态。
-        self._init_model_dl_button()
         return self._wrap_scroll(w)
 
     def _is_model_downloaded(self) -> bool:
@@ -1115,6 +1122,8 @@ class SettingsCenter(QWidget):
             return False
 
     def _init_model_dl_button(self):
+        if not hasattr(self, "model_dl_btn"):
+            return   # 旧下载按钮已移除(下载入口改为内置模型卡片),此方法保留兼容但不再有控件
         ready = self._is_model_downloaded()
         if ready:
             self.model_dl_btn.setText(t("READY"))
@@ -1126,6 +1135,8 @@ class SettingsCenter(QWidget):
             self.model_dl_status.setText(t("NOT_DOWNLOADED_500MB_CLICK_TO_START"))
 
     def _start_model_download(self):
+        if not hasattr(self, "model_dl_btn"):
+            return
         if self._model_downloading:
             return
         if self._is_model_downloaded():
@@ -1153,6 +1164,8 @@ class SettingsCenter(QWidget):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_model_dl_progress(self, done, total):
+        if not hasattr(self, "model_dl_btn"):
+            return
         pct = int(done * 100 / total) if total else 0
         self.model_dl_btn.setText(t(f"下载中 {pct}%…", f"Downloading {pct}%…"))
         host = self.window()
@@ -1160,6 +1173,8 @@ class SettingsCenter(QWidget):
             host.model_download_progress("", done, total)
 
     def _on_model_dl_finished(self, ok, msg):
+        if not hasattr(self, "model_dl_btn"):
+            return
         self._model_downloading = False
         self.model_dl_status.setText(msg)
         host = self.window()
@@ -1480,6 +1495,8 @@ class SettingsCenter(QWidget):
         self.settings["ui_mode"] = self.ui_mode_combo.currentData()
         if hasattr(self, "ai_form"):
             self.settings.update(self.ai_form.values())
+            if hasattr(self, "model_cards"):
+                self.settings.update(self.model_cards.values())
             self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
             self.settings["ai_mod_translate_source"] = self.mod_translate_source.currentData()
             self.settings["ai_cloud_tool_log"] = self.cloud_tool_log_check.isChecked()

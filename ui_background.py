@@ -10,6 +10,7 @@
 
 **边界**:不改窗口框架(标题栏/菜单栏不动)、不改实例目录、不写用户目录(唯一例外 paths 退回)。
 """
+from __future__ import annotations
 import os
 import sys
 
@@ -259,10 +260,18 @@ def input_style_qss() -> str:
         base_bg = "rgba(255,255,255,0.62)"
         border = "rgba(0,0,0,0.12)"
         sel = "rgba(59,142,234,0.22)"
+    # 下拉选项文字必须跟主题(浅色黑/深色白),否则 hover/选中项在浅底上「白底白字」看不清。
+    from ui_style import text_color as _tc
+    _combo_text = _tc()
     return (
         f"QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{"
         f" background: {bg}; border: 1px solid {border}; border-radius: 10px; }}"
-        f"QComboBox QAbstractItemView {{ background: {base_bg}; selection-background-color: {sel}; }}"
+        f"QComboBox QAbstractItemView {{ background: {base_bg}; selection-background-color: {sel};"
+        f" selection-color: {_combo_text}; }}"
+        f"QComboBox QAbstractItemView::item {{ color: {_combo_text};"
+        f" padding: 5px 10px; }}"
+        f"QComboBox QAbstractItemView::item:hover {{ background: {sel}; color: {_combo_text}; }}"
+        f"QComboBox QAbstractItemView::item:selected {{ background: {sel}; color: {_combo_text}; }}"
         f"QListWidget, QTreeWidget, QTableWidget {{ background: {base_bg};"
         f" border: 1px solid {border}; border-radius: 10px; }}"
     )
@@ -376,3 +385,111 @@ class BackgroundWidget(QWidget):
             c.setAlphaF(self._mask)
             p.fillRect(self.rect(), c)
         p.end()
+
+
+# ===================== Merged from wallpaper_picker.py =====================
+"""Keyboard-accessible wallpaper picker and local-file drop target."""
+import os
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QPushButton
+
+
+class WallpaperDropButton(QPushButton):
+    fileDropped = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__('点击选择图片，或把图片拖到这里', parent)
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(90)
+        self.setToolTip('支持 PNG、JPG、BMP、WebP；一次选择一张本机图片')
+
+    @staticmethod
+    def local_image(mime):
+        urls = mime.urls() if mime.hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return ''
+        path = urls[0].toLocalFile()
+        if os.path.isfile(path) and os.path.splitext(path)[1].lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.webp'}:
+            return path
+        return ''
+
+    def dragEnterEvent(self, event):
+        if self.isEnabled() and self.local_image(event.mimeData()):
+            self.setDown(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self.isEnabled() and self.local_image(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.setDown(False)
+        event.accept()
+
+    def dropEvent(self, event):
+        self.setDown(False)
+        path = self.local_image(event.mimeData())
+        if self.isEnabled() and path:
+            event.acceptProposedAction()
+            self.fileDropped.emit(path)
+        else:
+            event.ignore()
+
+
+# ===================== Merged from wallpaper_picker.py =====================
+"""Keyboard-accessible wallpaper picker and local-file drop target."""
+import os
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QPushButton
+
+
+class WallpaperDropButton(QPushButton):
+    fileDropped = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__('点击选择图片，或把图片拖到这里', parent)
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(90)
+        self.setToolTip('支持 PNG、JPG、BMP、WebP；一次选择一张本机图片')
+
+    @staticmethod
+    def local_image(mime):
+        urls = mime.urls() if mime.hasUrls() else []
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            return ''
+        path = urls[0].toLocalFile()
+        if os.path.isfile(path) and os.path.splitext(path)[1].lower() in {'.png', '.jpg', '.jpeg', '.bmp', '.webp'}:
+            return path
+        return ''
+
+    def dragEnterEvent(self, event):
+        if self.isEnabled() and self.local_image(event.mimeData()):
+            self.setDown(True)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self.isEnabled() and self.local_image(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.setDown(False)
+        event.accept()
+
+    def dropEvent(self, event):
+        self.setDown(False)
+        path = self.local_image(event.mimeData())
+        if self.isEnabled() and path:
+            event.acceptProposedAction()
+            self.fileDropped.emit(path)
+        else:
+            event.ignore()

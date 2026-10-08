@@ -17,21 +17,138 @@
 
 当前原型用原生 /completion 端点 + GBNF(不走 OpenAI 兼容层,因为 LM Studio
 端点对推理模型不生效 grammar,见 .tmp/probe 结论)。
+
+【路由/工具链路:内置本地模型 vs Ollama/LM Studio】(见 assistant._local_enabled):
+  - 内置本地模型(ai_local_mode='builtin'):走【本模块】的 GBNF grammar 单轮工具调用
+    (GrammarToolEngine.tool_call)——模型只能"选 1 个工具 + 填参数",结构必对;
+    执行后由 assistant._synthesize_tool_reply 转人话(单轮,不做多轮)。
+  - Ollama / LM Studio(ai_local_mode='ollama'/'lmstudio'):**不走**本模块 grammar,
+    由 assistant 的 OpenAI 兼容路径 chat_with_tools 承担——原生多轮 function-calling,
+    模型自己啭人话(能力更强,受 CLOUD_ONLY_TOOLS 之外的全量工具)。
+  简言之:grammar 链路=内置 0.8B 专用(省资源/结构必对);OpenAI 兼容链路=Ollama/LM
+  Studio 与云端共用(多轮/强)。两者的工具可见性也不同:grammar 侧排除 CLOUD_ONLY_TOOLS
+  (create_plugin/resolve_mod_concept),避免小模型做不了的复杂工具误导它。
 """
+import atexit
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 
 import requests
 
 from paths import runtime_llama_dir  # noqa: E402
 
+# ---- llama-server 子进程登记 + 退出兜底回收 ----
+# 问题:Windows 未设 SO_EXCLUSIVEADDRUSE,同端口可重复绑定 → 双份 llama-server(请求随机分发);
+# 且启动器异常退出时子进程成孤儿。这里集中登记所有 Popen,atexit 强制回收(不管走哪条退出路径)。
+_TRACKED_PROCS: list = []
+_START_LOCK = threading.Lock()   # 串行化「探活+启动」,防止两个 engine 实例并发绑同端口
+
+
+def _reap_tracked() -> None:
+    """退出兜底:terminate/kill 所有登记的 llama-server 子进程,避免孤儿。"""
+    for proc in list(_TRACKED_PROCS):
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    proc.kill()
+        except Exception:
+            pass
+    _TRACKED_PROCS.clear()
+
+
+atexit.register(_reap_tracked)
+
+
+def _port_in_use(port: int) -> bool:
+    """判断本机端口是否有服务在监听(用于「已有 llama-server 就别重复起」)。"""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.4)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
 LLAMA_DIR = runtime_llama_dir()
 # 平台相关:Windows 下 llama 可执行带 .exe 后缀,mac/Linux 不带(否则找不到)
 _LLAMA_EXE_SUFFIX = ".exe" if sys.platform.startswith("win") else ""
 SERVER_EXE = os.path.join(LLAMA_DIR, "llama-server" + _LLAMA_EXE_SUFFIX)
+
+# 推理后端(见 ai_local_gpu 设置):auto / cpu / vulkan。
+# CPU 与 Vulkan 是两个不同的 llama-server 二进制(分目录共存),按设置/探测选一个。
+GPU_BACKENDS = ("auto", "cpu", "vulkan")
+
+
+def _vulkan_server_exe() -> str:
+    """Vulkan 版 llama-server 路径(AMCL/runtime/llama-cpp-vulkan)。"""
+    from paths import runtime_llama_vulkan_dir
+    return os.path.join(runtime_llama_vulkan_dir(), "llama-server" + _LLAMA_EXE_SUFFIX)
+
+
+def _vulkan_supported() -> bool:
+    """当前平台是否有官方 Vulkan 资产(win-x64 / linux-x64 / linux-arm64;mac 走 Metal)。"""
+    if sys.platform.startswith("darwin"):
+        return False
+    if sys.platform.startswith("win"):
+        return sys.maxsize > 2 ** 32 and _machine_is_x64()
+    # linux:x64 或 arm64 均有官方 Vulkan 资产
+    return True
+
+
+def _machine_is_x64() -> bool:
+    m = __import__("platform").machine().lower()
+    return m in ("x86_64", "amd64", "x64")
+
+
+def resolve_server_exe(backend: str = "auto") -> tuple[str, str]:
+    """按设置/探测选 llama-server 二进制。返回 (可执行路径, 实际后端名 'cpu'/'vulkan')。
+    - vulkan:显式要求 Vulkan;无 Vulkan 资产/未下载则回退 cpu(不报错)。
+    - auto:优先 Vulkan(已下载且平台支持),否则 cpu。
+    - cpu:强制 CPU。
+    只在【已有二进制】时才选 Vulkan——不在此处触发下载(fetch 是显式操作)。"""
+    backend = (backend or "auto").strip().lower()
+    if backend not in GPU_BACKENDS:
+        backend = "auto"
+    vk = _vulkan_server_exe()
+    vk_ready = _vulkan_supported() and os.path.isfile(vk)
+    if backend == "vulkan" and vk_ready:
+        return vk, "vulkan"
+    if backend == "auto" and vk_ready:
+        return vk, "vulkan"
+    return SERVER_EXE, "cpu"
+
+
+def gpu_backend_from_settings() -> str:
+    """从启动器设置读 ai_local_gpu(auto/cpu/vulkan);读不到返回 'auto'。"""
+    try:
+        from settings import load_settings
+        v = (load_settings().get("ai_local_gpu") or "auto").strip().lower()
+        return v if v in GPU_BACKENDS else "auto"
+    except Exception:
+        return "auto"
+
+
+def reasoning_effort_from_settings() -> str:
+    """从启动器设置读 ai_reasoning_effort(none..xhigh);读不到返回 'medium'。"""
+    try:
+        from settings import load_settings
+        v = (load_settings().get("ai_reasoning_effort") or "medium").strip().lower()
+        return v if v in LOCAL_EFFORT_LEVELS else "medium"
+    except Exception:
+        return "medium"
+
+
+def _gpu_flags(backend: str) -> list[str]:
+    """按后端返回 llama-server 的 GPU offload 参数。
+    - vulkan:-ngl 99 把所有层都卸载到 GPU(Vulkan 后端无 GPU 时自动回退 CPU 层,安全)。
+    - cpu:纯 CPU,不加 -ngl。"""
+    if backend == "vulkan":
+        return ["-ngl", "99"]
+    return []
 
 
 def _ensure_llama_runtime():
@@ -139,11 +256,10 @@ def schemas_from_assistant_tools() -> dict:
         # 本地模型(0.8B)只配跑"简单、参数结构直白"的工具;需要大模型语义联想/复杂数组参数的
         # 云端专用工具(如 resolve_mod_concept 的 candidates 数组)对本地没意义,反而浪费轮次/误导,
         # 故从本地 grammar 中排除。
-        CLOUD_ONLY = {"resolve_mod_concept"}
         out = {}
         for t in assistant.TOOLS:
             fn = t["function"]
-            if fn["name"] in CLOUD_ONLY:
+            if fn["name"] in CLOUD_ONLY_TOOLS:
                 continue
             params = fn.get("parameters", {})
             props = params.get("properties", {})
@@ -158,6 +274,199 @@ def schemas_from_assistant_tools() -> dict:
         pass
     # fallback:assistant 不可用时用内置清单
     return TOOL_SCHEMAS_FALLBACK
+
+
+# 云端专用/本地不接的工具(需大模型语义联想或复杂数组参数,0.8B 填不好):
+# resolve_mod_concept 的 candidates 是开放数组,本地 grammar 也难以约束。
+# create_plugin 要写完整 Python 插件源码,0.8B 几乎必写错 → 强烈不建议内置本地模型用,
+# 故从本地 grammar/描述/挂载中一并排除(本地想生成插件请切云端)。
+CLOUD_ONLY_TOOLS = {"resolve_mod_concept", "create_plugin"}
+
+
+def tool_descriptions() -> dict:
+    """从 assistant.TOOLS 的 description 自动生成 {工具名: 描述}——单一来源,永不落后。
+    本地 0.8B 小模型注意力有限,描述取首句(到第一个句号/换行)并截断,避免长描述稀释。
+    assistant 不可用时回退到内置 TOOL_DESCRIPTIONS_FALLBACK。"""
+    try:
+        import assistant
+        out = {}
+        for t in assistant.TOOLS:
+            fn = t["function"]
+            name = fn["name"]
+            if name in CLOUD_ONLY_TOOLS:
+                continue
+            out[name] = _short_desc(fn.get("description", ""))
+        if out:
+            return out
+    except Exception:
+        pass
+    return TOOL_DESCRIPTIONS_FALLBACK
+
+
+def _short_desc(desc: str, limit: int = 60) -> str:
+    """取描述首句(到第一个 。/./;/\n)并限长,适合 0.8B 模型的 system prompt。"""
+    d = (desc or "").strip()
+    for sep in ("。", ".", ";", "；", "\n"):
+        i = d.find(sep)
+        if i > 0:
+            d = d[:i]
+            break
+    d = d.strip()
+    return d if len(d) <= limit else d[:limit - 1] + "…"
+
+
+def select_tools_for_text(text: str, schemas: dict | None = None) -> dict:
+    """按请求意图给本地模型按需挂载工具(与云端 mount_tools_for 同思路):
+    通用工具 + 命中关键词的组。返回 {工具名: schema} 子集,缩小 grammar 与 system prompt,
+    避免 0.8B 被 40+ 工具淹没导致选错。宁可多挂不可漏挂。"""
+    try:
+        import assistant
+        wanted = assistant.tools_for_text(text)
+        matched_any = bool(assistant.groups_for_text(text))
+    except Exception:
+        wanted = list(TOOL_SCHEMAS_FALLBACK)
+        matched_any = True
+    schemas = schemas or schemas_from_assistant_tools()
+    names = [n for n in wanted if n in schemas and n not in CLOUD_ONLY_TOOLS]
+    # 兜底:一个组都没命中(如纯寒暄/极短句)→ 至少保留常用查询,保证能干活
+    if not matched_any:
+        for n in ("list_instances", "search_mods", "get_settings", "get_recipe_path",
+                  "read_instance_log", "read_crash_report", "install_mod", "launch_game"):
+            if n in schemas and n not in names:
+                names.append(n)
+    return {n: schemas[n] for n in names}
+
+
+# ================= 模拟悟:两阶段工具调用(用 token 换准确率) =================
+# 0.8B 单阶段「41 选 1」容易被长描述/无关工具抢注意力(如 list_mods 被挤掉→误调 create_plugin)。
+# 两阶段把一次跳跃拆成两次小跳:L1 从「组」里选(6~11 选 1)→ L2 组内选工具+填参(几选 1)。
+# effort(思考强度)控制深度:L1=单阶段(快)/ L2=两阶段(准)/ L3=两阶段+自检(最稳)。
+
+# effort 等级 → 本地模拟悟深度。与 Codex 的 reasoning_effort 对齐(云端是思考程度,本地是模拟悟程度)。
+LOCAL_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
+# effort → 本地阶段数:1=单阶段 / 2=两阶段 / 3=两阶段+自检
+EFFORT_TO_STAGE = {
+    "none": 1, "minimal": 1, "low": 2,
+    "medium": 2, "high": 3, "xhigh": 3,
+}
+
+
+def stage_for_effort(effort: str) -> int:
+    """把 reasoning_effort 映射到本地模拟悟阶段数(1/2/3)。未知值按 medium=2。"""
+    return EFFORT_TO_STAGE.get((effort or "medium").strip().lower(), 2)
+
+
+def _group_schemas(group_tools: list[str], schemas: dict) -> dict:
+    """取某组内、且本地可用(非 CLOUD_ONLY)的工具 schema 子集。"""
+    return {n: schemas[n] for n in group_tools
+            if n in schemas and n not in CLOUD_ONLY_TOOLS}
+
+
+def pick_group(text: str, context: str = "", engine=None) -> str | None:
+    """L1:让模型从「工具组」里选一个(候选只有 6~11 个,比 41 个好选)。
+    grammar 约束输出 {"group": "..."};失败/超时返回 None(上层回退单阶段)。"""
+    try:
+        import assistant
+        tool_groups = assistant.TOOL_GROUPS
+    except Exception:
+        return None
+    # 只保留本地真有工具的组(排除空组/纯云端组)
+    candidates = [g for g, tools in tool_groups.items()
+                  if _group_schemas(tools, schemas_from_assistant_tools())]
+    # 关键词预筛:请求只命中少数组时,不把无关组摆给 0.8B 选
+    # (它容易凭泛化的「装」选到 mod,导致「装个光影」跑去 install_mod)。
+    try:
+        matched = [g for g in assistant.groups_for_text(text) if g in candidates]
+    except Exception:
+        matched = []
+    labels = getattr(assistant, "TOOL_GROUP_LABELS", {})
+    if matched:
+        candidates = matched
+    if not candidates:
+        return None
+    schema = {"pick_group": {
+        "properties": {"group": "string"},
+        "required": ["group"]}}
+    # group 值域用候选组名;grammar 只约束结构,语义靠 system prompt
+    gbnf = ('root ::= "{" ws "\\"name\\"" ws ":" ws "\\"pick_group\\"" ws "," ws '
+            '"\\"arguments\\"" ws ":" ws "{" ws "\\"group\\"" ws ":" ws '
+            + " | ".join(f'"\\"{g}\\""' for g in candidates) + ' ws "}" ws "}"')
+    system = ("你是启动器的工具路由助手。根据用户请求,选出最相关的一组工具。"
+              "只输出 JSON:{\"name\": \"pick_group\", \"arguments\": {\"group\": \"<组名>\"}}。\n"
+              "可选组(组名 = 说明;光影/资源包/材质包属于 resources):\n"
+              + "\n".join(f"- {g} = {labels.get(g, '')}" for g in candidates))
+    try:
+        call = engine._raw_tool_call(text, context=context, system=system, gbnf=gbnf)
+        g = ((call or {}).get("arguments") or {}).get("group", "")
+        return g if g in candidates else None
+    except Exception:
+        return None
+
+
+def two_stage_tool_call(user_text: str, timeout: int = 120, context: str = "",
+                        engine=None, effort: str = "medium") -> dict:
+    """模拟悟两阶段工具调用。返回 {"name", "arguments"}(与 tool_call 同形)。
+    effort 控制深度(见 stage_for_effort):
+      stage 1(快):单阶段,直接 select_tools_for_text 挂载后一次调用。
+      stage 2(准):L1 选组 → L2 组内选工具+填参。
+      stage 3(稳):stage 2 + 自检(缺必填/异常 → 再试一次 L2)。
+    任何一步失败 → 回退单阶段,保证不断链。"""
+    schemas = schemas_from_assistant_tools()
+    stages = stage_for_effort(effort)
+    if stages <= 1:
+        # 单阶段(快):沿用原 tool_call 的按需挂载
+        return engine.tool_call(user_text, timeout=timeout, context=context,
+                                mounted=select_tools_for_text(user_text, schemas))
+    # ---- 两阶段:L1 选组 ----
+    group = pick_group(user_text, context=context, engine=engine)
+    if not group:
+        # L1 失败 → 回退单阶段
+        return engine.tool_call(user_text, timeout=timeout, context=context,
+                                mounted=select_tools_for_text(user_text, schemas))
+    try:
+        import assistant
+        group_tools = assistant.TOOL_GROUPS.get(group, [])
+    except Exception:
+        group_tools = []
+    sub = _group_schemas(group_tools, schemas)
+    # 组内至少带上通用查询,避免组太空没法干活
+    extras = ["list_instances", "get_settings", "ask_user"]
+    if group == "resources":
+        # 光影要先确认实例是否已装加载器(Forge=Oculus / Fabric=Iris),故补 list_mods
+        extras.append("list_mods")
+    for n in extras:
+        if n in schemas and n not in sub:
+            sub[n] = schemas[n]
+    if not sub:
+        return engine.tool_call(user_text, timeout=timeout, context=context,
+                                mounted=select_tools_for_text(user_text, schemas))
+    # ---- L2:组内选工具+填参 ----
+    def _l2():
+        return engine.tool_call(user_text, timeout=timeout, context=context, mounted=sub)
+
+    call = _l2()
+    if stages < 3:
+        return call
+    # ---- L3:自检(缺必填参数 → 再试一次 L2)----
+    name = (call or {}).get("name", "")
+    args = (call or {}).get("arguments", {}) or {}
+    meta = sub.get(name, {})
+    required = meta.get("required", [])
+    missing = [k for k in required if not str(args.get(k, "")).strip()]
+    if missing:
+        try:
+            retry = _l2()
+            rname = (retry or {}).get("name", "")
+            rargs = (retry or {}).get("arguments", {}) or {}
+            rmeta = sub.get(rname, {})
+            rmissing = [k for k in rmeta.get("required", [])
+                        if not str(rargs.get(k, "")).strip()]
+            if len(rmissing) < len(missing):
+                return retry   # 重试补齐更多必填项 → 用新的
+        except Exception:
+            pass
+    return call
+
 # 工具 schema 的最小形态:name + 参数 key/required。
 # 正式来源:assistant.TOOLS(见 schemas_from_assistant_tools);
 # 下面这份是 assistant 不可用时的 fallback(内容与 assistant.TOOLS 同步维护)。
@@ -194,10 +503,25 @@ TOOL_SCHEMAS_FALLBACK = {
                         "required": ["item"]},
     "compare_items": {"properties": {"attribute": "string", "top_n": "integer"},
                       "required": ["attribute"]},
+    "search_resource_packs": {"properties": {"query": "string", "game_version": "string", "loader": "string"},
+                              "required": ["query"]},
+    "search_shaders": {"properties": {"query": "string", "game_version": "string", "loader": "string"},
+                       "required": ["query"]},
+    "list_resource_packs": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "list_shaders": {"properties": {"instance": "string"}, "required": ["instance"]},
+    "install_resource_pack": {"properties": {"slug_or_url": "string", "instance": "string",
+                                             "game_version": "string", "loader": "string"},
+                              "required": ["slug_or_url", "instance"]},
+    "install_shader": {"properties": {"slug_or_url": "string", "instance": "string",
+                                      "game_version": "string", "loader": "string"},
+                       "required": ["slug_or_url", "instance"]},
 }
 
-# 工具描述(给模型看的语义信息,决定它选对工具;grammar 管格式,描述管语义)
-TOOL_DESCRIPTIONS = {
+# 工具描述 fallback(给模型看的语义信息)。正式来源:tool_descriptions() 从
+# assistant.TOOLS 的 description 自动生成(单一来源,永不落后);assistant 不可用时用这份。
+# 注意:这份手写清单刻意只覆盖"最常用"的一批,保证降级时本地模型至少能干活;
+# 不要再用它当唯一来源(会落后于 assistant.TOOLS 的迭代)。
+TOOL_DESCRIPTIONS_FALLBACK = {
     "list_instances": "列出已安装的实例及其加载器/基础版本。用户问'有哪些实例/装了哪些游戏/看看实例'时用它",
     "search_mods": "搜索 Mod(支持中文名),参数 query 如 sodium 或 钠;可按游戏版本/加载器过滤。注意:只是搜索,不是安装",
     "list_mods": "列出某实例已安装的 Mod 文件。用户问'XX 装了哪些mod/有什么mod'时用它",
@@ -222,6 +546,12 @@ TOOL_DESCRIPTIONS = {
     "get_recipe_path": "查询物品合成配方,支持中文名,item 如 终极感应供应器/铁锭。用户问'怎么合成/要多少材料/怎么做'时用它",
     "compare_items": "比较物品参数(武器伤害/护甲/护甲韧性/攻速/挖掘等级),attribute 必须用中文(如 武器伤害/护甲/攻速),"
                      "不要用英文 damage/armor!用户问'哪个伤害最高/谁护甲最厚/哪个最强'时用它",
+    "search_resource_packs": "搜索资源包/材质包(如 写实材质/faithful/32x)。用户想换材质/下皮肤包/下资源包时用它",
+    "search_shaders": "搜索光影包(如 complementary/BSL/光影)。用户想加光影时用它",
+    "list_resource_packs": "列出某实例已下载的资源包/材质包",
+    "list_shaders": "列出某实例已下载的光影包",
+    "install_resource_pack": "下载并安装资源包/材质包到指定实例的 resourcepacks/ 目录(写操作)",
+    "install_shader": "下载并安装光影包到指定实例的 shaderpacks/ 目录(写操作)",
 }
 
 
@@ -296,10 +626,13 @@ class GrammarToolEngine:
     def __init__(self, model_id: str = DEFAULT_MODEL_ID, port: int = 8090,
                  gbnf: str = None, system_prompt: str = None,
                  schemas: dict = None,
-                 external_base: str = None, external_model: str = None):
+                 external_base: str = None, external_model: str = None,
+                 gpu: str = None):
         self.model_id = model_id
         self.port = port
         self.base = f"http://127.0.0.1:{port}"
+        # gpu: auto/cpu/vulkan;None = 从设置 ai_local_gpu 读(默认 auto=优先 Vulkan)
+        self.gpu = (gpu or gpu_backend_from_settings()).strip().lower()
         # 外部 OpenAI 兼容引擎(如 LM Studio 的 9B):设置里指定 base(如 http://127.0.0.1:1234/v1)+ model 名。
         # 有外部引擎时,chat/translate 走 /v1/chat/completions,不再自拉 8090 llama-server。
         self.external_base = (external_base or "").strip()
@@ -308,6 +641,7 @@ class GrammarToolEngine:
         self.gbnf = gbnf or build_gbnf(self.schemas)
         self.system_prompt = system_prompt or self._default_system()
         self.proc = None
+        self.backend = "cpu"   # start() 里按 resolve_server_exe 结果记录实际后端
 
     @property
     def is_external(self) -> bool:
@@ -316,22 +650,34 @@ class GrammarToolEngine:
 
     # ---- 生命周期(规划 §5:用完即卸)----
     def start(self, model_path: str = None, wait: int = 90):
-        import model_registry
-        if self.proc and self.proc.poll() is None:
-            return
-        if model_path is None:
-            model_path = model_registry.local_path(self.model_id)
-        _ensure_llama_runtime()
-        if not os.path.exists(SERVER_EXE):
-            raise RuntimeError(f"llama-server 不存在:{SERVER_EXE}(先运行 .tmp/full_llamacpp.py)")
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        self.proc = subprocess.Popen(
-            [SERVER_EXE, "-m", model_path, "--port", str(self.port),
-             "-c", "2048", "--no-webui", "-np", "1", "--log-disable"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=flags)
-        from memory_policy import register_model_process
-        register_model_process(self.proc)
+        with _START_LOCK:
+            if self.proc and self.proc.poll() is None:
+                return
+            # 【端口防重复】8090 已有健康 llama-server 在服务(别的 engine 实例起的)→ 直接复用,
+            # 不再 Popen。Windows 未设 SO_EXCLUSIVEADDRUSE,重复绑定会静默变双份(请求随机分发)。
+            if self._port_serving():
+                return
+            if model_path is None:
+                import model_registry
+                model_path = model_registry.local_path(self.model_id)
+            _ensure_llama_runtime()
+            # 按设置/探测选 CPU 或 Vulkan 版 llama-server(两者是不同二进制,分目录共存)
+            server_exe, backend = resolve_server_exe(self.gpu)
+            self.backend = backend
+            if not os.path.exists(server_exe):
+                raise RuntimeError(f"llama-server 不存在:{server_exe}(先运行 tools/fetch_llamacpp.py"
+                                   + (" --variant vulkan)" if backend == "vulkan" else ")"))
+            flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+            cmd = [server_exe, "-m", model_path, "--port", str(self.port),
+                   "-c", "2048", "--no-webui", "-np", "1", "--log-disable"]
+            cmd += _gpu_flags(backend)   # vulkan 加 -ngl 99(GPU 全卸载),cpu 不加
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=flags)
+            _TRACKED_PROCS.append(self.proc)   # 登记,退出时兜底回收(防孤儿)
+            from memory_policy import register_model_process
+            register_model_process(self.proc)
         for _ in range(wait):
             try:
                 if requests.get(f"{self.base}/health", timeout=3).status_code == 200:
@@ -342,6 +688,15 @@ class GrammarToolEngine:
         self.stop()
         raise RuntimeError("llama-server 启动超时")
 
+    def _port_serving(self) -> bool:
+        """端口已有服务在跑(且是健康 llama-server)→ 视为可复用(不重复绑定)。"""
+        if not _port_in_use(self.port):
+            return False
+        try:
+            return requests.get(f"{self.base}/health", timeout=2).status_code == 200
+        except Exception:
+            return False
+
     def stop(self):
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
@@ -349,6 +704,11 @@ class GrammarToolEngine:
                 self.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        if self.proc in _TRACKED_PROCS:
+            try:
+                _TRACKED_PROCS.remove(self.proc)
+            except ValueError:
+                pass
         self.proc = None
 
     def __enter__(self):
@@ -443,24 +803,40 @@ class GrammarToolEngine:
                         system=system, n_predict=n_predict, temperature=0.1)
         return _extract_translation(raw)
 
-    def tool_call(self, user_text: str, timeout: int = 120, context: str = "") -> dict:
+    def tool_call(self, user_text: str, timeout: int = 120, context: str = "",
+                  mounted: dict = None) -> dict:
         """让模型输出一次工具调用,grammar 保证可解析。返回 {"name":..,"arguments":..}
         context: 真实启动器上下文(如实例清单/设置),注入 system prompt(规划 §7.3 最轻量 RAG)。
+        mounted: 本次按需挂载的 {工具名: schema} 子集(见 select_tools_for_text);
+                 给了就用它生成 grammar+system(缩小选择面,提升 0.8B 选对率),否则全量。"""
+        # 按需挂载:用子集生成 grammar 与 system(工具少→grammar 分支少→模型不易选错)
+        schemas = mounted if mounted else self.schemas
+        gbnf = self.gbnf if mounted is None else build_gbnf(schemas)
+        system = self.system_prompt if mounted is None else self._default_system(schemas)
+        return self._raw_tool_call(user_text, timeout=timeout, context=context,
+                                   system=system, gbnf=gbnf)
+
+    def _raw_tool_call(self, user_text: str, timeout: int = 120, context: str = "",
+                       system: str = None, gbnf: str = None) -> dict:
+        """底层工具调用:给定 system + gbnf,grammar 保证可解析。
         若输出被截断/卡住(必填参数未填完),自动重试:
           1. 把已输出的半截 JSON 作为前缀续写(模型只需补缺失字段,不从头重吐)
-          2. 仍失败则报错,上层落云端(§1.4)"""
+          2. 仍失败则报错,上层落云端(§1.4)
+        tool_call / pick_group(组路由) / two_stage 都复用本方法。"""
+        system = self.system_prompt if system is None else system
+        gbnf = self.gbnf if gbnf is None else gbnf
         attempt = 0
         last_content = ""
         while True:
             if attempt == 0:
-                prompt = self._chat_prompt(user_text, context=context)
+                prompt = self._chat_prompt(user_text, context=context, system=system)
             else:
                 # 续写:把上次半截输出拼进 prompt 末尾(模型接着补完,grammar 从当前位置继续约束)
-                prompt = (self._chat_prompt("", context=context).rstrip() + "\n" +
+                prompt = (self._chat_prompt("", context=context, system=system).rstrip() + "\n" +
                           last_content + "\n(继续:请补齐剩余必填参数后结束)")
             body = {"prompt": prompt, "n_predict": 1024,
                     "temperature": 0.0, "stop": ["<|im_end|>", "</s>"],
-                    "grammar": self.gbnf}
+                    "grammar": gbnf}
             r = requests.post(f"{self.base}/completion", json=body, timeout=timeout)
             r.raise_for_status()
             last_content = r.json()["content"].strip()
@@ -472,12 +848,21 @@ class GrammarToolEngine:
                 attempt += 1
                 continue
 
-    def _default_system(self) -> str:
-        descs = "\n".join(f"- {n}:{d}" for n, d in TOOL_DESCRIPTIONS.items())
+    def _default_system(self, schemas: dict = None) -> str:
+        schemas = self.schemas if schemas is None else schemas
+        descs_map = tool_descriptions()
+        # 只描述本次挂载的工具(单一来源:描述取自 assistant.TOOLS,永不落后)
+        descs = "\n".join(f"- {n}:{descs_map.get(n, n)}" for n in schemas)
         return ("你是 Agent Minecraft 启动器的 AI 助手。需要调用工具时,只输出 JSON:"
                 '{"name": 工具名, "arguments": {参数}}。工具清单:\n' + descs +
                 "\n参数里需要实例 id 时,从 system 提示的可用实例中选择;"
                 "没给出实例信息时,用 list_instances 先查。"
+                "选工具规则:查询/看内容(列实例、列 Mod、搜 Mod、查配方、看日志)一律用对应的"
+                "【简单查询工具】(list_instances / list_mods / search_mods / get_recipe_path / "
+                "read_instance_log 等),不要用别的工具代替。"
+                "⚠️【不要生成插件】:严禁用 create_plugin 或自己写代码来回答『列 Mod/查实例』这类"
+                "普通查询——那只会坏事;查东西就老老实实调对应查询工具。生成插件是云端大模型的活,"
+                "内置本地模型不要碰。"
                 "**重要:arguments 必须包含该工具的全部必填参数,一个都不能少;"
                 "缺参数会导致调用失败,请确保输出完整后再结束。**")
 
@@ -524,7 +909,8 @@ if __name__ == "__main__":
             for _r in range(runs):
                 for case in ai_testset.CASES:
                     try:
-                        call = eng.tool_call(case["user"], context=context)
+                        call = eng.tool_call(case["user"], context=context,
+                                             mounted=select_tools_for_text(case["user"]))
                         score = ai_testset.evaluate_output(
                             case, call.get("name", ""), call.get("arguments", {}))
                     except Exception as e:
@@ -556,7 +942,7 @@ if __name__ == "__main__":
     with GrammarToolEngine() as eng:
         for u in cases:
             try:
-                call = eng.tool_call(u)
+                call = eng.tool_call(u, mounted=select_tools_for_text(u))
                 print(f"{u}\n  -> {json.dumps(call, ensure_ascii=False)}\n")
             except Exception as e:
                 print(f"{u}\n  -> FAIL {type(e).__name__}: {str(e)[:150]}\n")

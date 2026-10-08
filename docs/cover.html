@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AMCL 1.0.0 封面</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #181c22;
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    padding: 40px 20px;
+  }
+
+  /* ===== 封面容器（比例通过 width/height 控制） ===== */
+  .cover {
+    position: relative;
+    overflow: hidden;
+    border-radius: 28px;
+    color: #fff;
+    background: linear-gradient(145deg, #0f8b8d 0%, #2563a8 45%, #1e2a63 100%);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  }
+
+  /* 底层像素纹理 */
+  .cover::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 75% 25%, rgba(255,255,255,0.12) 0%, transparent 45%),
+      repeating-conic-gradient(rgba(255,255,255,0.025) 0% 25%, transparent 0% 50%);
+    background-size: 100% 100%, 40px 40px;
+  }
+
+  /* 装饰方块 */
+  .deco { position: absolute; opacity: 0.14; border-radius: 8px; }
+  .d1 { width: 220px; height: 220px; background: #fff; top: -80px; right: -60px; transform: rotate(18deg); }
+  .d2 { width: 140px; height: 140px; background: #fff; bottom: -50px; left: -40px; transform: rotate(32deg); }
+  .d3 { width: 90px;  height: 90px;  background: #fff; bottom: 60px; right: 80px; transform: rotate(12deg); }
+
+  /* ===== 文本块 ===== */
+  .content { position: relative; z-index: 1; padding: 56px; display: flex; flex-direction: column; height: 100%; justify-content: space-between; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,255,255,0.18);
+    border: 1px solid rgba(255,255,255,0.35);
+    padding: 10px 24px;
+    border-radius: 999px;
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    width: fit-content;
+    backdrop-filter: blur(6px);
+  }
+
+  h1 {
+    font-size: 72px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-shadow: 0 6px 24px rgba(0,0,0,0.35);
+    margin: 18px 0 8px;
+  }
+  h1 .accent { color: #ffe066; }
+  .subtitle { font-size: 26px; font-weight: 500; opacity: 0.92; line-height: 1.5; }
+
+  .features { display: flex; gap: 12px; margin-top: 24px; flex-wrap: wrap; }
+  .chip {
+    background: rgba(255,255,255,0.16);
+    border: 1px solid rgba(255,255,255,0.28);
+    padding: 10px 18px;
+    border-radius: 12px;
+    font-size: 18px;
+    font-weight: 500;
+    backdrop-filter: blur(4px);
+  }
+
+  .version-row {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-top: 28px;
+  }
+  .ver-num {
+    font-size: 48px;
+    font-weight: 800;
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    color: #ffe066;
+  }
+  .ver-tag {
+    background: #ffe066;
+    color: #1e2a63;
+    padding: 6px 16px;
+    border-radius: 8px;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+
+  /* ===== 4:3 横版 ===== */
+  .cover.ratio-4x3 { width: 1200px; height: 900px; margin: 0 auto 40px; }
+  .cover.ratio-4x3 h1 { font-size: 84px; }
+  .cover.ratio-4x3 .subtitle { font-size: 30px; }
+  .cover.ratio-4x3 .content { padding: 72px; }
+  .cover.ratio-4x3 .chip { font-size: 20px; padding: 12px 22px; }
+  .cover.ratio-4x3 .ver-num { font-size: 56px; }
+
+  /* ===== 3:4 竖版 ===== */
+  .cover.ratio-3x4 { width: 900px; height: 1200px; margin: 0 auto 40px; }
+  .cover.ratio-3x4 h1 { font-size: 76px; }
+  .cover.ratio-3x4 .subtitle { font-size: 28px; }
+  .cover.ratio-3x4 .content { padding: 64px; }
+  .cover.ratio-3x4 .features { flex-direction: column; }
+  .cover.ratio-3x4 .chip { font-size: 22px; padding: 14px 22px; width: fit-content; }
+  .cover.ratio-3x4 .ver-num { font-size: 56px; }
+  .cover.ratio-3x4 .deco.d1 { width: 320px; height: 320px; top: -120px; right: -100px; }
+  .cover.ratio-3x4 .deco.d2 { width: 180px; height: 180px; bottom: -60px; left: -60px; }
+
+  /* 标注 */
+  .label { text-align: center; color: #888; font-size: 14px; margin-bottom: 10px; letter-spacing: 1px; }
+</style>
+</head>
+<body>
+
+  <!-- ===== 4:3 横版封面 ===== -->
+  <div class="label">— 封面 · 横版 4:3（1200 × 900）—</div>
+  <div class="cover ratio-4x3">
+    <div class="deco d1"></div>
+    <div class="deco d2"></div>
+    <div class="deco d3"></div>
+    <div class="content">
+      <div>
+        <div class="badge">🧱 MINECRAFT 启动器</div>
+        <h1>Agent Minecraft<br><span class="accent">Launcher</span></h1>
+        <div class="subtitle">简洁 · 快速 · 强大的 Minecraft 启动器<br>内置 AI 助手 · 模组/整合包/实例管理</div>
+        <div class="features">
+          <div class="chip">🧠 AI 助手</div>
+          <div class="chip">📦 模组管理</div>
+          <div class="chip">🗺 多实例</div>
+          <div class="chip">🔧 自动修复</div>
+        </div>
+      </div>
+      <div class="version-row">
+        <div class="ver-num">v1.0.0</div>
+        <div class="ver-tag">正式版</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 3:4 竖版封面 ===== -->
+  <div class="label">— 封面 · 竖版 3:4（900 × 1200）—</div>
+  <div class="cover ratio-3x4">
+    <div class="deco d1"></div>
+    <div class="deco d2"></div>
+    <div class="deco d3"></div>
+    <div class="content">
+      <div>
+        <div class="badge">🧱 MINECRAFT 启动器</div>
+        <h1>Agent Minecraft<br><span class="accent">Launcher</span></h1>
+        <div class="subtitle">简洁 · 快速 · 强大的<br>Minecraft 启动器</div>
+        <div class="features">
+          <div class="chip">🧠 AI 助手</div>
+          <div class="chip">📦 模组管理</div>
+          <div class="chip">🗺 多实例</div>
+          <div class="chip">🔧 自动修复</div>
+        </div>
+      </div>
+      <div class="version-row">
+        <div class="ver-num">v1.0.0</div>
+        <div class="ver-tag">正式版</div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

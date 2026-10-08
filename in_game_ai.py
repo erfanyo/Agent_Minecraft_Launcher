@@ -283,8 +283,13 @@ def make_answerer(win=None, settings: dict | None = None):
             from assistant import route_answer
             system = _in_game_ctx(win, instance, cfg, ctx)
             from assistant import build_executor
+            # 游戏内没有可交互的确认对话框:玩家在游戏里主动敲 /ai,权限也已由 _can_exec
+            # 按身份判定(集成服房主 / OP / --console),所以 send_game_command 直接执行,
+            # 而不是返回"请在启动器里点确认"——启动器里并没有这个待确认项,玩家会白等。
+            # 指令仍以玩家身份执行(as_player),最终由 Minecraft 自己裁决权限。
             executor = _make_cloud_executor(
-                instance, build_executor(cfg),
+                instance,
+                build_executor(cfg, auto_confirm_tools={"send_game_command"}),
                 str(ctx.get("exec_mode") or "player"), str(ctx.get("player") or ""))
             return route_answer(text, cfg, context=system, force_tools=force_tools,
                                 executor=executor)

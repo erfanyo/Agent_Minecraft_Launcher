@@ -12,6 +12,7 @@
 
 AI 工具用 RCON 通道(无 GUI 依赖);启动器 GUI 用完整智能选择。
 """
+import json
 import os
 import socket
 import struct
@@ -359,6 +360,7 @@ def send_bridge_command(instance: str, command: str, game_dir: str,
         return ("指令口未监听:游戏没有在运行,或还没进入世界。\n"
                 "请先启动游戏并进入一个世界(单机集成服务器运行时才有指令口),\n"
                 "进入后立刻再让我发指令。")
+    sent_at = time.time()
     try:
         req = {"seq": 1, "command": cmd, "token": token}
         if as_player:
@@ -369,13 +371,49 @@ def send_bridge_command(instance: str, command: str, game_dir: str,
         return f"bridge 通信失败:{e}"
     finally:
         conn.close()
-    if not resp.strip():
-        return "bridge 返回为空(命令可能已执行,无文本反馈)"
-    data = json.loads(resp.splitlines()[0])
+    data = None
+    if resp.strip():
+        try:
+            data = json.loads(resp.splitlines()[0])
+        except ValueError:
+            data = None
+    if data is None:
+        # 兼容:旧版 bridge-mod 发完即关 socket(结果写在关闭之后),这里收不到响应。
+        # 但它同时把每条结果落盘到 .bridge/command_result.json —— 读文件兜底。
+        # 关键:绝不能再用"命令可能已执行"含糊过去,那会让 AI 对玩家谎称"已发送"。
+        data = _await_bridge_result_file(instance, game_dir, cmd, sent_at)
+    if data is None:
+        return ("⚠️ bridge 通道没有返回结果,**无法确认指令是否执行**(也没看到游戏反馈)。\n"
+                "可能原因:bridge-mod 版本过旧(结果没能回传)、指令被游戏以权限原因拒绝,"
+                "或已经退出世界。\n"
+                "请先在游戏内确认实际效果;若反复如此,把 bridge-mod 更新到最新版再试。")
     ok = bool(data.get("success"))
     result = (data.get("result") or "").strip()
-    head = f"✅ 已执行:{cmd}" if ok else f"⚠️ 命令可能失败:{cmd}"
+    head = f"✅ 已执行:{cmd}" if ok else f"⚠️ 命令未执行:{cmd}"
     return head + ("\n" + result if result else "\n(无文本反馈)")
+
+
+def _await_bridge_result_file(instance: str, game_dir: str, command: str,
+                              sent_at: float, timeout: float = 4.0) -> dict | None:
+    """等 bridge-mod 落盘的 command_result.json(收不到 TCP 响应时的兜底)。
+
+    只接受「命令文本一致、且写入时间不早于发送时间」的那条,避免读到上一次的旧结果;
+    命中不了就返回 None(调用方会明确说"无法确认",而不是猜"可能已执行")。
+    """
+    path = os.path.join(paths.bridge_dir(instance, game_dir), "command_result.json")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) >= sent_at - 0.5:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if (isinstance(data, dict)
+                        and str(data.get("command") or "").strip() == command):
+                    return data
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.15)
+    return None
 
 
 # ================= AI 工具版(RCON 通道,无 GUI 依赖) =================

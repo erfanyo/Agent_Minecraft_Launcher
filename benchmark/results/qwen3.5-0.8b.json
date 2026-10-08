@@ -1,0 +1,1045 @@
+{
+  "model": {
+    "id": "qwen3.5-0.8b",
+    "name": "Qwen3.5 0.8B",
+    "backend": "llama.cpp",
+    "gguf": "aml/qwen3.5-0.8b-q4km/Qwen3.5-0.8B-q4_k_m.gguf",
+    "quant": "Q4_K_M",
+    "params": "0.8B"
+  },
+  "load_seconds": 3.67,
+  "timestamp": "2026-10-02 05:37:14",
+  "summary": {
+    "n": 51,
+    "name_acc": 0.6862745098039216,
+    "args_avg": 0.4248366013071896,
+    "halluc_rate": 0.0392156862745098,
+    "by_tag": {
+      "inst": {
+        "n": 5,
+        "name_acc": 0.6,
+        "args_avg": 1.0,
+        "halluc_rate": 0.0
+      },
+      "mod": {
+        "n": 7,
+        "name_acc": 0.8571428571428571,
+        "args_avg": 0.4761904761904762,
+        "halluc_rate": 0.0
+      },
+      "inspect": {
+        "n": 1,
+        "name_acc": 0.0,
+        "args_avg": 0.5,
+        "halluc_rate": 0.0
+      },
+      "log": {
+        "n": 5,
+        "name_acc": 0.6,
+        "args_avg": 0.4,
+        "halluc_rate": 0.0
+      },
+      "cfg": {
+        "n": 4,
+        "name_acc": 0.5,
+        "args_avg": 0.625,
+        "halluc_rate": 0.0
+      },
+      "new": {
+        "n": 2,
+        "name_acc": 0.5,
+        "args_avg": 0.0,
+        "halluc_rate": 0.0
+      },
+      "cmd": {
+        "n": 3,
+        "name_acc": 0.6666666666666666,
+        "args_avg": 0.16666666666666666,
+        "halluc_rate": 0.0
+      },
+      "key": {
+        "n": 1,
+        "name_acc": 1.0,
+        "args_avg": 0.5,
+        "halluc_rate": 0.0
+      },
+      "rcp": {
+        "n": 3,
+        "name_acc": 1.0,
+        "args_avg": 0.0,
+        "halluc_rate": 0.0
+      },
+      "cmp": {
+        "n": 2,
+        "name_acc": 0.5,
+        "args_avg": 0.0,
+        "halluc_rate": 0.0
+      },
+      "snap": {
+        "n": 4,
+        "name_acc": 1.0,
+        "args_avg": 0.75,
+        "halluc_rate": 0.0
+      },
+      "compat": {
+        "n": 3,
+        "name_acc": 1.0,
+        "args_avg": 0.4444444444444444,
+        "halluc_rate": 0.0
+      },
+      "core": {
+        "n": 1,
+        "name_acc": 1.0,
+        "args_avg": 1.0,
+        "halluc_rate": 0.0
+      },
+      "pack": {
+        "n": 2,
+        "name_acc": 0.0,
+        "args_avg": 0.5,
+        "halluc_rate": 0.0
+      },
+      "server": {
+        "n": 6,
+        "name_acc": 0.8333333333333334,
+        "args_avg": 0.16666666666666666,
+        "halluc_rate": 0.3333333333333333
+      },
+      "ask": {
+        "n": 2,
+        "name_acc": 0.0,
+        "args_avg": 0.0,
+        "halluc_rate": 0.0
+      }
+    }
+  },
+  "speed": {
+    "avg_tok_per_s": 160.97414605401056,
+    "avg_latency_s": 0.25476684182953835
+  },
+  "results": [
+    {
+      "id": "inst_01",
+      "tag": "inst",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_instances"
+    },
+    {
+      "id": "inst_02",
+      "tag": "inst",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_instances"
+    },
+    {
+      "id": "inst_03",
+      "tag": "inst",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_mods"
+    },
+    {
+      "id": "mod_01",
+      "tag": "mod",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "query=缺失",
+      "tool": "search_mods"
+    },
+    {
+      "id": "mod_02",
+      "tag": "mod",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "query=缺失",
+      "tool": "search_mods"
+    },
+    {
+      "id": "mod_03",
+      "tag": "mod",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "list_mods"
+    },
+    {
+      "id": "mod_04",
+      "tag": "mod",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='fabric-1.21.1' ✓",
+      "tool": "list_mods"
+    },
+    {
+      "id": "mod_05",
+      "tag": "inspect",
+      "name_ok": 0.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; filename=缺失",
+      "tool": "inspect_instance_core"
+    },
+    {
+      "id": "mod_06",
+      "tag": "mod",
+      "name_ok": 0.0,
+      "args_score": 0.3333333333333333,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; filename=缺失; enabled=缺失",
+      "tool": "replace_mod_version"
+    },
+    {
+      "id": "log_01",
+      "tag": "log",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "read_instance_log"
+    },
+    {
+      "id": "log_02",
+      "tag": "log",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance=缺失",
+      "tool": "read_crash_report"
+    },
+    {
+      "id": "log_03",
+      "tag": "log",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance=缺失",
+      "tool": "read_server_log"
+    },
+    {
+      "id": "log_04",
+      "tag": "log",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "query=缺失",
+      "tool": "list_mods"
+    },
+    {
+      "id": "log_05",
+      "tag": "log",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "observe_game"
+    },
+    {
+      "id": "cfg_01",
+      "tag": "cfg",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "get_settings"
+    },
+    {
+      "id": "cfg_02",
+      "tag": "cfg",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "resolve_mod_concept"
+    },
+    {
+      "id": "cfg_03",
+      "tag": "cfg",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "key=缺失; value='6G' ✓",
+      "tool": "set_setting"
+    },
+    {
+      "id": "cfg_04",
+      "tag": "cfg",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "key=缺失; value=缺失",
+      "tool": "resolve_mod_concept"
+    },
+    {
+      "id": "new_01",
+      "tag": "new",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "version=缺失; loader=缺失",
+      "tool": "install_instance"
+    },
+    {
+      "id": "new_02",
+      "tag": "new",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "version=缺失",
+      "tool": "list_instances"
+    },
+    {
+      "id": "new_03",
+      "tag": "inst",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "install_instance"
+    },
+    {
+      "id": "inst_mod_03",
+      "tag": "inst",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "backup_instance"
+    },
+    {
+      "id": "inst_mod_01",
+      "tag": "mod",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; slug_or_slugs=... ✗",
+      "tool": "install_mod"
+    },
+    {
+      "id": "inst_mod_02",
+      "tag": "mod",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; slug_or_slugs=... ✗",
+      "tool": "install_mod"
+    },
+    {
+      "id": "cmd_01",
+      "tag": "cmd",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance=缺失; command='summon zombie' ✓",
+      "tool": "send_game_command"
+    },
+    {
+      "id": "cmd_02",
+      "tag": "cmd",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "command=缺失",
+      "tool": "set_setting"
+    },
+    {
+      "id": "cmd_03",
+      "tag": "cmd",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "mc_version=缺失",
+      "tool": "get_command_guide"
+    },
+    {
+      "id": "key_01",
+      "tag": "key",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; query=缺失",
+      "tool": "get_key_bindings"
+    },
+    {
+      "id": "rcp_01",
+      "tag": "rcp",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "item=缺失",
+      "tool": "get_recipe_path"
+    },
+    {
+      "id": "rcp_02",
+      "tag": "rcp",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "item=缺失; brief=缺失",
+      "tool": "get_recipe_path"
+    },
+    {
+      "id": "rcp_03",
+      "tag": "rcp",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "item=缺失",
+      "tool": "get_recipe_path"
+    },
+    {
+      "id": "cmp_01",
+      "tag": "cmp",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "attribute=缺失",
+      "tool": "get_command_guide"
+    },
+    {
+      "id": "cmp_02",
+      "tag": "cmp",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "attribute=缺失",
+      "tool": "compare_items"
+    },
+    {
+      "id": "snap_01",
+      "tag": "snap",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "snapshot_instance"
+    },
+    {
+      "id": "snap_02",
+      "tag": "snap",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "list_instance_snapshots"
+    },
+    {
+      "id": "snap_03",
+      "tag": "snap",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; snapshot_id=缺失",
+      "tool": "restore_instance_snapshot"
+    },
+    {
+      "id": "snap_04",
+      "tag": "snap",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; snapshot_id=缺失",
+      "tool": "compare_instance_snapshot"
+    },
+    {
+      "id": "compat_01",
+      "tag": "compat",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; project=缺失",
+      "tool": "find_compatible_mod_versions"
+    },
+    {
+      "id": "compat_02",
+      "tag": "compat",
+      "name_ok": 1.0,
+      "args_score": 0.5,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; filename=缺失",
+      "tool": "find_compatible_mod_replacement"
+    },
+    {
+      "id": "compat_03",
+      "tag": "compat",
+      "name_ok": 1.0,
+      "args_score": 0.3333333333333333,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓; filename=缺失; version_id=缺失",
+      "tool": "replace_mod_version"
+    },
+    {
+      "id": "core_01",
+      "tag": "core",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "instance='neoforge-21.1.248' ✓",
+      "tool": "inspect_instance_core"
+    },
+    {
+      "id": "pack_01",
+      "tag": "pack",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "query='机械动力' ✓",
+      "tool": "search_mods"
+    },
+    {
+      "id": "pack_02",
+      "tag": "pack",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "slug_or_url=缺失",
+      "tool": "search_modpacks"
+    },
+    {
+      "id": "srv_01",
+      "tag": "server",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_server_instances"
+    },
+    {
+      "id": "srv_02",
+      "tag": "server",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": true,
+      "halluc_detail": "instance='paper-1.21.1'(不在声明实例内)",
+      "detail": "server=缺失",
+      "tool": "list_server_mods"
+    },
+    {
+      "id": "srv_03",
+      "tag": "server",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "server=缺失",
+      "tool": "read_server_log"
+    },
+    {
+      "id": "srv_04",
+      "tag": "server",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": true,
+      "halluc_detail": "instance='paper-1.21.1'(不在声明实例内)",
+      "detail": "server=缺失",
+      "tool": "list_server_mods"
+    },
+    {
+      "id": "srv_05",
+      "tag": "server",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "server=缺失",
+      "tool": "read_server_candidate_report"
+    },
+    {
+      "id": "srv_06",
+      "tag": "server",
+      "name_ok": 1.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "server=缺失",
+      "tool": "set_server_mod_enabled"
+    },
+    {
+      "id": "ask_01",
+      "tag": "ask",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "question=缺失",
+      "tool": "find_compatible_mod_replacement"
+    },
+    {
+      "id": "ask_02",
+      "tag": "ask",
+      "name_ok": 0.0,
+      "args_score": 0.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "question=缺失",
+      "tool": "list_mods"
+    }
+  ],
+  "fuzzy_summary": {
+    "n": 15,
+    "name_acc": 0.13333333333333333,
+    "args_avg": 1.0,
+    "halluc_rate": 0.0,
+    "by_tag": {
+      "install": {
+        "n": 4,
+        "name_acc": 0.0,
+        "args_avg": 1.0,
+        "halluc_rate": 0.0
+      },
+      "optimize": {
+        "n": 4,
+        "name_acc": 0.0,
+        "args_avg": 1.0,
+        "halluc_rate": 0.0
+      },
+      "diagnose": {
+        "n": 4,
+        "name_acc": 0.0,
+        "args_avg": 1.0,
+        "halluc_rate": 0.0
+      },
+      "vague": {
+        "n": 3,
+        "name_acc": 0.6666666666666666,
+        "args_avg": 1.0,
+        "halluc_rate": 0.0
+      }
+    }
+  },
+  "fuzzy_results": [
+    {
+      "id": "fz_install_01",
+      "tag": "install",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "create_plugin"
+    },
+    {
+      "id": "fz_install_02",
+      "tag": "install",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "install_mod"
+    },
+    {
+      "id": "fz_install_03",
+      "tag": "install",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "create_plugin"
+    },
+    {
+      "id": "fz_install_04",
+      "tag": "install",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_mods"
+    },
+    {
+      "id": "fz_opt_01",
+      "tag": "optimize",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "get_command_guide"
+    },
+    {
+      "id": "fz_opt_02",
+      "tag": "optimize",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "observe_game"
+    },
+    {
+      "id": "fz_opt_03",
+      "tag": "optimize",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "help"
+    },
+    {
+      "id": "fz_opt_04",
+      "tag": "optimize",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "launch_game"
+    },
+    {
+      "id": "fz_diag_01",
+      "tag": "diagnose",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "read_server_log"
+    },
+    {
+      "id": "fz_diag_02",
+      "tag": "diagnose",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "read_server_log"
+    },
+    {
+      "id": "fz_diag_03",
+      "tag": "diagnose",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_instances"
+    },
+    {
+      "id": "fz_diag_04",
+      "tag": "diagnose",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "read_server_log"
+    },
+    {
+      "id": "fz_vague_01",
+      "tag": "vague",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_instances"
+    },
+    {
+      "id": "fz_vague_02",
+      "tag": "vague",
+      "name_ok": 1.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "list_instances"
+    },
+    {
+      "id": "fz_vague_03",
+      "tag": "vague",
+      "name_ok": 0.0,
+      "args_score": 1.0,
+      "halluc": false,
+      "halluc_detail": "",
+      "detail": "无参数要求",
+      "tool": "launch_game"
+    }
+  ],
+  "multistep": {
+    "ms_voxy": {
+      "user": "给 neoforge-21.1.248 装 voxy",
+      "note": "voxy 缺失→看后续处理(换同类/跨平台/叫用户放弃)",
+      "expect_final": "给出替代方案(distant horizons)或问用户,而非硬装/瞎编",
+      "chain": [
+        {
+          "step": 1,
+          "tool": "install_mod",
+          "args": {
+            "mod": "voxy",
+            "version": "1.0.0"
+          },
+          "tool_reply": "1.21.1 neoforge 没有 voxy 这个 mod(Modrinth 上查不到该 slug)。",
+          "expected_any": [
+            "install_mod",
+            "install_mods",
+            "search_mods"
+          ],
+          "direction_ok": true,
+          "raw": "{\"name\": \"install_mod\", \"arguments\": {\"mod\": \"voxy\", \"version\": \"1.0.0\"}}"
+        },
+        {
+          "step": 2,
+          "tool": "find_compatible_mod_replacement",
+          "args": {
+            "mod": "voxy",
+            "version": "1.0.0"
+          },
+          "tool_reply": "搜索 distant horizons:找到 distant-horizons(同类 LOD mod),适配 1.21.1 neoforge。",
+          "expected_any": [
+            "ask_user",
+            "find_compatible_mod_replacement",
+            "search_mods"
+          ],
+          "direction_ok": true,
+          "raw": "{\"name\": \"find_compatible_mod_replacement\", \"arguments\": {\"mod\": \"voxy\", \"version\": \"1.0.0\"}}"
+        }
+      ],
+      "direction_hit": 1.0,
+      "auto_hint": "方向命中 2/2 步"
+    },
+    "ms_restore": {
+      "user": "把 neoforge-21.1.248 恢复到昨天的状态",
+      "note": "多步:需先查后做",
+      "expect_final": "先查快照再恢复,不编造 snapshot_id",
+      "chain": [
+        {
+          "step": 1,
+          "tool": "restore_instance_snapshot",
+          "args": {
+            "instance_id": "neoforge-21.1.248"
+          },
+          "tool_reply": "可恢复快照:snap-20260101(昨天), snap-20251230(前天)。",
+          "expected_any": [
+            "list_instance_snapshots"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"restore_instance_snapshot\", \"arguments\": {\"instance_id\": \"neoforge-21.1.248\"}}"
+        },
+        {
+          "step": 2,
+          "tool": "restore_instance_snapshot",
+          "args": {
+            "instance_id": "neoforge-21.1.248"
+          },
+          "tool_reply": "已恢复到 snap-20260101,当前实例保留。",
+          "expected_any": [
+            "restore_instance_snapshot"
+          ],
+          "direction_ok": true,
+          "raw": "{\"name\": \"restore_instance_snapshot\", \"arguments\": {\"instance_id\": \"neoforge-21.1.248\"}}"
+        }
+      ],
+      "direction_hit": 0.5,
+      "auto_hint": "方向命中 1/2 步"
+    },
+    "ms_bycraft": {
+      "user": "帮我找个能自动熔炉的东西",
+      "note": "按功能找 mod(多步:解析→选择→安装)",
+      "expect_final": "模糊需求→解析概念→用户选→装,不瞎猜 slug",
+      "chain": [
+        {
+          "step": 1,
+          "tool": "find_compatible_mod_replacement",
+          "args": {
+            "mod": "minecraft:smoke"
+          },
+          "tool_reply": "候选:create(机械动力)、mekanism(通用机械)、thermal(热力)。你要哪个?",
+          "expected_any": [
+            "ask_user",
+            "resolve_mod_concept",
+            "search_mods"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"find_compatible_mod_replacement\", \"arguments\": {\"mod\": \"minecraft:smoke\"}}"
+        },
+        {
+          "step": 2,
+          "tool": "find_compatible_mod_replacement",
+          "args": {
+            "mod": "minecraft:smoke"
+          },
+          "tool_reply": "已给 neoforge-21.1.248 装 create。",
+          "expected_any": [
+            "install_mod"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"find_compatible_mod_replacement\", \"arguments\": {\"mod\": \"minecraft:smoke\"}}"
+        }
+      ],
+      "direction_hit": 0.0,
+      "auto_hint": "方向命中 0/2 步"
+    },
+    "ms_stillcrash": {
+      "user": "我装了 sodium 但游戏还是崩",
+      "note": "装了还崩(多步:诊断→处理)",
+      "expect_final": "装了没用→诊断原因→处理冲突,而非重复装",
+      "chain": [
+        {
+          "step": 1,
+          "tool": "resolve_mod_concept",
+          "args": {
+            "mod": "sodium"
+          },
+          "tool_reply": "崩溃报告:Rendering overlay 失败,疑似 sodium 与现有光影冲突。",
+          "expected_any": [
+            "read_crash_report",
+            "read_instance_log"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"resolve_mod_concept\", \"arguments\": {\"mod\": \"sodium\"}}"
+        },
+        {
+          "step": 2,
+          "tool": "repair_instance_core",
+          "args": {},
+          "tool_reply": "已禁用冲突光影,sodium 保留。",
+          "expected_any": [
+            "ask_user",
+            "find_compatible_mod_replacement",
+            "set_mod_enabled"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"repair_instance_core\", \"arguments\": {}}"
+        }
+      ],
+      "direction_hit": 0.0,
+      "auto_hint": "方向命中 0/2 步"
+    },
+    "ms_dep": {
+      "user": "neoforge-21.1.248 装不上 sodium,提示缺依赖",
+      "note": "依赖缺失(多步:查→补)",
+      "expect_final": "装不上→查依赖→补前置",
+      "chain": [
+        {
+          "step": 1,
+          "tool": "install_mod",
+          "args": {
+            "name": "sodium"
+          },
+          "tool_reply": "sodium.jar 声明依赖 lithium(未安装)。",
+          "expected_any": [
+            "find_compatible_mod_replacement",
+            "inspect_mod_jar",
+            "read_instance_log"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"install_mod\", \"arguments\": {\"name\": \"sodium\"}}"
+        },
+        {
+          "step": 2,
+          "tool": "install_mod",
+          "args": {
+            "name": "lithium"
+          },
+          "tool_reply": "已补装 lithium,sodium 现在可装。",
+          "expected_any": [
+            "install_mod",
+            "install_mods"
+          ],
+          "direction_ok": true,
+          "raw": "{\"name\": \"install_mod\", \"arguments\": {\"name\": \"lithium\"}}"
+        }
+      ],
+      "direction_hit": 0.5,
+      "auto_hint": "方向命中 1/2 步"
+    },
+    "ms_downgrade": {
+      "user": "我要用一个只支持 1.20.1 的老 mod",
+      "note": "版本不匹配(多步:找兼容→建/问)",
+      "expect_final": "版本不匹配→建兼容实例/问用户,而非硬装到不兼容实例",
+      "chain": [
+        {
+          "step": 1,
+          "tool": "install_mod",
+          "args": {
+            "mod": "minecraft:cheat",
+            "version": "1.20.1"
+          },
+          "tool_reply": "该 mod 只支持 1.20.1 forge。当前实例是 1.21.1 neoforge,不兼容。",
+          "expected_any": [
+            "ask_user",
+            "install_instance",
+            "search_mods"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"install_mod\", \"arguments\": {\"mod\": \"minecraft:cheat\", \"version\": \"1.20.1\"}}"
+        },
+        {
+          "step": 2,
+          "tool": "resolve_mod_concept",
+          "args": {
+            "mod": "minecraft:cheat",
+            "version": "1.20.1"
+          },
+          "tool_reply": "已创建 1.20.1 forge 实例,可装该 mod。",
+          "expected_any": [
+            "ask_user",
+            "install_instance"
+          ],
+          "direction_ok": false,
+          "raw": "{\"name\": \"resolve_mod_concept\", \"arguments\": {\"mod\": \"minecraft:cheat\", \"version\": \"1.20.1\"}}"
+        }
+      ],
+      "direction_hit": 0.0,
+      "auto_hint": "方向命中 0/2 步"
+    }
+  }
+}

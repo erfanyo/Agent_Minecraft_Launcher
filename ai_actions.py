@@ -13,9 +13,9 @@ from paths import data_dir
 from log_privacy import redact, sensitive_key
 
 PERMISSIONS = [
-    ("只读（不能修改任何文件）", "readonly"),
-    ("启动器与游戏目录可写（默认）", "launcher_write"),
-    ("工作区可写（可生成插件/改源码）", "workspace_write"),
+    ("只读", "readonly"),
+    ("启动器与游戏目录可写", "launcher_write"),
+    ("工作区可写", "workspace_write"),
 ]
 
 # “备份后连续处理”也不会越过这些会改变用户目标、写外部系统或扩大代码能力的动作。

@@ -32,7 +32,9 @@ def offer_memory_actions(owner, plan, version, launch):
     message = QLabel()
     message.setWordWrap(True)
     layout.addWidget(message)
-    detail = QLabel('先关掉不用的微信、浏览器窗口，或关闭本地 AI，给游戏腾点地方。')
+    advice = '先关掉不用的微信、浏览器窗口，给游戏腾点地方。'
+    ai_advice = '先关掉不用的微信、浏览器窗口，或关闭本地 AI，给游戏腾点地方。'
+    detail = QLabel(advice)
     detail.setWordWrap(True)
     layout.addWidget(detail)
     exit_check = QCheckBox('游戏窗口就绪后退出启动器（游戏内 AI、联机插件等启动器服务也会停止）')
@@ -44,13 +46,23 @@ def offer_memory_actions(owner, plan, version, launch):
     layout.addLayout(row)
     controls = []
     relief = None
+    stop_ai_control = None
     def button(label, action):
         control = QPushButton(label)
         control.clicked.connect(action)
         row.addWidget(control)
         controls.append(control)
         return control
+    def refresh_local_ai():
+        engine = getattr(getattr(owner, 'ai_dock', None), '_local_engine', None)
+        process = getattr(engine, 'proc', None)
+        running = process is not None and process.poll() is None
+        if stop_ai_control is not None:
+            stop_ai_control.setVisible(running)
+        if detail.text() in (advice, ai_advice):
+            detail.setText(ai_advice if running else advice)
     def refresh():
+        refresh_local_ai()
         current = snapshot()
         current_level = pressure(current[1] if current else None, heap, budget.get('desired_gb', 0))
         dock.setWindowTitle('内存建议 · 游戏正在启动（内存可能不足）' if current_level == 2 else '内存建议 · 游戏正在启动')
@@ -77,7 +89,7 @@ def offer_memory_actions(owner, plan, version, launch):
     def stop_ai():
         owner.ai_dock.stop_local_engine()
         refresh()
-        detail.setText('已请求关闭对话使用的本地 AI。检查剩余内存后，可以点击继续启动。')
+        detail.setText('已请求关闭对话使用的本地 AI，游戏会继续启动。')
     def optimize():
         from background_tasks import BackgroundTask
         from memory_relief import run_elevated
@@ -96,7 +108,7 @@ def offer_memory_actions(owner, plan, version, launch):
         task.cancelled_signal.connect(lambda: complete(False))
         task.start()
     exit_check.toggled.connect(exit_when_ready_changed)
-    button('关闭本地 AI', stop_ai)
+    stop_ai_control = button('关闭本地 AI', stop_ai)
     button('重新检测', refresh)
     if os.name == 'nt':
         relief = button('尝试整理内存 🛡', optimize)
@@ -105,6 +117,10 @@ def offer_memory_actions(owner, plan, version, launch):
     dock.setWidget(content)
     owner.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
     refresh()
+    local_ai_timer = QTimer(dock)
+    local_ai_timer.setInterval(1000)
+    local_ai_timer.timeout.connect(refresh_local_ai)
+    local_ai_timer.start()
     dock.show()
     # Do not make the user acknowledge an estimate before launching. Keep the
     # non-modal card available for optional memory relief while Minecraft starts.

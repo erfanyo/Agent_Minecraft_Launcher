@@ -1,38 +1,50 @@
 plugins {
-    id("net.neoforged.moddev.legacyforge") version "2.0.91"
+    // NeoForge 1.21.1 用官方 ModDevGradle。
+    // 注意:legacyforge 变体只适用于 1.20.1,不能用来编 1.21.1。
+    id("net.neoforged.moddev") version "2.0.91"
 }
 
-// ---- 版本参数化:环境变量 BRIDGE_MC_VERSION,默认 1.20.1 ----
-val mcVersion: String = providers.environmentVariable("BRIDGE_MC_VERSION").getOrElse("1.20.1")
-data class LVers(val forge: String, val java: Int)
-val LVERS = mapOf(
-    "1.20.1" to LVers("1.20.1-47.1.3", 17),
-    // 1.21.1 走 neoForge(非 legacyforge);到时用别的插件/坐标
-)
-val lv = LVERS[mcVersion]
-if (lv == null) {
-    // Gradle 会配置所有 include 的子项目。Fabric 1.21.1 构建不能被这个
-    // 仅支持 1.20.1 的 legacyforge 子项目中断；NeoForge 1.21.1 的正式
-    // moddev 构建脚本尚未接入，先明确跳过而不是伪称已支持。
-    logger.lifecycle("skip legacyforge for mcVersion=$mcVersion (supports: ${LVERS.keys})")
-    tasks.configureEach { enabled = false }
-} else {
-    logger.lifecycle("bridge-mod legacyforge(1.20.1): mcVersion=$mcVersion forge=${lv.forge} java=${lv.java}")
+val mcVersion = "1.21.1"
+val neoForgeVersion = "21.1.250"
+version = "0.2.0"
 
-    // common 便携 + 版本敏感(common-<mcVersion>)源码并入
-    sourceSets {
-        main {
-            java.setSrcDirs(listOf(
-                "../forge/src/main/java", "../common/src/main/java", "../common-${mcVersion}/src/main/java"))
-            resources.setSrcDirs(listOf("../forge/src/main/resources"))
-        }
+// common 核心源码 + 1.21.1 版本适配层直接并入本编译单元(需要目标 MC 的 classpath)。
+// 版本敏感的类(BridgeIO / ItemExporter / RconAutoOpener / RecipeExporter)放在
+// common-1.21.1,按 1.21 API 实现。
+sourceSets {
+    named("main") {
+        java.setSrcDirs(listOf(
+            "src/main/java",
+            "../common/src/main/java",
+            "../common-$mcVersion/src/main/java",
+        ))
+        resources.setSrcDirs(listOf("src/main/resources"))
     }
+}
 
-    tasks.withType<JavaCompile>().configureEach {
-        options.release.set(lv.java)
-    }
+neoForge {
+    version = neoForgeVersion
+}
 
-    legacyForge {
-        version = lv.forge
+java {
+    toolchain.languageVersion.set(JavaLanguageVersion.of(21))
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(21)
+    options.encoding = "UTF-8"
+}
+
+// neoforge.mods.toml 里的 ${version} 用项目版本展开,避免版本号两处维护
+tasks.processResources {
+    inputs.property("version", project.version)
+    filesMatching("META-INF/neoforge.mods.toml") {
+        expand(mapOf("version" to project.version))
     }
+}
+
+tasks.jar {
+    // 产物名必须匹配启动器的发现规则:agentmc-bridge-{loader}-{mc}-{ver}.jar
+    archiveBaseName.set("agentmc-bridge-neoforge-$mcVersion")
+    manifest.attributes["Implementation-Version"] = project.version
 }

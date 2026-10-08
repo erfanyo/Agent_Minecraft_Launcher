@@ -39,7 +39,7 @@ from paths import runtime_llama_dir  # noqa: E402
 DEFAULT_VERSION = "b10590"
 
 # GitHub release API 提供的官方 SHA256。固定版本和摘要，避免同名资产被替换后
-# 悄悄进入正式发行包。
+# 悄悄进入正式发行包。CPU 与 Vulkan 是不同编译产物,分别登记。
 ASSET_SHA256 = {
     "llama-b10590-bin-macos-arm64.tar.gz": "6bd011f97a27eb27e296fa17867948d97988857ddde98159fca925e2d73a1362",
     "llama-b10590-bin-macos-x64.tar.gz": "ba08608c77cd28f81cd27a98c4829b2513eaf053b1168bf32ca63ffc991f88a3",
@@ -47,14 +47,29 @@ ASSET_SHA256 = {
     "llama-b10590-bin-ubuntu-x64.tar.gz": "4efbac3e8a647c49cc4856248fa295937b94921e31cdb2c964bf8c5772473559",
     "llama-b10590-bin-win-cpu-arm64.zip": "a88a3b3d6e89569c7b1c8e97212e9f56d1895e92f2cf8b7e4b075a1a6fffab8a",
     "llama-b10590-bin-win-cpu-x64.zip": "98d942240a61a5c628c16d7951c041095e63a741916c74110e785129e10c2eaa",
+    # Vulkan 后端(GPU 加速,跨厂商):仅 win-x64 / linux-x64 / linux-arm64 有官方资产。
+    "llama-b10590-bin-win-vulkan-x64.zip": "ecc1a6f2f47d85086d69ed07f694f6ff1baa7c034ac46655333c3168316b38e9",
+    "llama-b10590-bin-ubuntu-vulkan-x64.tar.gz": "6932dafd63607aac1acaeceea13fe80e79058119bb6a0b54743504bf5016cd6c",
+    "llama-b10590-bin-ubuntu-vulkan-arm64.tar.gz": "695a004dc44a5059b7944639b3c124f1b3bdf0365914922f425a7257fafc437d",
 }
 
 
-def _asset_name(version: str, os_name: str, arch: str) -> str | None:
-    """按平台+架构返回 llama.cpp release 资产文件名。未知组合返回 None。"""
+def _asset_name(version: str, os_name: str, arch: str, variant: str = "cpu") -> str | None:
+    """按平台+架构+变体返回 llama.cpp release 资产文件名。未知组合返回 None。
+    variant: 'cpu'(默认) 或 'vulkan'(GPU 加速;仅部分平台有官方资产)。"""
     a = arch
     # llama.cpp 用 x64/arm64(不同习惯名映射)
     a = "arm64" if a in ("arm64", "aarch64") else ("x64" if a in ("x86_64", "amd64") else a)
+    if variant == "vulkan":
+        # Vulkan 官方资产只覆盖 win-x64 / linux-x64 / linux-arm64;mac 走 Metal,无 Vulkan。
+        if os_name == "windows" and a == "x64":
+            return f"llama-{version}-bin-win-vulkan-x64.zip"
+        if os_name == "linux":
+            if a == "x64":
+                return f"llama-{version}-bin-ubuntu-vulkan-x64.tar.gz"
+            if a == "arm64":
+                return f"llama-{version}-bin-ubuntu-vulkan-arm64.tar.gz"
+        return None
     if os_name == "windows":
         # llama.cpp win 资源用 zip
         if a in ("x64", "arm64"):
@@ -190,19 +205,25 @@ def verify_runtime(dest_dir: str, os_name: str, *, execute: bool = False) -> lis
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default=DEFAULT_VERSION)
+    ap.add_argument("--variant", choices=["cpu", "vulkan"], default="cpu",
+                    help="推理后端:cpu(默认)/ vulkan(GPU 加速,仅 win-x64/linux-x64/linux-arm64)")
     ap.add_argument("--force", action="store_true", help="已有也强制重下")
     ap.add_argument("--verify-only", action="store_true", help="不下载，只验证现有运行时")
     args = ap.parse_args()
 
     os_name = current_os_name()
     arch = current_arch()
-    asset = _asset_name(args.version, os_name, arch)
+    asset = _asset_name(args.version, os_name, arch, args.variant)
     if asset is None:
-        print(f"!! 不支持的平台/架构组合: {os_name}/{arch}(llama.cpp 无对应资产)", file=sys.stderr)
+        print(f"!! 不支持的平台/架构/变体组合: {os_name}/{arch}/{args.variant}(llama.cpp 无对应资产)", file=sys.stderr)
         return 1
-    print(f"平台: {os_name}/{arch} -> 资产 {asset}")
+    print(f"平台: {os_name}/{arch} variant={args.variant} -> 资产 {asset}")
 
-    dest_dir = runtime_llama_dir()
+    if args.variant == "vulkan":
+        from paths import runtime_llama_vulkan_dir
+        dest_dir = runtime_llama_vulkan_dir()
+    else:
+        dest_dir = runtime_llama_dir()
     exe = os.path.join(dest_dir, "llama-server" + (".exe" if os_name == "windows" else ""))
     if args.verify_only:
         verify_runtime(dest_dir, os_name, execute=True)

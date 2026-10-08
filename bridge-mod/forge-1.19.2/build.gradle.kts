@@ -5,7 +5,7 @@ plugins {
 
 val mcVersion = "1.19.2"
 val forgeVersion = "43.2.0"
-version = "0.2.2"
+version = "0.2.0"
 
 sourceSets {
     named("main") {

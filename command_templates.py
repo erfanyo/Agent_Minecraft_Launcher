@@ -132,10 +132,16 @@ BUCKET_NAME = {
 BUCKET_SUMMARY = {
     "components": [
         "1.20.5+ 重大变化:物品数据用「组件」方括号语法,不再是 NBT 花括号",
+        "【两套语法不能混用】物品参数用 [组件](方括号);实体/方块实体数据仍是 {NBT}(花括号)",
         "give 附魔:/give @p minecraft:diamond_sword[minecraft:enchantments={levels:{\"minecraft:sharpness\":5}}]",
+        "附魔组件是「映射」不是列表:levels 里写 \"附魔id\":等级;写成 [{id:...,lvl:...}] 会失败",
         "自定义名:/give @p minecraft:stick[minecraft:custom_name='\"我的棍子\"']",
-        "实体(生物/玩家)仍是 NBT 花括号:/summon minecraft:zombie ~ ~ ~ {CustomName:'\"小明\"',NoAI:1b}",
         "附魔书:/give @p minecraft:enchanted_book[minecraft:stored_enchantments={levels:{\"minecraft:mending\":1}}]",
+        "实体(生物/玩家)仍是 NBT 花括号:/summon minecraft:zombie ~ ~ ~ {CustomName:'\"小明\"',NoAI:1b}",
+        "【实体 NBT 里的物品堆】必须写成 {id:\"minecraft:xxx\",count:1,components:{...}};"
+        "1.20.5 起 tag:{...} 已取消 —— 写成 tag:{Enchantments:[...]} 会直接失败",
+        "盔甲架字段:ArmorItems[靴,腿,胸,头] / HandItems[主手,副手] / ShowArms:1b(不加则手持物不显示) / NoBasePlate:1b",
+        "物品与附魔 id 必须带命名空间(minecraft:);count 取值 1~99",
         "指令基础:summon/effect/time/weather/gamemode 等与 1.13+ 一致",
     ],
     "modern_nbt": [
@@ -173,6 +179,21 @@ BUCKET_TEMPLATES = {
             ("生成指定职业村民", "summon minecraft:villager ~ ~ ~ {VillagerData:{profession:'{profession}'}}",
              ["profession: farmer/librarian/armorer/cleric 等"]),
             ("生成穿钻石套的僵尸", "summon minecraft:zombie ~ ~ ~ {HandItems:[{id:'minecraft:diamond_sword',count:1},{}],ArmorItems:[{id:'minecraft:diamond_boots',count:1},{id:'minecraft:diamond_leggings',count:1},{id:'minecraft:diamond_chestplate',count:1},{id:'minecraft:diamond_helmet',count:1}]}", []),
+            ("★召唤穿附魔钻石套的盔甲架",
+             "summon minecraft:armor_stand ~ ~ ~ {ShowArms:1b,ArmorItems:["
+             "{id:\"minecraft:diamond_boots\",count:1,components:{\"minecraft:enchantments\":{levels:{\"minecraft:protection\":4}}}},"
+             "{id:\"minecraft:diamond_leggings\",count:1,components:{\"minecraft:enchantments\":{levels:{\"minecraft:protection\":4}}}},"
+             "{id:\"minecraft:diamond_chestplate\",count:1,components:{\"minecraft:enchantments\":{levels:{\"minecraft:protection\":4}}}},"
+             "{id:\"minecraft:diamond_helmet\",count:1,components:{\"minecraft:enchantments\":{levels:{\"minecraft:protection\":4}}}}],"
+             "HandItems:[{id:\"minecraft:diamond_sword\",count:1,"
+             "components:{\"minecraft:enchantments\":{levels:{\"minecraft:sharpness\":5}}}},{}]}",
+             []),
+            ("★实体 NBT 内嵌附魔装备(结构,可替换)",
+             "summon minecraft:{entity} ~ ~ ~ {ArmorItems:["
+             "{id:\"minecraft:{armor}\",count:1,components:{\"minecraft:enchantments\":{levels:{\"minecraft:{ench}\":{lvl}}}}},"
+             "{},{},{}]}",
+             ["entity: 如 zombie / armor_stand", "armor: 如 diamond_chestplate",
+              "ench: 附魔 id,如 protection", "lvl: 等级,如 4"]),
             ("生成任意实体带 NBT", "summon minecraft:{entity} ~ ~ ~ {nbt}",
              ["entity: 实体 id", "nbt: NBT 标签"]),
         ],

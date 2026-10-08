@@ -14,6 +14,7 @@
 - 搜索 / 项目详情 / 版本列表全部走后台线程(异步),不卡 UI。
 - 「游戏版本 / 加载器 / 版本」三个组合框由项目数据填充,版本真正驱动下载。
 """
+from __future__ import annotations
 import os
 import time
 import urllib.parse
@@ -502,6 +503,13 @@ class ResourceBrowser(QWidget):
         self.ver_combo.setStyleSheet("QComboBox { combobox-popup: 0; }")
         self.ver_combo.view().setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        # 版本很多时(超过 20 项)在其上方出现的搜索框:输入即过滤版本下拉
+        self.version_search = QLineEdit()
+        self.version_search.setPlaceholderText(t("搜索版本…", "Search versions…"))
+        self.version_search.setClearButtonEnabled(True)
+        self.version_search.textChanged.connect(
+            lambda _text: self._render_versions(preserve_selection=True))
+        self.version_search.setVisible(False)
         self.dl_btn = QPushButton(t("DOWNLOAD"))
         set_style(self.dl_btn, launch_btn_style)
         self.dl_btn.clicked.connect(self._download)
@@ -647,6 +655,8 @@ class ResourceBrowser(QWidget):
             set_style(note, hint_style)
             mp.addWidget(note)
         for lbl, combo in rows:
+            if combo is self.ver_combo:
+                mp.addWidget(self.version_search)   # 版本超过 20 项时才可见
             r = QHBoxLayout()
             r.addWidget(QLabel(lbl))
             r.addWidget(combo, 1)
@@ -1340,7 +1350,6 @@ class ResourceBrowser(QWidget):
             if result is None:
                 self.compat_range_label.setText('兼容范围暂时无法读取')
                 return
-            from resource_compatibility import format_compatibility
             if source == 'curseforge':
                 records = result.get('versions') or []
                 partial = bool(result.get('partial'))
@@ -1660,11 +1669,35 @@ class ResourceBrowser(QWidget):
                     done, cache=current.get("source") != "curseforge")
 
     def _fill_versions(self, versions, *, preserve_selection=False):
-        previous = self.ver_combo.currentData() if preserve_selection else None
         self._loaded_versions = list(versions or [])
+        self._render_versions(preserve_selection=preserve_selection)
+
+    def _render_versions(self, *, preserve_selection=False):
+        """把版本全集按搜索词过滤后填进下拉。
+
+        版本超过 20 个时在顶部显示搜索框;下拉本身受 maxVisibleItems 限高,
+        不会拉出一长条。下拉项始终是真实版本对象,currentData() 语义不变。
+        """
+        previous = self.ver_combo.currentData() if preserve_selection else None
+        versions = list(self._loaded_versions or [])
+        query = ""
+        if hasattr(self, "version_search"):
+            self.version_search.setVisible(len(versions) > 20)
+            query = self.version_search.text().strip().lower()
+        if query:
+            def _matches(v):
+                if isinstance(v, dict):
+                    hay = " ".join(str(v.get(k) or "") for k in ("label", "filename", "version_number"))
+                    hay += " " + " ".join(v.get("game_versions") or [])
+                    hay += " " + " ".join(v.get("loaders") or [])
+                else:
+                    hay = str(v)
+                return query in hay.lower()
+            versions = [v for v in versions if _matches(v)]
+
         self.ver_combo.clear()
         if not versions:
-            self.ver_combo.addItem(t("NO_VERSIONS"), None)
+            self.ver_combo.addItem(t("NO_VERSIONS") if not query else t("没有匹配的版本", "No matching version"), None)
             self.ver_combo.setEnabled(False)
             self.dl_btn.setEnabled(False)
             self._refresh_download_warning()
@@ -2493,3 +2526,135 @@ class ResourceCenter(QWidget):
     def _on_start_instance(self):
         if hasattr(self, "_on_start_cb") and self._on_start_cb:
             self._on_start_cb()
+
+
+# ===================== Merged from resource_compatibility.py =====================
+"""Display declared Minecraft versions per loader from resource file records."""
+
+import re
+
+
+LOADER_NAMES = {
+    'forge': 'Forge', 'neoforge': 'NeoForge', 'fabric': 'Fabric',
+    'quilt': 'Quilt', 'iris': 'Iris', 'optifine': 'OptiFine',
+    'minecraft': '原版', 'vanilla': '原版', 'datapack': '数据包',
+    'resourcepack': '资源包',
+}
+_PREFERRED = ('forge', 'neoforge', 'fabric')
+
+
+def _version_key(version: str):
+    return tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                 for part in re.split(r'(\d+)', version))
+
+
+def format_compatibility(versions: list[dict], *, partial: bool = False,
+                         source: str = 'modrinth') -> tuple[str, str]:
+    """Return compact detail text and a tooltip with all declared versions.
+
+    Endpoints are shown only with a count; they never imply all intermediate
+    Minecraft versions work. Source data is the version/file record, not the
+    project's independent loader and game-version unions.
+    """
+    groups: dict[str, set[str]] = {}
+    for item in versions or []:
+        if not isinstance(item, dict):
+            continue
+        game_versions = {str(value).strip() for value in item.get('game_versions') or []
+                         if str(value).strip()}
+        if not game_versions:
+            continue
+        loaders = item.get('loaders') or ['未注明加载器']
+        for loader in loaders:
+            key = str(loader).strip().lower() or '未注明加载器'
+            groups.setdefault(key, set()).update(game_versions)
+
+    if not groups:
+        return '兼容范围：没有找到文件级版本声明', ''
+
+    keys = [key for key in _PREFERRED if key in groups]
+    keys.extend(sorted(key for key in groups if key not in _PREFERRED))
+    lines = ['兼容范围 · 部分可能不支持']
+    full = ['各文件声明的游戏版本（不是连续区间）：']
+    for key in keys:
+        label = LOADER_NAMES.get(key, key if key == '未注明加载器' else key.title())
+        values = sorted(groups[key], key=_version_key, reverse=True)
+        if len(values) <= 7:
+            display = '、'.join(values)
+        else:
+            display = f'{values[0]} ～ {values[-1]}（共 {len(values)} 个）'
+        lines.append(f'{label}：{display}')
+        full.append(f'{label}：' + '、'.join(values))
+    if partial:
+        note = 'CurseForge 文件较多，仅统计已读取的最近文件；更早版本可能未显示。'
+        lines.append(note)
+        full.append(note)
+    elif source == 'curseforge':
+        lines.append('依据 CurseForge 文件标签，未标注的兼容性不作推断。')
+    return '\n'.join(lines), '\n'.join(full)
+
+
+# ===================== Merged from resource_compatibility.py =====================
+"""Display declared Minecraft versions per loader from resource file records."""
+
+import re
+
+
+LOADER_NAMES = {
+    'forge': 'Forge', 'neoforge': 'NeoForge', 'fabric': 'Fabric',
+    'quilt': 'Quilt', 'iris': 'Iris', 'optifine': 'OptiFine',
+    'minecraft': '原版', 'vanilla': '原版', 'datapack': '数据包',
+    'resourcepack': '资源包',
+}
+_PREFERRED = ('forge', 'neoforge', 'fabric')
+
+
+def _version_key(version: str):
+    return tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                 for part in re.split(r'(\d+)', version))
+
+
+def format_compatibility(versions: list[dict], *, partial: bool = False,
+                         source: str = 'modrinth') -> tuple[str, str]:
+    """Return compact detail text and a tooltip with all declared versions.
+
+    Endpoints are shown only with a count; they never imply all intermediate
+    Minecraft versions work. Source data is the version/file record, not the
+    project's independent loader and game-version unions.
+    """
+    groups: dict[str, set[str]] = {}
+    for item in versions or []:
+        if not isinstance(item, dict):
+            continue
+        game_versions = {str(value).strip() for value in item.get('game_versions') or []
+                         if str(value).strip()}
+        if not game_versions:
+            continue
+        loaders = item.get('loaders') or ['未注明加载器']
+        for loader in loaders:
+            key = str(loader).strip().lower() or '未注明加载器'
+            groups.setdefault(key, set()).update(game_versions)
+
+    if not groups:
+        return '兼容范围：没有找到文件级版本声明', ''
+
+    keys = [key for key in _PREFERRED if key in groups]
+    keys.extend(sorted(key for key in groups if key not in _PREFERRED))
+    lines = ['兼容范围 · 部分可能不支持']
+    full = ['各文件声明的游戏版本（不是连续区间）：']
+    for key in keys:
+        label = LOADER_NAMES.get(key, key if key == '未注明加载器' else key.title())
+        values = sorted(groups[key], key=_version_key, reverse=True)
+        if len(values) <= 7:
+            display = '、'.join(values)
+        else:
+            display = f'{values[0]} ～ {values[-1]}（共 {len(values)} 个）'
+        lines.append(f'{label}：{display}')
+        full.append(f'{label}：' + '、'.join(values))
+    if partial:
+        note = 'CurseForge 文件较多，仅统计已读取的最近文件；更早版本可能未显示。'
+        lines.append(note)
+        full.append(note)
+    elif source == 'curseforge':
+        lines.append('依据 CurseForge 文件标签，未标注的兼容性不作推断。')
+    return '\n'.join(lines), '\n'.join(full)

@@ -1,9 +1,12 @@
 plugins {
-    id 'net.minecraftforge.gradle' version '4.1.16'
+    // 迁移到 ForgeGradle 5.1+(与 1.18.2 / 1.19.2 同一套机制)。
+    // 原配置用的 ForgeGradle 4.1.16 会从空的 bundeled_repo 解析映射产物,
+    // 即使产物已生成也报 Could not find(实测 --refresh-dependencies 也无解)。
+    id 'net.minecraftforge.gradle' version '5.1.+'
 }
 
 group = 'com.agentmc'
-version = '0.2.3'
+version = '0.2.0'
 
 repositories {
     maven { url = 'https://maven.minecraftforge.net' }
@@ -15,13 +18,19 @@ dependencies {
 }
 
 minecraft {
-    mappings channel: 'official', version: '1.16.5'
+    // 本变体源码用的是 MCP 名(CommandSource / ServerPlayerEntity),
+    // 不是 Mojang 官方名,所以必须用 snapshot 映射,不能写 official。
+    mappings channel: 'snapshot', version: '20210309-1.16.5'
 }
 
 sourceSets.main.java.srcDirs = ['src/main/java']
-sourceCompatibility = targetCompatibility = compileJava.sourceCompatibility = compileJava.targetCompatibility = '1.8'
 
-compileJava.options.encoding = 'UTF-8'
+// Gradle 跑在 JDK 17 上,产出 Java 8 字节码(1.16.5 的运行时是 Java 8)
+tasks.withType(JavaCompile).configureEach {
+    options.release = 8
+    options.encoding = 'UTF-8'
+}
+
 jar {
     archiveBaseName = 'agentmc-bridge-forge-1.16.5'
     manifest { attributes('Implementation-Version': project.version) }

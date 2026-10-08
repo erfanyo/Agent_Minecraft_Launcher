@@ -174,9 +174,16 @@ class CommandGuide(Skill):
     default_enabled = True
 
     def ai_hint(self) -> str:
-        return ("【指令指南已启用】需要给游戏生成/修改指令时,"
-                "先调用 get_command_guide 查该版本的 NBT/组件写法再生成,"
-                "避免版本语法错误。")
+        return ("【指令指南已启用】给游戏生成/修改指令时按这个流程:\n"
+                "1) 先用 get_command_guide 查该版本写法:1.20.5+ 物品是「组件方括号 [ ]」,"
+                "实体仍是「NBT 花括号 { }」,两套不能混用;\n"
+                "2) 涉及附魔/装备/自定义名的复杂指令,写完先自查:give 用 [ ]、summon 用 { };"
+                "实体 NBT 里的物品堆必须是 {id:\"minecraft:xxx\",count:1,components:{...}},"
+                "不能再用 tag:{Enchantments:[...]};附魔是映射 {levels:{\"minecraft:sharpness\":5}} "
+                "而不是 [{id:...,lvl:...}];id 要带 minecraft: 命名空间;\n"
+                "3) 发完指令必须看工具返回:只有返回 ✅ 才能说已生效;返回 ⚠️ 时把游戏原话"
+                "(如 Unknown command / permission)告诉用户并按原话修正,"
+                "不要重复发同一条指令,更不要声称已成功。")
 
 
 class TaskSplit(Skill):

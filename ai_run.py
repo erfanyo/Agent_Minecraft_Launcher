@@ -1,4 +1,5 @@
 """Bounded-by-progress agent loop and incremental, opt-out local run records."""
+from __future__ import annotations
 import hashlib
 import json
 import os
@@ -86,7 +87,6 @@ class RunLog:
         self.error = None
         if settings.get('ai_cloud_tool_log', True):
             self.path = os.path.join(data_dir('ai_runs'), self.id + '.jsonl')
-        from ai_training_log import _user_text
         self.write('start', model=settings.get('ai_model'), user=_user_text(messages),
                    verification='not_verified')
 
@@ -269,16 +269,27 @@ def run(messages, settings, tools, executor, max_rounds=None, on_tool=None,
         log.write('error', error=f'{type(exc).__name__}: {exc}')
         raise
     finally:
+        # 先算出「用户实际看到的回复」,再写 finish:否则非 model_finished 时
+        # finish.reply 记的是空/半截原文,和用户看到的提示文案对不上(日志失真)。
+        reply = _finalize_reply(reason, reply, partial_reply, log.error)
         log.write('finish', reason=reason, rounds=rounds, tool_calls=calls,
                   elapsed_seconds=time.monotonic()-started, usage=usage,
                   verification='not_verified', reply=reply)
         try:
-            import ai_training_log
-            ai_training_log.append(settings, messages, audit_calls, reply or str(reason))
+            append(settings, messages, audit_calls, reply or str(reason))
         except Exception:
             pass
+    return (reply, working) if return_messages else reply
+
+
+def _finalize_reply(reason: str, reply: str, partial_reply: str, log_error) -> str:
+    """把一次运行收尾成「用户实际看到的回复」:
+    model_finished → 用模型正文;其余(取消/暂停/超时/空回复/出错等)→ 用人类可读提示,
+    末尾补记录写入失败提示。RunLog 的 finish 事件与返回值都用这份,保证日志=用户所见。"""
     if reason == 'probe_complete':
         reply = '工具调用自测已取得结果。'
+    elif reason == 'error':
+        reply = reply or '任务执行出错,已停止。已完成的操作不会自动撤销,可查看操作记录后继续。'
     elif reason != 'model_finished':
         labels = {'cancelled': '你已停止任务', 'stalled': '连续三轮重复操作且结果不变，已暂停',
                   'action_declined': '你取消了这项操作，本轮任务已暂停，不会反复请求同一授权',
@@ -291,6 +302,114 @@ def run(messages, settings, tools, executor, max_rounds=None, on_tool=None,
         reply = labels.get(reason, '任务已暂停') + '。已完成的操作不会自动撤销，可查看操作记录后继续。'
         if reason == 'response_truncated' and partial_reply:
             reply += '\n\n最后一次未完整答复：\n' + partial_reply
-    if log.error:
+    if log_error:
         reply += '\n⚠ 本次详细记录写入失败，请检查磁盘空间和目录权限。'
-    return (reply, working) if return_messages else reply
+    return reply
+
+
+# ===================== Merged from ai_training_log.py =====================
+"""Local, privacy-conscious cloud tool-call logs for later training-data curation."""
+
+import json
+import os
+from datetime import datetime
+
+from paths import data_dir
+from log_privacy import redact
+
+def _redact(value, key: str = ""):
+    return redact(value, key=key)
+
+
+def _user_text(messages: list) -> str:
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [str(i.get("text", "")) for i in content
+                     if isinstance(i, dict) and i.get("type") == "text"]
+            images = sum(1 for i in content if isinstance(i, dict) and i.get("type") == "image_url")
+            return "\n".join(parts) + (f"\n[附带图片 {images} 张]" if images else "")
+    return ""
+
+
+def append(settings: dict, messages: list, tool_calls: list[dict], reply: str) -> None:
+    """Append a JSONL sample only when the user enabled local training logs."""
+    provider = str(settings.get("ai_provider", "")).lower()
+    if (not settings.get("ai_cloud_tool_log", True) or not tool_calls or
+            provider in {"local_builtin", "ollama", "lmstudio"}):
+        return
+    row = {
+        "schema": "amcl.cloud-tool-call.v1",
+        "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "provider": provider,
+        "model": settings.get("ai_model", ""),
+        "user": _user_text(messages),
+        "tool_calls": tool_calls,
+        "reply": str(reply or ""),
+    }
+    row = redact(row, settings)
+    path = os.path.join(data_dir("ai_training"), "cloud_tool_calls.jsonl")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+# ===================== Merged from ai_training_log.py =====================
+"""Local, privacy-conscious cloud tool-call logs for later training-data curation."""
+
+import json
+import os
+from datetime import datetime
+
+from paths import data_dir
+from log_privacy import redact
+
+def _redact(value, key: str = ""):
+    return redact(value, key=key)
+
+
+def _user_text(messages: list) -> str:
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [str(i.get("text", "")) for i in content
+                     if isinstance(i, dict) and i.get("type") == "text"]
+            images = sum(1 for i in content if isinstance(i, dict) and i.get("type") == "image_url")
+            return "\n".join(parts) + (f"\n[附带图片 {images} 张]" if images else "")
+    return ""
+
+
+def append(settings: dict, messages: list, tool_calls: list[dict], reply: str) -> None:
+    """Append a JSONL sample only when the user enabled local training logs."""
+    provider = str(settings.get("ai_provider", "")).lower()
+    if (not settings.get("ai_cloud_tool_log", True) or not tool_calls or
+            provider in {"local_builtin", "ollama", "lmstudio"}):
+        return
+    row = {
+        "schema": "amcl.cloud-tool-call.v1",
+        "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "provider": provider,
+        "model": settings.get("ai_model", ""),
+        "user": _user_text(messages),
+        "tool_calls": tool_calls,
+        "reply": str(reply or ""),
+    }
+    row = redact(row, settings)
+    path = os.path.join(data_dir("ai_training"), "cloud_tool_calls.jsonl")
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass

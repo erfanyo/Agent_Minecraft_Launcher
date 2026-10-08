@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
     QDialogButtonBox,
     QDockWidget,
@@ -46,6 +47,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QListView,
     QMenu,
     QMessageBox,
     QPlainTextEdit,
@@ -71,6 +73,8 @@ from assistant_ui import (
     collect_screenshots,
     ContextRing,
     estimate_tokens,
+    InputPreferencesPopover,
+    ModelEffortPopover,
     model_supports_vision,
     RecentScreenshotsDialog,
     SendWithRing,
@@ -149,8 +153,9 @@ TOOLS = [
     _tool("get_settings", "查看启动器当前设置(内存/用户名等)", {}, []),
     _tool("install_instance", "下载/创建【新】游戏实例(写操作,需要工作区写权限)。"
           "可创建原版,或带加载器的实例(fabric/forge/neoforge)。"
-          "加载器版本留空=自动用最新;可选装 Fabric API / 光影 / 优化 Mod。"
-          "注意:这是创建新实例,不是启动已有实例!用户说'建一个/下载一个/创建实例'时用它。"
+          "加载器版本留空=自动用最新;可选装 Fabric API / 光影 / 优化 Mod(通过 shader/optimize 参数)。"
+          "注意:这是创建新实例,不是启动已有实例!用户说'建一个/下载一个/创建实例/保存实例'时用它。"
+          "⚠️ 已经通过 shader/optimize 参数装好光影和优化 Mod 了,不要再单独调 install_mod/install_mods 重复装!"
           "加载器实例会自动下载它依赖的基础原版;整个下载可能要几分钟,"
           "期间请等待,不要重复调用;完成后会返回实例 id",
           {"version": {"type": "string", "description": "游戏版本,如 1.21.1 / 1.20.1 / 26.3-snapshot-8"},
@@ -194,6 +199,36 @@ TOOLS = [
           {"slug_or_url": {"type": "string", "description": "Modrinth 整合包 slug 或链接,如 https://modrinth.com/modpack/smithing"},
            "instance_name": {"type": "string", "description": "可选,自定义实例名(不传用整合包名)"}},
           ["slug_or_url"]),
+    _tool("search_resource_packs", "【其他资源】搜索资源包/材质包(Modrinth project_type=resourcepack)，支持中文名。"
+          "返回 slug、下载量、适用加载器；用户想换材质/下皮肤包/下资源包时用",
+          {"query": {"type": "string", "description": "搜索词，如 写实材质 / faithful / 32x"},
+           "game_version": {"type": "string", "description": "可选，按游戏版本过滤"},
+           "loader": {"type": "string", "description": "可选，加载器（资源包通常填 minecraft）"}},
+          ["query"]),
+    _tool("search_shaders", "【其他资源】搜索光影包(Modrinth project_type=shader)，支持中文名。"
+          "返回 slug、下载量、适用光影加载器；用户想加光影时用",
+          {"query": {"type": "string", "description": "搜索词，如 complementary / BSL / 光影"},
+           "game_version": {"type": "string", "description": "可选，按游戏版本过滤"},
+           "loader": {"type": "string", "description": "可选，光影加载器：iris/oculus/optifine"}},
+          ["query"]),
+    _tool("list_resource_packs", "【其他资源】列出某实例已下载的资源包/材质包",
+          {"instance": {"type": "string", "description": "实例 id"}}, ["instance"]),
+    _tool("list_shaders", "【其他资源】列出某实例已下载的光影包",
+          {"instance": {"type": "string", "description": "实例 id"}}, ["instance"]),
+    _tool("install_resource_pack", "【其他资源】下载并安装资源包/材质包到指定实例的 resourcepacks/ 目录。"
+          "写操作，需要工作区写权限；安装前会自动备份实例",
+          {"slug_or_url": {"type": "string", "description": "Modrinth 资源包 slug 或链接"},
+           "instance": {"type": "string", "description": "实例 id"},
+           "game_version": {"type": "string", "description": "可选，游戏版本过滤"},
+           "loader": {"type": "string", "description": "可选，资源包通常 minecraft"}},
+          ["slug_or_url", "instance"]),
+    _tool("install_shader", "【其他资源】下载并安装光影包到指定实例的 shaderpacks/ 目录。"
+          "写操作，需要工作区写权限；安装前会自动备份实例",
+          {"slug_or_url": {"type": "string", "description": "Modrinth 光影包 slug 或链接"},
+           "instance": {"type": "string", "description": "实例 id"},
+           "game_version": {"type": "string", "description": "可选，游戏版本过滤"},
+           "loader": {"type": "string", "description": "可选，加载器：iris/oculus/optifine"}},
+          ["slug_or_url", "instance"]),
     _tool("repair_instance_core", "修补当前实例核心：重新安装相同游戏及加载器版本，原核心备份。保留存档和 Mod；先退出游戏。", {"instance": {"type": "string"}}, ["instance"]),
     _tool("inspect_instance_core", "只读核验实例核心：检查版本 JSON、客户端 JAR、加载器版本及声明依赖库的大小/SHA1。先用它取得核心损坏证据；不会下载或修改文件。", {"instance": {"type": "string"}}, ["instance"]),
     _tool("complete_instance_files", "校验并补全游戏客户端、依赖库和资源，不补第三方 Mod。先退出游戏。", {"instance": {"type": "string"}}, ["instance"]),
@@ -240,7 +275,10 @@ TOOLS = [
           {"query": {"type": "string", "description": "叫法,如 苦力怕 / creeper / 会爆炸的怪 / 锋利"},
            "instance": {"type": "string", "description": "可选,实例 id(有实例时能读更多 Mod 专属名)"}},
           ["query"]),
-    _tool("create_plugin", "【生成启动器插件】当用户需求超出现成工具/页面能力时,生成一个新插件落盘。"
+    _tool("create_plugin", "【生成启动器插件·慎用】当用户需求【明确】超出现成工具/页面能力时,才生成一个新插件落盘。"
+          "⚠️【强烈不建议在内置本地模型(local_builtin/0.8B)下使用本工具】——小模型写不出正确的完整插件,几乎必失败;"
+          "本地小模型请改用现成工具(list_mods/list_instances/search_mods/get_recipe_path 等)回答,或告诉用户『生成插件请切换到云端大模型』。"
+          "⚠️【优先用现成工具】:列实例/查 Mod/搜 Mod/查配方/看日志等都有专门工具,别为了这些去生成插件!"
           "插件 = plugins/<名字>.py,提供 register(api),可注册 AI 工具 / GUI页面 / 设置项 / 技能 / 语言包。"
           "用法:先给出一段符合插件模板的 Python 代码(含 register(api) 函数),再用本工具保存。"
           "生成后需重启启动器生效(静态加载)。写操作,需要工作区写权限。",
@@ -294,9 +332,11 @@ for _schema in TOOLS:
 
 # 写操作工具:执行前必须过"工作区可写"权限检查
 WRITE_TOOLS = {'repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "install_instance", "install_modpack",
+               "install_resource_pack", "install_shader",
                "launch_game", "backup_instance", "set_setting"}
 # 这些动作即使落在 AMCL/.minecraft 的默认工作范围内，也必须先让用户看见变更清单。
 CONFIRM_TOOLS = {'repair_instance_core', 'complete_instance_files', 'reset_instance', "install_mod", "install_mods", "install_instance", "install_modpack",
+                 "install_resource_pack", "install_shader",
                  "set_setting", "send_game_command", "create_plugin"}
 
 WRITE_TOOLS.update({'snapshot_instance', 'restore_instance_snapshot', 'set_mod_enabled', 'replace_mod_version'})
@@ -340,6 +380,9 @@ TOOL_GROUPS = {
     "instance": ["install_instance", "launch_game", "backup_instance"],
     "mod": ["search_mods", "install_mod", "install_mods", "list_mods"],
     "modpack": ["search_modpacks", "install_modpack"],
+    "resources": ["search_resource_packs", "search_shaders",
+                  "list_resource_packs", "list_shaders",
+                  "install_resource_pack", "install_shader"],
     "concept": ["resolve_mod_concept"],
     "recipe": ["get_recipe_path", "compare_items"],
     "command": ["send_game_command", "get_command_guide"],
@@ -362,7 +405,7 @@ TOOL_GROUPS['instance'].append('compare_instance_snapshot')
 # 「我想玩<某mod/整合包>」这类只说想玩、不点名 mod/整合包 时,装/mod/整合包组全部漏挂。
 TOOL_GROUP_KEYWORDS = {
     "settings": ["设置", "内存", "用户名", "权限", "改成", "修改", "memory", "username"],
-    "instance": ["建", "创建", "下载", "实例", "启动", "备份", "原版", "装一个", "install",
+    "instance": ["建", "创建", "下载", "实例", "启动", "备份", "保存", "原版", "装一个", "install",
                  "想玩", "想玩个", "要玩", "来玩", "玩一下", "玩一个", "玩这个", "开新", "开一个"],
     "mod": ["mod", "模组", "装", "安装", "钠", "锂", "玉", "jei", "sodium", "lithium",
             "jade", "搜", "搜索", "fabric", "forge", "玩", "想玩", "想玩个", "要玩", "来玩",
@@ -377,6 +420,11 @@ TOOL_GROUP_KEYWORDS = {
                 "想玩", "想玩个", "要玩", "来玩", "玩一下", "玩一个", "玩这个", "冒险", "生存",
                 "空岛", "任务", "主线", "剧情", "序章", "整合", "机械动力", "航空", "create",
                 "aeronautics"],
+    # 其他资源(光影包/资源包/材质包/数据包)。
+    "resources": ["光影", "光影包", "shader", "BSL", "Complementary", "SEUS", "Optifine",
+                  "Iris", "Oculus", "资源包", "材质包", "texture", "resourcepack", "skin",
+                  "皮肤", "贴图", "高清", "像素风", "32x", "64x", "128x", "faithful",
+                  "材质", "换材质", "换贴图", "换个材质", "pack", "color", "配色"],
     "recipe": ["合成", "配方", "材料", "比较", "哪个", "伤害", "护甲", "攻击", "最"],
     "command": ["指令", "命令", "summon", "天气", "发指令", "command", "指南"],
     "log": ["日志", "崩溃", "闪退", "报错", "log", "诊断", "原因", "wiki", "维基", "百科", "查一下", "叫什么", "物品", "生物", "实体", "名词", "名称", "名字", "配料"],
@@ -387,9 +435,89 @@ TOOL_GROUP_KEYWORDS = {
                # 刻意不写泛化的「崩溃/报错」:那是 crashrepair 组的词,写这里会把
                # 整套服务端工具挂到普通客户端崩溃问题上。
                "上不了酒", "上酒", "上菜", "服务端崩溃", "服务端报错",
-               "删mod", "删 mod", "哪些mod", "哪些 mod", "多余的mod", "多余mod",
-               "清理mod", "清理 mod", "建议删", "停用mod", "停用 mod"],
+               # 「删mod/哪些mod/清理mod」这些必须带「服务端」语境才挂本组:
+               # 否则「XX 装了哪些mod」这种【客户端】查询会被误命中,把整套服务端
+               # 工具拉进候选挤掉 list_mods(见 list_mods 漏挂 bug)。所以用组合词。
+               "服务端删mod", "服务端删 mod", "服务端哪些mod", "服务端哪些 mod",
+               "服务端清理mod", "服务端清理 mod", "服务端建议删", "服务端停用mod",
+               "服务端停用 mod", "删服务端mod", "清理服务端mod"],
 }
+
+# 「其他资源」强特征词:命中这些词时,泛化的安装动词(装/安装)不应把请求
+# 带回普通 Mod / 整合包组——否则用户说「装个光影」会被路由到 install_mod。
+RESOURCE_STRONG_KEYWORDS = (
+    "光影", "shader", "bsl", "complementary", "seus", "optifine", "iris", "oculus",
+    "资源包", "材质包", "材质", "texture", "resourcepack", "resource pack", "贴图",
+)
+
+# 工具组的人话说明:给本地 0.8B 模型的 L1 选组用
+# (只给组名的话,它认不出 resources 是什么,会凭泛化的「装」选到 mod)。
+TOOL_GROUP_LABELS = {
+    "settings": "改启动器设置(内存/用户名/权限)",
+    "instance": "创建/启动/备份/查看游戏实例",
+    "mod": "搜索或安装普通 Mod(模组)",
+    "modpack": "搜索或安装整合包(.mrpack)",
+    "resources": "光影包 / 资源包 / 材质包(其他资源,不是普通 Mod)",
+    "concept": "按功能描述找 Mod(说不出名字时)",
+    "recipe": "查合成配方 / 比较物品参数",
+    "command": "发游戏指令 / 查指令指南",
+    "log": "看游戏日志 / 崩溃报告 / 名词解析",
+    "crashrepair": "崩溃诊断与修复",
+    "keybind": "查按键绑定",
+    "server": "服务端管理与诊断",
+}
+
+
+def groups_for_text(text: str) -> list[str]:
+    """按关键词挑出命中的工具组,并处理「其他资源」优先级(云端/本地共用)。
+
+    规则:命中任一资源类强特征词(光影/资源包/材质/shader…)时,排除普通 Mod 与
+    整合包组,避免泛化的「装/安装」动词把「装个光影」误导到 install_mod。
+    没有组命中时返回空列表,由调用方决定兜底。
+    """
+    tl = (text or "").lower()
+    matched = [g for g, kws in TOOL_GROUP_KEYWORDS.items()
+               if any(k.lower() in tl for k in kws)]
+    if "resources" in matched and any(k in tl for k in RESOURCE_STRONG_KEYWORDS):
+        matched = [g for g in matched if g not in ("mod", "modpack")]
+    return matched
+
+
+# 资源类请求下仍然保留的「只读 Mod 查询」工具:
+# 光影需要先确认实例是否装了加载器(Forge=Oculus / Fabric=Iris),
+# 所以 list_mods 必须可见;但 install_mod 不能出现,否则又会抢走 install_shader。
+MOD_READONLY_TOOLS = (
+    "list_mods", "search_mods", "inspect_mod_jar",
+    "find_compatible_mod_versions", "find_compatible_mod_replacement",
+)
+
+
+def _resource_mode(text: str) -> bool:
+    """是否为「其他资源」请求(命中资源强特征词)。"""
+    tl = (text or "").lower()
+    matched = [g for g, kws in TOOL_GROUP_KEYWORDS.items()
+               if any(k.lower() in tl for k in kws)]
+    return ("resources" in matched
+            and any(k in tl for k in RESOURCE_STRONG_KEYWORDS))
+
+
+def tools_for_text(text: str) -> list[str]:
+    """按请求文本展开要挂载的工具名(云端按需挂载 / 本地挂载共用,单一来源)。
+
+    - 资源类请求:组展开里已经没有 mod 组(见 groups_for_text),这里额外补上
+      只读的 Mod 查询工具(list_mods 等),用于确认光影加载器是否已装。
+    - 非资源类请求:行为不变。
+    """
+    names = list(GENERAL_TOOLS)
+    for g in groups_for_text(text):
+        for n in TOOL_GROUPS.get(g, []):
+            if n not in names:
+                names.append(n)
+    if _resource_mode(text):
+        for n in MOD_READONLY_TOOLS:
+            if n not in names:
+                names.append(n)
+    return names
 
 
 def mcp_tools_schemas(settings: dict) -> list:
@@ -415,21 +543,28 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
     返回 TOOLS 的子集(每轮请求固定,轮间稳定利于前缀缓存)。
     插件 + MCP 工具追加在截断之后(绝不砍掉)。本地路径不受影响(仍返回全量)。"""
     tl = (text or "").lower()
-    names = list(GENERAL_TOOLS)
-    for g, kws in TOOL_GROUP_KEYWORDS.items():
-        if any(k.lower() in tl for k in kws):
-            for n in TOOL_GROUPS[g]:
-                if n not in names:
-                    names.append(n)
+    # 统一展开(含「其他资源」优先级 + 资源模式下保留只读 Mod 查询工具)。
+    names = tools_for_text(text)
     by_name = {t["function"]["name"]: t for t in TOOLS}
     mounted = [by_name[n] for n in names if n in by_name]
     if len(mounted) > CLOUD_MAX_TOOLS:
         # 超限截断:保通用(前 3 个)+ 本请求命中组里"核心查询/解析"工具,
         # 砍掉排后的(通常是次要的操作/写工具),避免关键工具被挤掉导致模型选不到。
-        core = {"resolve_mod_concept", "search_mods", "search_modpacks", "list_instances",
+        # core 必须含【全部只读查询工具】(list_mods/list_instance_snapshots 等):
+        # 这些是"先查再做"的第一步,被截断挤掉会导致模型看不见→瞎调(如误调 create_plugin)。
+        core = {"resolve_mod_concept", "search_mods", "search_modpacks",
+                "search_resource_packs", "search_shaders",
+                "list_resource_packs", "list_shaders",
+                # 资源的「安装」工具必须进保底集合:否则命中「实例」组时工具数
+                # 超过 CLOUD_MAX_TOOLS,install_shader 会被截断丢弃,模型看不见→只能让用户手装。
+                "install_resource_pack", "install_shader",
+                "list_instances",
+                "list_mods", "list_instance_snapshots", "list_server_instances",
+                "compare_items", "get_command_guide", "get_key_bindings",
+                "send_game_command", "ask_user",
                 "install_mod", "install_instance", "install_modpack",
                 "get_settings", "get_recipe_path", "read_instance_log", "read_crash_report",
-                "list_server_instances", "read_server_candidate_report", "list_server_mods",
+                "read_server_candidate_report", "list_server_mods",
                 "read_server_log", "set_server_mod_enabled", "suggest_server_removals"}
         keep = []
         for t in mounted:
@@ -459,11 +594,15 @@ def mount_tools_for(text: str, settings: dict | None = None) -> list[dict]:
 
 def build_executor(settings: dict, progress_cb: Callable | None = None,
                    confirm_action: Callable[[str, str], bool] | None = None,
-                   notice_cb: Callable[[str], None] | None = None) -> Callable[[str, dict], str]:
+                   notice_cb: Callable[[str], None] | None = None,
+                   auto_confirm_tools: set | None = None) -> Callable[[str, dict], str]:
     """构造工具执行器:LLM 只能"提议",真正执行在这里,权限检查也在这里。
     多余参数会被过滤(模型幻觉传错参数不报错,只调它真需要的)。
     progress_cb(done, total) 若提供,把底层下载(装 Mod 等)进度传给界面(左下角圆环)。
-    confirm_action(name, preview) 由 GUI 提供时，会在执行高影响动作前让用户确认。"""
+    confirm_action(name, preview) 由 GUI 提供时，会在执行高影响动作前让用户确认。
+    auto_confirm_tools: 给【没有可交互确认通道】的调用方(如游戏内 /ai)用——集合里的工具名
+      表示"调用方已按玩家身份判定过权限、且玩家主动发起",直接执行(仍写操作记录);
+      不在集合里、又需要确认的动作会返回明确说明,而不是让模型去谎称"启动器里会弹确认框"。"""
     import inspect
     import agent_tools
     # MCP 客户端:连接配置的外部 MCP 服务器,AI 可调用它们暴露的工具
@@ -548,8 +687,14 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
                 undo = {"kind": "setting", "key": key, "value": load_settings().get(key)}
         if needs_confirm:
             if confirm_action is None:
-                return '这项操作需要你确认，请在启动器的 AI 对话界面中继续。'
-            if confirm_action is not None and not confirm_action(name, action_preview):
+                if name not in (auto_confirm_tools or ()):
+                    # 没有确认通道时,绝不能让模型以为"启动器里会弹确认框"(那里并没有
+                    # 这个待确认项,玩家会白等)。这里把事实说清楚,并指出正确入口。
+                    return (f'这项操作({name})需要你确认,但当前通道没有确认界面'
+                            '(弹不出确认框):请在启动器的 AI 对话界面里继续。')
+                # 在 auto_confirm_tools 里:调用方(如游戏内 /ai)已按玩家身份判定过权限,
+                # 且玩家是主动发起的 → 直接执行(下面 finish() 仍会写操作记录)。
+            elif not confirm_action(name, action_preview):
                 result = "用户取消了这项操作，未做任何修改。"
                 from ai_action_log import record
                 record(name, args, result, approved=False, undo=undo)
@@ -626,7 +771,7 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
         elif auto_continue and name != 'snapshot_instance':
             notify_continuous()
         # 灵感 #6:写操作前先自动备份(装 Mod 前防坏档);批量安装只备份一次
-        if name in ("install_mod", "install_mods"):
+        if name in ("install_mod", "install_mods", "install_resource_pack", "install_shader"):
             try:
                 backup_note = agent_tools.backup_instance(args.get("instance", ""))
             except Exception as e:
@@ -634,7 +779,8 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
         # 把 progress_cb 塞给支持它的下载工具(install_mod / install_mods / install_instance 等)
         out_args = dict(args)
         if progress_cb is not None and name in ("install_mod", "install_mods",
-                                                "install_instance", "install_modpack"):
+                                                "install_instance", "install_modpack",
+                                                "install_resource_pack", "install_shader"):
             try:
                 sig = inspect.signature(fn)
                 if "progress_callback" in sig.parameters:
@@ -747,6 +893,74 @@ def _cloud_chat(text: str, settings: dict, context: str = "",
         return f"(AI 请求失败:{type(e).__name__})"
 
 
+def _human_wrap_result(tool_name: str, tool_result: str) -> str:
+    """转人话失败时的兜底:把工具结果用大白话包装,去掉「✅ 已执行「工具名」」这类内部术语。
+    结果本身可读(如「(1.20.1 没有 mods 目录)」)就直接给;是清单/多行就加一句引导。"""
+    r = (tool_result or "").strip()
+    if not r:
+        return "已完成,但没有返回具体内容。"
+    lines = [ln for ln in r.splitlines() if ln.strip()]
+    # 结果是单行括号说明(如"(x 没有 mods 目录)")→ 去掉外层括号直接给
+    if len(lines) == 1 and lines[0].startswith("(") and lines[0].endswith(")"):
+        return lines[0][1:-1] + "。"
+    if len(lines) == 1:
+        return lines[0]
+    # 多行清单 → 一句话 + 内容
+    return f"查到 {len(lines)} 项:\n" + "\n".join(f"· {ln}" for ln in lines[:30])
+
+
+def _synthesize_tool_reply(user_text: str, tool_name: str, tool_result: str,
+                           settings: dict, context: str = "",
+                           executor: Callable[[str, dict], str] | None = None,
+                           engine=None) -> str:
+    """本地工具执行完 → 把工具结果「转成人话」正式回答用户,而不是裸奔原始结果。
+    转人话这一步当成一个新的小请求再走一遍 route()(与首轮一致的混合路由):
+    本地模型够就本地总结,否则按 ai_strategy 落云端总结;两条都失败才回退到
+    「✅ 已执行 + 结果」兜底。这样本地/云端/hybrid 三档的回复质量一致,不再只给工具输出。
+    engine: 已在跑的 GrammarToolEngine(复用,不起新进程);不给则临时起一个本地总结。"""
+    summary_prompt = (
+        f"用户的问题是:{user_text}\n"
+        f"我已经调用工具「{tool_name}」并拿到结果:\n{tool_result}\n"
+        "请把上面的结果总结成给用户的正式中文回答:直接回答用户的问题,"
+        "重点说结论和影响,不要罗列原始数据/日志/JSON,不要重复工具名。简洁(1-3 句)。")
+    # 兜底:去掉「✅ 已执行「工具名」」这类内部术语,把结果用大白话包装(不裸奔工具原文)。
+    fallback = _human_wrap_result(tool_name, tool_result)
+    try:
+        from task_router import route
+        strategy = str(settings.get("ai_strategy", "local_first") or "local_first")
+        have_cloud = _cloud_available_settings(settings)
+        # 转人话是"总结/解释"类任务:交给 route() 决定本地还是云端(难度判定会把它判为易/未知)
+        decision = route(summary_prompt, strategy=strategy, have_cloud=have_cloud,
+                         have_local=_local_model_downloaded(), follow_up=True)
+        target = decision.get("target", "cloud")
+        if target in ("local", "chat", "rule") and _local_model_downloaded():
+            try:
+                if engine is not None:
+                    rep = engine.chat(summary_prompt, context=context)
+                else:
+                    from local_ai import GrammarToolEngine
+                    eng = GrammarToolEngine(model_id=LOCAL_MODEL_ID)
+                    eng.start()
+                    try:
+                        rep = eng.chat(summary_prompt, context=context)
+                    finally:
+                        try:
+                            eng.stop()
+                        except Exception:
+                            pass
+                if rep and rep.strip() and "已执行" not in rep[:8]:
+                    return rep
+            except Exception:
+                pass
+        if have_cloud:
+            rep = _cloud_chat(summary_prompt, settings, context, None, None, executor)
+            if rep and rep.strip():
+                return rep
+    except Exception:
+        pass
+    return fallback
+
+
 def route_answer(text: str, settings: dict, context: str = "",
                  on_tool: Callable | None = None,
                  force_tools: list | None = None,
@@ -774,15 +988,21 @@ def route_answer(text: str, settings: dict, context: str = "",
                     if target == "chat":
                         rep = eng.chat(text, context=context or build_launcher_context())
                     else:
-                        call = eng.tool_call(text, context=context or build_launcher_context())
+                        from local_ai import two_stage_tool_call, reasoning_effort_from_settings
+                        call = two_stage_tool_call(text, context=context or build_launcher_context(),
+                                                   engine=eng, effort=reasoning_effort_from_settings())
                         name = call.get("name", "")
                         args = call.get("arguments", {})
                         if not name:
                             return "(本地模型未给出明确动作)"
-                        if on_tool:
-                            on_tool(name, args, "(本地推理)")
                         result = str((executor or build_executor(settings))(name, args))
-                        rep = f"✅ 已执行「{name}」:\n{result}"
+                        if on_tool:
+                            on_tool(name, args, result)
+                        # 转人话:按混合路由把工具结果总结成正式回答,不再裸奔原始结果
+                        rep = _synthesize_tool_reply(
+                            text, name, result, settings,
+                            context=context or build_launcher_context(),
+                            executor=executor)
                 except Exception:
                     rep = ""
                 if rep and rep.strip():
@@ -977,23 +1197,87 @@ class _Signals(QObject):
 
 
 _CLOUD_PROVIDERS = [
-    ("DeepSeek(推荐 · 便宜好用)", "deepseek"),
-    ("OpenRouter(一家账号用多家,部分模型会看图)", "openrouter"),
-    ("Gemini API(免费额度 · 支持图像)", "gemini"),
-    ("GroqCloud(免费额度 · 响应很快)", "groq"),
-    ("Cerebras(免费试用额度 · 高速)", "cerebras"),
-    ("硅基流动(国内速度快)", "siliconflow"),
-    ("智谱 BigModel（GLM-4.7-Flash）", "zhipu"),
-    ("通义千问(国内)", "dashscope"),
-    ("小米 MiMo API(按量计费)", "mimo"),
-    ("自定义(自己填接口)", "custom"),
+    ("硅基流动", "siliconflow"),
+    ("DeepSeek", "deepseek"),
+    ("OpenRouter", "openrouter"),
+    ("Gemini API", "gemini"),
+    ("GroqCloud", "groq"),
+    ("Cerebras", "cerebras"),
+    ("智谱 BigModel", "zhipu"),
+    ("通义千问", "dashscope"),
+    ("小米 MiMo API", "mimo"),
+    ("Ollama", "ollama"),
+    ("LM Studio", "lmstudio"),
+    ("自定义", "custom"),
 ]
-# 本地模型类型(下拉:标签, 值)
+# 本地模型类型(下拉:标签, 值)——只留「内置」;Ollama/LM Studio 已移到 _CLOUD_PROVIDERS(OpenAI 兼容 API)
 _LOCAL_MODES = [
-    ("内置本地模型(离线,无密钥,需下载)", "builtin"),
-    ("Ollama(本地服务,免费离线)", "ollama"),
-    ("LM Studio(本地服务,免费离线)", "lmstudio"),
+    ("内置本地模型", "builtin"),
 ]
+
+
+def _limit_combo_popup(combo, visible: int = 10) -> None:
+    """限制下拉弹层的可见项数。
+
+    Windows 原生弹层会无视 setMaxVisibleItems(模型可能有几百个,弹层会顶住屏幕上下边框),
+    所以换成 Qt 自己的弹层(combobox-popup: 0)并限高,超出部分滚动。
+    """
+    combo.setView(QListView(combo))
+    combo.setMaxVisibleItems(int(visible))
+    combo.setStyleSheet("QComboBox { combobox-popup: 0; }")
+    view = combo.view()
+    if view is not None:
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+
+def _commit_combo_search(combo) -> None:
+    """打字后回车:选中匹配项(精确优先,其次包含),避免留下识别不了的自由文本。"""
+    text = (combo.currentText() or "").strip().lower()
+    if not text:
+        return
+    best = -1
+    for i in range(combo.count()):
+        if (combo.itemText(i) or "").strip().lower() == text:
+            best = i
+            break
+    if best < 0:
+        for i in range(combo.count()):
+            if combo.itemData(i) and text in (combo.itemText(i) or "").lower():
+                best = i
+                break
+    if best >= 0:
+        combo.setCurrentIndex(best)
+        combo.activated.emit(best)
+
+
+def _setup_model_combo(combo, placeholder: str) -> None:
+    """「获取可用模型」下拉 = 限高(最多 10 行) + 可直接打字搜索。
+
+    模型可能有几百个:光靠滚动不好找,所以把下拉设为可编辑并挂 QCompleter,
+    在输入框里打几个字就按「包含」过滤候选。
+    """
+    _limit_combo_popup(combo)
+    combo.setEditable(True)
+    combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    if combo.lineEdit() is not None:
+        combo.lineEdit().setPlaceholderText(placeholder)
+        combo.lineEdit().returnPressed.connect(lambda c=combo: _commit_combo_search(c))
+    completer = QCompleter(combo.model(), combo)
+    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    completer.setFilterMode(Qt.MatchFlag.MatchContains)
+    completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+    popup = completer.popup()
+    if popup is not None:
+        popup.setMaximumHeight(280)
+    combo.setCompleter(completer)
+    combo._amcl_completer = completer
+
+
+def _refresh_model_combo_search(combo) -> None:
+    """模型列表被重新填充后,让补全器跟着新内容走。"""
+    completer = getattr(combo, "_amcl_completer", None)
+    if completer is not None:
+        completer.setModel(combo.model())
 
 
 class AISettingsForm(QWidget):
@@ -1012,9 +1296,9 @@ class AISettingsForm(QWidget):
 
     # AI 策略三档:值 → (文案, 生效来源 cloud/local, 是否两边都显示)
     _STRATEGIES = [
-        ("local_first", "本地优先(省钱)", "local", False),
-        ("cloud_first", "云端优先(更强)", "cloud", False),
-        ("hybrid", "混合(平衡)", "cloud", True),
+        ("local_first", "本地优先", "local", False),
+        ("cloud_first", "云端优先", "cloud", False),
+        ("hybrid", "混合", "cloud", True),
     ]
 
     def __init__(self, settings: dict, parent=None):
@@ -1056,7 +1340,23 @@ class AISettingsForm(QWidget):
         if toggle.isChecked() != opened:
             toggle.setChecked(opened)
 
+    @staticmethod
+    def _section_label(text: str) -> QLabel:
+        """带主题色的小节标题标签(适配深/浅色,避免白底白字看不清)。"""
+        lab = QLabel(text)
+        set_style(lab, lambda: f"color:{text_color()}; font-weight:bold;")
+        return lab
+
     def _build_ui(self):
+        # ---------- 模型类型:顶部二选一(API / 内置)——决定下面显示哪块配置 ----------
+        self.model_type_combo = QComboBox()
+        self.model_type_combo.addItem("API", "api")
+        self.model_type_combo.addItem("内置", "builtin")
+        self.model_type_combo.setToolTip(
+            "选「API」→ 配置在线/自建 API 服务(DeepSeek、Ollama、LM Studio、自定义等);\n"
+            "选「内置」→ 用启动器自带的本地小模型(离线,首次需下载)。")
+        self.model_type_combo.currentIndexChanged.connect(self._apply_source_visibility)
+
         # ---------- 当前使用(AI 策略三档,合并了原"云端/本地"单选) ----------
         self.strategy_combo = QComboBox()
         for _key, label, _src, _both in self._STRATEGIES:
@@ -1078,7 +1378,7 @@ class AISettingsForm(QWidget):
         self.cloud_base_url.setPlaceholderText("如 https://api.deepseek.com/v1")
         self.cloud_api_key = QLineEdit()
         self.cloud_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.cloud_api_key.setPlaceholderText("在对应平台注册获取;本地服务留空")
+        self.cloud_api_key.setPlaceholderText("")
         self.cloud_model = QLineEdit()
         self.cloud_model.setPlaceholderText("如 deepseek-chat / glm-4.7-flash")
         cloud_content = QWidget()
@@ -1094,6 +1394,7 @@ class AISettingsForm(QWidget):
         model_row.addWidget(self.fetch_models_btn)
         cl.addRow("模型:", model_row)
         self.remote_models = QComboBox()
+        _setup_model_combo(self.remote_models, "选择模型（列表不保证全部可调用）")   # 限高 + 可打字搜索
         self.remote_models.hide()
         self.remote_models.activated.connect(self._choose_remote_model)
         cl.addRow('', self.remote_models)
@@ -1105,14 +1406,16 @@ class AISettingsForm(QWidget):
         self.local_mode = QComboBox()
         for label, value in _LOCAL_MODES:
             self.local_mode.addItem(label, value)
-        # 内置模型专属:下载状态 + 自动下载
+        # 内置模型专属:下载状态 + 手动下载按钮(打包已含权重,不再自动下载)
         self.local_builtin_row = QWidget()
         b_row = QHBoxLayout(self.local_builtin_row)
         b_row.setContentsMargins(0, 0, 0, 0)
         self.local_status = QLabel("")
-        self.local_auto_dl = ToggleSwitch(True)
+        self.local_dl_btn = QPushButton("下载模型")
+        self.local_dl_btn.setToolTip("手动下载内置本地模型(约 500MB)。发行包已含权重,一般无需下载。")
+        self.local_dl_btn.clicked.connect(self._manual_download_local_model)
         b_row.addWidget(self.local_status, 1)
-        b_row.addWidget(setting_switch_row("需要时自动下载", self.local_auto_dl))
+        b_row.addWidget(self.local_dl_btn)
         # Ollama / LM Studio 专属:服务地址 + 模型名
         self.local_server_row = QWidget()
         s_form = QFormLayout(self.local_server_row)
@@ -1125,7 +1428,7 @@ class AISettingsForm(QWidget):
         s_form.addRow("模型名:", self.local_model)
         local_content = QWidget()
         ll = QVBoxLayout(local_content)
-        ll.addWidget(QLabel("本地类型:"))
+        ll.addWidget(self._section_label("本地类型:"))
         ll.addWidget(self.local_mode)
         ll.addWidget(self.local_builtin_row)
         ll.addWidget(self.local_server_row)
@@ -1139,13 +1442,6 @@ class AISettingsForm(QWidget):
         self.permission = QComboBox()
         for label, value in PERMISSIONS:
             self.permission.addItem(label, value)
-        self.response_style = ChoicePopupButton([
-            ("普通用户语言（推荐）", "plain", "重点说明能不能玩、改了什么，以及功能有什么影响。"),
-            ("技术详情", "technical", "同时显示日志证据、版本、路径和内部处理信息。"),
-        ])
-        self.response_style.setToolTip(
-            "普通用户语言：重点告诉你能不能玩、改了什么、功能有什么影响。\n"
-            "技术详情：同时显示日志证据、版本、路径和内部处理信息。")
         self.context_window = QSpinBox()
         self.context_window.setRange(1000, 1000000)
         self.context_window.setSingleStep(1024)
@@ -1164,7 +1460,6 @@ class AISettingsForm(QWidget):
 
         common = QGroupBox("通用")
         cf = QFormLayout(common)
-        cf.addRow("回答方式:", self.response_style)
         cf.addRow("文件权限:", self.permission)
         cf.addRow("上下文窗口:", self.context_window)
         cf.addRow("图片输入:", setting_switch_row("允许发送图片", self.vision_check,
@@ -1203,10 +1498,10 @@ class AISettingsForm(QWidget):
         self.cool_spin.setSuffix(" 秒")
         self.cool_spin.setToolTip("同一玩家两次 /ai 的最小间隔(防单玩家狂刷)")
         quota_row = QHBoxLayout()
-        quota_row.addWidget(QLabel("每日额度(次数):"))
+        quota_row.addWidget(self._section_label("每日额度(次数):"))
         quota_row.addWidget(self.quota_spin)
         quota_row.addSpacing(16)
-        quota_row.addWidget(QLabel("每玩家冷却:"))
+        quota_row.addWidget(self._section_label("每玩家冷却:"))
         quota_row.addWidget(self.cool_spin)
         quota_row.addStretch()
         av.addLayout(quota_row)
@@ -1223,10 +1518,8 @@ class AISettingsForm(QWidget):
         source_row.addWidget(self.strategy_combo, 1)
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
-        layout.addWidget(QLabel("当前使用(AI 策略):"))
+        layout.addWidget(self._section_label("AI 策略:"))
         layout.addLayout(source_row)
-        layout.addWidget(cloud_box)
-        layout.addWidget(local_box)
         layout.addWidget(common)
         layout.addWidget(ai_group)
 
@@ -1238,6 +1531,12 @@ class AISettingsForm(QWidget):
         self.local_mode.currentIndexChanged.connect(self._auto_vision)
         self.local_model.textChanged.connect(self._auto_vision)
 
+        # 云端/本地配置块已由 ModelCardsPanel(模型卡片)接管;这里保留其控件仅供 values() 读取,
+        # 必须挂到 self 并隐藏——否则未入布局的 QGroupBox 会变成独立顶层窗口(启动时多弹一个窗口)。
+        cloud_box.setParent(self)
+        local_box.setParent(self)
+        cloud_box.hide()
+        local_box.hide()
         self.cloud_box = cloud_box
         self.local_box = local_box
 
@@ -1253,6 +1552,10 @@ class AISettingsForm(QWidget):
             idx = self.strategy_combo.findData(
                 "local" if s.get("ai_source", "cloud") == "local" else "cloud_first")
         self.strategy_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        # 模型类型(API/内置):按 ai_source 推导(local=内置,cloud=API)
+        _mt = "builtin" if s.get("ai_source", "cloud") == "local" else "api"
+        self.model_type_combo.setCurrentIndex(
+            max(0, self.model_type_combo.findData(_mt)))
         # 云端
         self.cloud_provider.setCurrentIndex(
             self.cloud_provider.findData(s.get("ai_cloud_provider", "deepseek")) if self.cloud_provider.findData(
@@ -1270,13 +1573,10 @@ class AISettingsForm(QWidget):
                 s.get("ai_local_mode", "builtin")) >= 0 else 0)
         self.local_endpoint.setText(s.get("ai_local_endpoint", ""))
         self.local_model.setText(s.get("ai_local_model", ""))
-        self.local_auto_dl.setChecked(bool(s.get("ai_local_auto_download", True)))
         # 通用
         cur = s.get("ai_permission", "launcher_write")
         idx = self.permission.findData(cur)
         self.permission.setCurrentIndex(idx if idx >= 0 else 0)
-        idx = self.response_style.findData(s.get("ai_response_style", "plain"))
-        self.response_style.setCurrentIndex(idx if idx >= 0 else 0)
         # 权限下拉:从只读切到"工作区可写"弹二级确认+免责声明;取消则回只读
         self.permission.currentIndexChanged.connect(self._on_permission_combo_changed)
         self.context_window.setValue(int(s.get("context_window", 65536) or 65536))
@@ -1304,20 +1604,10 @@ class AISettingsForm(QWidget):
         return False
 
     def _apply_source_visibility(self, *_):
-        """按 AI 策略显示云端/本地配置块:本地优先只显本地、云端优先只显云端、混合两边都显。"""
-        strategy = self._current_strategy()
-        both = False
-        for _key, _label, _src, _b in self._STRATEGIES:
-            if _key == strategy:
-                both = _b
-                break
-        show_cloud = both or self._is_cloud()
-        show_local = both or not self._is_cloud()
-        self.cloud_box.setVisible(show_cloud)
-        self.local_box.setVisible(show_local)
-        # 当前实际使用的一组始终展开；混合模式保留云端展开、本地按需展开。
-        self._set_section_open(self._cloud_toggle, show_cloud)
-        self._set_section_open(self._local_toggle, show_local and not both)
+        """云端/本地配置块已由模型卡片接管,这里恒隐藏(保留控件仅供 values() 读取),
+        绝不 setVisible(True) —— 未入布局的块一旦显示就会变成独立窗口。"""
+        self.cloud_box.setVisible(False)
+        self.local_box.setVisible(False)
 
     def _toggle_local_visibility(self, *_):
         """仅按本地类型切换子区显隐 + 内置模型只读,不改用户已存值。"""
@@ -1364,7 +1654,7 @@ class AISettingsForm(QWidget):
             self.cloud_model.setText("gpt-oss-120b")
         elif idx == "siliconflow":
             self.cloud_base_url.setText("https://api.siliconflow.cn/v1")
-            self.cloud_model.setText("Qwen/Qwen2.5-7B-Instruct")
+            self.cloud_model.setText("deepseek-ai/DeepSeek-V4-Flash")
         elif idx == "zhipu":
             self.cloud_base_url.setText("https://open.bigmodel.cn/api/paas/v4")
             self.cloud_model.setText("glm-4.7-flash")
@@ -1409,6 +1699,7 @@ class AISettingsForm(QWidget):
             self.remote_models.addItem('选择模型（列表不保证全部可调用）', None)
             for name in names:
                 self.remote_models.addItem(name, name)
+            _refresh_model_combo_search(self.remote_models)
             self.remote_models.show()
         def failure(error):
             if still_current():
@@ -1430,7 +1721,22 @@ class AISettingsForm(QWidget):
             ready = model_registry.is_downloaded(LOCAL_MODEL_ID)
         except Exception:
             ready = False
-        self.local_status.setText("内置模型:" + ("✅ 已下载" if ready else "未下载(约500MB,首次用自动下载)"))
+        self.local_status.setText("内置模型:" + ("✅ 已下载" if ready else "未下载(约500MB,点「下载模型」获取)"))
+
+    def _manual_download_local_model(self):
+        """手动下载内置本地模型(发行包已含权重,故只手动下载,不自动)。"""
+        try:
+            import model_registry
+            if model_registry.is_downloaded(LOCAL_MODEL_ID):
+                self.local_status.setText("内置模型:✅ 已下载")
+                return
+            self.local_status.setText("内置模型:下载中…")
+            QApplication.processEvents()
+            model_registry.download(LOCAL_MODEL_ID)
+            self._refresh_local_status()
+        except Exception as e:
+            self.local_status.setText(f"内置模型:下载失败({type(e).__name__})")
+            QMessageBox.information(self, "下载内置模型", f"下载失败:{e}\n也可稍后重试。")
 
     def _auto_vision(self):
         """切服务商/模型时,按所选(生效的)模型是否能看图自动设定「图片输入」开关。"""
@@ -1453,7 +1759,7 @@ class AISettingsForm(QWidget):
         if data != "workspace_write":
             return
         from PySide6.QtWidgets import QMessageBox
-        plain = self.response_style.currentData() == "plain"
+        plain = self._settings.get("ai_response_style", "plain") == "plain"
         cap = "允许 AI 修改启动器程序？" if plain else "🛡️ 确认给 AI「工作区可写」权限?"
         disc = (("修游戏、装 Mod 和改游戏设置不需要这个权限。\n\n"
                  "开启后，AI 还可以修改启动器功能和插件。只有你打算让 AI 改启动器本身时才建议开启。\n\n"
@@ -1470,21 +1776,22 @@ class AISettingsForm(QWidget):
             self.permission.blockSignals(False)
 
     def values(self) -> dict:
-        """收集表单内容为设置字段,并据当前策略推导「生效」的一组 ai_provider/... 给后端。"""
+        """收集表单内容为设置字段,并据「模型类型」推导「生效」的一组 ai_provider/... 给后端。"""
         self._provider_keys[self.cloud_provider.currentData()] = self.cloud_api_key.text().strip()
-        if self._is_cloud():
+        # 模型类型(API/内置)决定生效来源:API→cloud 那组,内置→local builtin
+        if self.model_type_combo.currentData() == "builtin":
+            source = "local"
+            mode = self.local_mode.currentData() or "builtin"
+            provider = "local_builtin"
+            base_url = ""
+            api_key = ""
+            model = LOCAL_MODEL_ID
+        else:
             source = "cloud"
             provider = self.cloud_provider.currentData()
             base_url = self.cloud_base_url.text().strip()
             api_key = self.cloud_api_key.text().strip()
             model = self.cloud_model.text().strip()
-        else:
-            source = "local"
-            mode = self.local_mode.currentData()
-            provider = "local_builtin" if mode == "builtin" else mode
-            base_url = "" if mode == "builtin" else self.local_endpoint.text().strip()
-            api_key = ""
-            model = LOCAL_MODEL_ID if mode == "builtin" else self.local_model.text().strip()
         return {
             "ai_configured": True,
             "ai_source": source,
@@ -1500,7 +1807,7 @@ class AISettingsForm(QWidget):
             "ai_local_endpoint": self.local_endpoint.text().strip(),
             "ai_local_model": (LOCAL_MODEL_ID if self.local_mode.currentData() == "builtin"
                                else self.local_model.text().strip()),
-            "ai_local_auto_download": self.local_auto_dl.isChecked(),
+            "ai_local_auto_download": False,
             # 生效(后端读取)
             "ai_provider": provider,
             "ai_base_url": base_url,
@@ -1508,7 +1815,7 @@ class AISettingsForm(QWidget):
             "ai_model": model,
             # 通用
             "ai_permission": self.permission.currentData(),
-            "ai_response_style": self.response_style.currentData(),
+            "ai_response_style": self._settings.get("ai_response_style", "plain"),
             "context_window": self.context_window.value(),
             "ai_multimodal": self.vision_check.isChecked(),
             "ai_in_game": "on" if self.ai_in_game.isChecked() else "off",
@@ -1521,6 +1828,8 @@ class AISettingsForm(QWidget):
 class AIQuickSettingsForm(QWidget):
     """Small API-only setup shared by first-run onboarding and the AI dock."""
 
+    valuesChanged = Signal()
+
     def __init__(self, settings: dict, parent=None):
         super().__init__(parent)
         self.settings = dict(settings)
@@ -1532,15 +1841,16 @@ class AIQuickSettingsForm(QWidget):
         self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.model = QLineEdit(self)
         self.remote_models = QComboBox(self)
-        self.remote_models.addItem("获取到的模型…", None)
+        self.remote_models.addItem("点右侧「获取可用模型」后从这里挑…", None)
+        _setup_model_combo(self.remote_models, "输入关键字搜索模型…")   # 限高 + 可打字搜索
         self.remote_models.hide()
-        self.fetch_models_btn = QPushButton("获取模型", self)
-        self.fetch_models_btn.setToolTip("使用当前地址和密钥查询模型列表，不发送推理请求")
+        self.fetch_models_btn = QPushButton("获取可用模型", self)
+        self.fetch_models_btn.setToolTip("用当前地址和密钥查询该服务商的模型列表（不发送推理请求），结果可下拉选择")
         self._keys = dict(self.settings.get("ai_cloud_api_keys") or {})
         self.provider.setCurrentIndex(max(0, self.provider.findData(
-            self.settings.get("ai_cloud_provider", "deepseek"))))
-        self.base_url.setText(self.settings.get("ai_cloud_base_url", "https://api.deepseek.com/v1"))
-        self.model.setText(self.settings.get("ai_cloud_model", "deepseek-chat"))
+            self.settings.get("ai_cloud_provider", "siliconflow"))))
+        self.base_url.setText(self.settings.get("ai_cloud_base_url", "https://api.siliconflow.cn/v1"))
+        self.model.setText(self.settings.get("ai_cloud_model", "deepseek-ai/DeepSeek-V4-Flash"))
         provider = self.provider.currentData()
         self._active_provider = provider
         self._keys.setdefault(provider, self.settings.get("ai_cloud_api_key", ""))
@@ -1550,6 +1860,11 @@ class AIQuickSettingsForm(QWidget):
         self.remote_models.activated.connect(self._choose_remote_model)
         self.base_url.textChanged.connect(self.remote_models.hide)
         self.api_key.textChanged.connect(self.remote_models.hide)
+        # 任一字段改动 → 发 valuesChanged(供自动保存)
+        self.provider.currentIndexChanged.connect(self.valuesChanged.emit)
+        self.base_url.textChanged.connect(self._emit_values_changed)
+        self.api_key.textChanged.connect(self._emit_values_changed)
+        self.model.textChanged.connect(self._emit_values_changed)
         form = QFormLayout(self)
         form.addRow("服务商", self.provider)
         form.addRow("API 地址", self.base_url)
@@ -1559,8 +1874,22 @@ class AIQuickSettingsForm(QWidget):
         model_row.addWidget(self.fetch_models_btn)
         form.addRow("模型", model_row)
         form.addRow("", self.remote_models)
+        # 选型提示:直接告诉用户"多大够用",避免盲目挑大模型
+        hint = QLabel(
+            "选型提示：一般<b>模型越大越强、越新越强</b>。"
+            "但<b>比 DeepSeek-V4-Flash 更大基本没必要</b>——价格涨得快，对启动器场景已属过剩。<br>"
+            "免费档（Qwen3-8B、R1-Distill-7B 等）只有小模型水平，"
+            "<b>复杂推理、多步规划、模糊指令都不够用</b>，适合先试水。")
+        hint.setWordWrap(True)
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        from ui_style import muted_color as _muted_fn
+        hint.setStyleSheet(f"color: {_muted_fn()}; font-size: 11px;")
+        form.addRow("", hint)
         if self.provider.currentData() == "mimo":
             self.api_key.setToolTip("填写 Xiaomi MiMo 按量 API Key（sk-）；Token Plan 额度不适用于本启动器。")
+
+    def _emit_values_changed(self, *_):
+        self.valuesChanged.emit()
 
     def _provider_changed(self, *_):
         old = getattr(self, "_active_provider", None)
@@ -1576,7 +1905,7 @@ class AIQuickSettingsForm(QWidget):
             "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-3.7-flash"),
             "groq": ("https://api.groq.com/openai/v1", "openai/gpt-oss-20b"),
             "cerebras": ("https://api.cerebras.ai/v1", "gpt-oss-120b"),
-            "siliconflow": ("https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
+            "siliconflow": ("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Flash"),
             "zhipu": ("https://open.bigmodel.cn/api/paas/v4", "glm-4.7-flash"),
             "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
         }
@@ -1615,6 +1944,7 @@ class AIQuickSettingsForm(QWidget):
             self.remote_models.addItem("选择模型（列表不保证全部可调用）", None)
             for name in names:
                 self.remote_models.addItem(name, name)
+            _refresh_model_combo_search(self.remote_models)
             self.remote_models.show()
 
         def failure(error):
@@ -1650,23 +1980,36 @@ class AIQuickSettingsForm(QWidget):
 
 
 class AISettingsDialog(QDialog):
-    """Quick cloud API setup; advanced routing and permissions stay in Settings."""
+    """Quick cloud API setup; advanced routing and permissions stay in Settings.
+    改动即自动保存,无需手动点「保存」按钮。"""
 
-    def __init__(self, settings: dict, parent=None):
+    def __init__(self, settings: dict, parent=None, autosave=None):
         super().__init__(parent)
         self.setWindowTitle("AI 助手设置")
         self.setMinimumWidth(380)
         self.settings = dict(settings)
+        self._autosave = autosave          # (settings_dict) -> None;每次改动后回调持久化
         self.form = AIQuickSettingsForm(settings, self)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save)
-        buttons.accepted.connect(self.accept)
         layout = QVBoxLayout(self)
         layout.addWidget(self.form)
-        buttons.setToolTip("MiMo Token Plan 密钥不适用于本启动器。")
-        layout.addWidget(buttons)
+        hint = QLabel("改动会自动保存,无需点保存。")
+        hint.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+        layout.addWidget(hint)
+        # 表单任一字段变化 → 立即收集并自动保存
+        self.form.valuesChanged.connect(self._on_values_changed)
+
+    def _on_values_changed(self):
+        self.settings.update(self.form.values())
+        if self._autosave is not None:
+            self._autosave(self.settings)
+
+    def closeEvent(self, event):
+        # 关闭前兜底再存一次,确保最后一处改动不丢
+        self._on_values_changed()
+        super().closeEvent(event)
 
     def accept(self):
-        self.settings.update(self.form.values())
+        self._on_values_changed()
         super().accept()
 
 
@@ -1942,15 +2285,7 @@ class AIChatDock(QDockWidget):
         self.input.imagePasted.connect(self._add_image_data)
         self.input.recentClicked.connect(self._pick_recent_screenshots)
         # 顶部 Dock 标题与标签页合为一行；聊天页内只放策略与技能入口。
-        self.strategy_btn = QToolButton()
-        self.strategy_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.strategy_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.strategy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._rebuild_strategy_menu()
-        set_style(self.strategy_btn, lambda:
-            f"QToolButton {{ color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
-            f" border-radius: 6px; padding: 3px 8px; background: transparent; }}"
-            f"QToolButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
+        # AI 策略入口已移至发送键左边的「模型」面板(参考 Codex);顶部不再放独立策略按钮。
         skills_btn = QPushButton("技能与可选功能…")
         skills_btn.setToolTip("管理 AI 技能、运行辅助和实验性工作流")
         skills_btn.clicked.connect(self.open_skill_manager)
@@ -1975,7 +2310,6 @@ class AIChatDock(QDockWidget):
             f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
         top_row = QHBoxLayout()
         top_row.setContentsMargins(2, 0, 2, 0)
-        top_row.addWidget(self.strategy_btn)
         # 本地模型状态(未下载/下载中/已就绪/推理中),仅本地 provider 时显示
         self.local_status_label = QLabel("")
         self.local_status_label.setVisible(False)
@@ -1984,64 +2318,38 @@ class AIChatDock(QDockWidget):
         top_row.addStretch()
         top_row.addWidget(skills_btn)
 
-        # 文件权限:放在输入框附近,一眼可见、一键切换(不藏进二级菜单)
-        perm_btn = QPushButton("切换")
-        perm_btn.setFixedWidth(44)
-        perm_btn.setToolTip("只读：只能查看\n日常可写：安装 Mod、改游戏和启动器设置\n"
-                            "工作区可写：还允许生成插件、修改源码")
-        perm_btn.clicked.connect(self._cycle_permission)
-        set_style(perm_btn, lambda:
-            f"QPushButton {{ background: transparent; color: {muted_color()}; border: 1px solid {current_color('btn_border')};"
-            f" border-radius: 6px; padding: 3px 8px; }}"
-            f"QPushButton:hover {{ color: {text_color()}; border-color: {accent_color()}; }}")
-        self.perm_label = QLabel("")
-        self.response_style = ChoicePopupButton([
-            ("普通回答", "plain", "重点说明结果、影响和下一步。"),
-            ("技术详情", "technical", "附带日志证据、版本、路径和处理细节。"),
-        ], current=(1 if self.settings.get("ai_response_style") == "technical" else 0))
-        self.response_style.currentIndexChanged.connect(self._set_response_style)
-        self.confirmation_mode = ChoicePopupButton([
-            ("每项都确认（稳妥）", "per_action", "每次操作前都由你确认。"),
-            ("备份后连续处理（少打断）", "backup_continue", "先备份再连续处理；恢复旧状态、换实例或改变世界时仍会询问。"),
-        ], current=(1 if self.settings.get("ai_confirmation_mode") == "backup_continue" else 0))
-        self.confirmation_mode.setToolTip(
-            "每项都确认：每次修改前都询问。\n"
-            "备份后连续处理：先保存可恢复副本，再持续处理；"
-            "改用新实例、恢复旧状态或改变世界时仍会询问。")
-        self._refresh_confirmation_mode()
-        self.confirmation_mode.currentIndexChanged.connect(self._set_confirmation_mode)
-        self.input_preferences = QFrame(self.input)
-        self.input_preferences.setObjectName("inputPreferences")
-        self.input_preferences.setStyleSheet(
-            f"QFrame#inputPreferences {{ background: {current_color('panel_bg')};"
-            f" color: {text_color()}; border: 1px solid {current_color('panel_border')};"
-            " border-radius: 12px; }")
-        self.input_preferences.setFixedWidth(360)
-        pref_layout = QVBoxLayout(self.input_preferences)
-        pref_layout.setContentsMargins(12, 10, 12, 10)
-        pref_layout.setSpacing(8)
-        for label, control in (("回答方式", self.response_style),
-                               ("操作确认", self.confirmation_mode)):
-            pref_row = QHBoxLayout()
-            pref_row.addWidget(QLabel(label))
-            pref_row.addStretch()
-            pref_row.addWidget(control)
-            pref_layout.addLayout(pref_row)
-        self.input.preferences_panel = self.input_preferences
-        self.input.preferencesClicked.connect(self._toggle_input_preferences)
-        self.input_preferences.hide()
+        # 「偏好」气泡面板:操作确认 / 文件权限 两项收在一起,
+        # 从输入栏按钮弹出(Qt.Popup + 屏幕钳制,不会冲出窗口),点选即生效并保存。
+        self.preferences_popover = InputPreferencesPopover(self)
+        self.preferences_popover.add_option(
+            "response_style", "普通用户语言", "plain", "重点说明结果、影响和下一步。")
+        self.preferences_popover.add_option(
+            "response_style", "技术详情", "technical", "附带日志证据、版本、路径和处理细节。")
+        self.preferences_popover.add_option(
+            "confirmation_mode", "每项都确认", "per_action", "每次操作前都由你确认。")
+        self.preferences_popover.add_option(
+            "confirmation_mode", "备份后连续处理", "backup_continue",
+            "先备份再连续处理；恢复旧状态、换实例或改变世界时仍会询问。")
+        self.preferences_popover.add_option(
+            "permission", "只读", "readonly", "AI 只能查看,不能改任何文件。")
+        self.preferences_popover.add_option(
+            "permission", "日常可写", "launcher_write", "安装 Mod、改游戏和启动器设置(推荐)。")
+        self.preferences_popover.add_option(
+            "permission", "工作区可写", "workspace_write", "还允许生成插件、修改启动器源码;仅在让 AI 改 AMCL 本身时开启。")
+        self.preferences_popover.set_on_select(self._on_preference_selected)
+        self.input.preferencesClicked.connect(self._show_input_preferences)
 
-        perm_row = QHBoxLayout()
-        perm_row.setContentsMargins(2, 0, 2, 0)
-        perm_row.addWidget(QLabel("文件权限:"))
-        perm_row.addWidget(self.perm_label)
-        perm_row.addWidget(perm_btn)
-        perm_row.addStretch()
+        # 模型 + 思考程度入口(发送键左边,参考 Codex):选模型 + 调思考/模拟悟程度
+        self.model_effort_popover = ModelEffortPopover(self)
+        self.model_effort_popover.modelChanged.connect(self._on_input_model_changed)
+        self.model_effort_popover.effortChanged.connect(self._on_input_effort_changed)
+        self.model_effort_popover.strategyChanged.connect(self._set_strategy)
+        self.input.modelEffortClicked.connect(self._show_model_effort)
+
         audit_row = QHBoxLayout()
         audit_row.addStretch()
         audit_row.addWidget(action_log_btn)
         audit_row.addWidget(undo_btn)
-        self._update_permission_label()
 
         row = QVBoxLayout()
         row.setSpacing(4)
@@ -2066,7 +2374,7 @@ class AIChatDock(QDockWidget):
         task_row.addWidget(run_records)
         row.addLayout(task_row)
         # 局部紧凑样式，不受主窗口大按钮的最小宽度和内边距影响。
-        for button in (skills_btn, undo_btn, action_log_btn, perm_btn,
+        for button in (skills_btn, undo_btn, action_log_btn,
                        self.quote_button, stop_run, run_records):
             button.setStyleSheet(
                 f"QPushButton {{ background: transparent; color: {muted_color()};"
@@ -2132,7 +2440,6 @@ class AIChatDock(QDockWidget):
         self.focus_welcome.hide()
         chat_lay.addWidget(self.focus_welcome, 1)
         chat_lay.addWidget(self.history, 1)    # 历史区上下弹性伸缩
-        chat_lay.addLayout(perm_row)
         chat_lay.addLayout(audit_row)
         from ai_context_pins import ContextPins
         self.context_pins = ContextPins(self)
@@ -2416,37 +2723,8 @@ class AIChatDock(QDockWidget):
         s = self.settings.get("ai_strategy", "local_first") or "local_first"
         return s if s in STRATEGY_CYCLE else "local_first"
 
-    def _rebuild_strategy_menu(self, _=None):
-        """重建策略下拉菜单(当前档打勾),并刷新按钮文案。"""
-        menu = QMenu(self.strategy_btn)
-        menu.setStyleSheet(popup_menu_style())
-        cur = self._current_strategy()
-        for key in STRATEGY_CYCLE:
-            label = STRATEGY_LABELS.get(key, key)
-            act = menu.addAction(("✓ " if key == cur else "") + label)
-            act.setData(key)
-            act.triggered.connect(lambda _c, k=key: self._set_strategy(k))
-        menu.addSeparator()
-        menu.addAction("打开 AI 设置…", self._open_ai_settings)
-        self.strategy_btn.setMenu(menu)
-        self._refresh_strategy_btn()
-
-    def _refresh_strategy_btn(self):
-        """按当前策略刷新按钮文案与 tooltip。"""
-        if not hasattr(self, "strategy_btn"):
-            return
-        cur = self._current_strategy()
-        label = STRATEGY_LABELS.get(cur, cur)
-        self.strategy_btn.setText(f"策略: {label} ▾")
-        self.strategy_btn.setToolTip(
-            "点击切换 AI 策略:\n"
-            "· 本地优先(省钱) — 简单操作用本地,复杂任务转云端\n"
-            "· 云端优先(更强) — 一切走云端大模型\n"
-            "· 混合(平衡) — 规则分流 + 模型复核\n"
-            "(切换立即生效)")
-
     def _set_strategy(self, key: str):
-        """切换到某档策略:写 settings 并立即生效,刷新按钮。"""
+        """切换到某档策略:写 settings 并立即生效(由「模型」面板策略单选触发)。"""
         if key not in STRATEGY_CYCLE:
             return
         self.settings["ai_strategy"] = key
@@ -2456,7 +2734,6 @@ class AIChatDock(QDockWidget):
             save_settings(self.settings)
         except Exception:
             pass
-        self._rebuild_strategy_menu()
         self._append_system(f"AI 策略已切换为:{STRATEGY_LABELS.get(key, key)}(立即生效)")
 
     def _open_ai_settings(self):
@@ -2468,116 +2745,158 @@ class AIChatDock(QDockWidget):
             pass
 
     def _update_model_badge(self, vis):
-        """顶部策略按钮已由 _refresh_strategy_btn 维护;此方法保留给多模态 tooltip 追加。"""
-        if not hasattr(self, "strategy_btn"):
-            return
-        if self._local_enabled():
-            model = self.settings.get("ai_local_model") or self.settings.get("ai_model") or "未设置模型"
-            source = "本地模型(builtin)"
-        else:
-            eff = self._cloud_settings()
-            model = eff.get("ai_model") or "未设置模型"
-            source = "云端模型(" + (eff.get("ai_provider") or "cloud") + ")"
-        if len(model) > 26:
-            model = model[:24] + "…"
-        if vis is True:
-            badge = "支持看图(多模态)"
-        elif vis is False:
-            badge = "不支持看图"
-        else:
-            cur = bool(self.settings.get("ai_multimodal", False))
-            badge = f"图片输入:手动·{'开' if cur else '关'}"
-        cur = self._current_strategy()
-        base = (f"当前策略:{STRATEGY_LABELS.get(cur, cur)}\n"
-                f"当前模型:{model}\n来源:{source}\n多模态:{badge}\n"
-                f"(点按钮可切换策略)")
-        self.strategy_btn.setToolTip(base)
+        """顶部策略按钮已删除;此方法保留兼容(策略/模型信息现在在「模型」面板里)。"""
+        return
 
     def _vision_on(self) -> bool:
         return bool(self.settings.get("ai_multimodal", False))
 
-    # ---- 文件权限:输入框附近一键切换 ----
-    def _update_permission_label(self):
-        cur = self.settings.get("ai_permission", "launcher_write")
-        if cur == "workspace_write":
-            self.perm_label.setText("工作区可写")
-            self.perm_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
-        elif cur == "launcher_write":
-            self.perm_label.setText("日常可写")
-            self.perm_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
-        else:
-            self.perm_label.setText("只读")
-            self.perm_label.setStyleSheet(f"color: {muted_color()};")
+    # ---- 「偏好」气泡面板:回答方式 / 操作确认 / 文件权限 ----
+    def _sync_preference_popover(self):
+        """把当前设置值回填到偏好面板的选中卡片(打开前/外部改设置后同步)。"""
+        self.preferences_popover.set_current(
+            "response_style", self.settings.get("ai_response_style", "plain"))
+        self.preferences_popover.set_current(
+            "confirmation_mode", self.settings.get("ai_confirmation_mode", "per_action"))
+        self.preferences_popover.set_current(
+            "permission", self.settings.get("ai_permission", "launcher_write"))
 
-    def _cycle_permission(self):
-        """切换 只读 ↔ 工作区可写,立即保存并同步主窗口。
-        从只读 → 工作区可写是"提升权限",弹【二级确认 + 免责声明】,确认后才生效。"""
-        cur = self.settings.get("ai_permission", "launcher_write")
-        nxt = {"readonly": "launcher_write", "launcher_write": "workspace_write",
-               "workspace_write": "readonly"}.get(cur, "launcher_write")
-        # 只读 → 可写:需二次确认 + 免责声明
-        if nxt == "workspace_write":
-            from PySide6.QtWidgets import QMessageBox
-            plain = self.settings.get("ai_response_style", "plain") == "plain"
-            cap = "允许 AI 修改启动器程序？" if plain else "🛡️ 确认给 AI「工作区可写」权限?"
-            disc = (("修游戏、装 Mod 和改游戏设置不需要这个权限。\n\n"
-                     "开启后，AI 还可以修改启动器功能和插件。只有你打算让 AI 改启动器本身时才建议开启。\n\n"
-                     "是否允许？") if plain else
-                    ("【免责声明】\n一旦开启，AI 就能在启动器程序、设置和游戏目录内创建、修改或删除文件。\n\n"
-                     "可能涉及插件、源码和存档；需要稳妥时可切回只读。\n\n确定要开启吗？"))
-            ret = QMessageBox.question(self, cap, disc,
-                                       QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                       QMessageBox.StandardButton.No)
-            if ret != QMessageBox.StandardButton.Yes:
-                return   # 用户取消:保持只读
-        self.settings["ai_permission"] = nxt
-        self.main.settings["ai_permission"] = nxt
-        save_settings(self.settings)
-        self._update_permission_label()
-        labels = {"readonly": "只读（AI 不能改文件）",
-                  "launcher_write": "日常可写（AMCL 与 .minecraft）",
-                  "workspace_write": "工作区可写（可生成插件/改源码）"}
-        self._append_system(f"文件权限已切换为：{labels[nxt]}")
+    def _show_input_preferences(self):
+        btn = self.input.preferences_btn
+        self._sync_preference_popover()
+        anchor = btn.mapToGlobal(btn.rect().bottomLeft())
+        self.preferences_popover.pop_at(anchor)
+
+    # ---- 模型 + 思考程度入口(发送键左边) ----
+    def _available_models(self) -> list:
+        """当前可选模型列表 [(model_id, label)];内置固定一张,云端用已配服务商/模型。"""
+        items = []
+        try:
+            import model_registry
+            from local_ai import DEFAULT_MODEL_ID
+            ready = model_registry.is_downloaded(DEFAULT_MODEL_ID)
+            items.append((f"builtin:{DEFAULT_MODEL_ID}",
+                          f"内置本地模型{'' if ready else '（未下载）'}"))
+        except Exception:
+            pass
+        try:
+            prov = self.settings.get("ai_cloud_provider") or "cloud"
+            model = self.settings.get("ai_cloud_model") or ""
+            key = (self.settings.get("ai_cloud_api_key") or "").strip()
+            if model or key:
+                items.append((f"cloud:{prov}:{model}",
+                              f"{prov} · {model or '默认模型'}"))
+        except Exception:
+            pass
+        return items
+
+    def _current_model_id(self) -> str:
+        if self._local_enabled():
+            try:
+                from local_ai import DEFAULT_MODEL_ID
+                return f"builtin:{DEFAULT_MODEL_ID}"
+            except Exception:
+                return "builtin"
+        prov = self.settings.get("ai_cloud_provider") or "cloud"
+        return f"cloud:{prov}:{self.settings.get('ai_cloud_model') or ''}"
+
+    def _show_model_effort(self):
+        btn = self.input.model_btn
+        is_builtin = self._local_enabled()
+        self.model_effort_popover.set_models(self._available_models(), self._current_model_id())
+        self.model_effort_popover.set_effort(
+            self.settings.get("ai_reasoning_effort", "medium"), is_builtin=is_builtin)
+        self.model_effort_popover.set_strategies(
+            [(k, STRATEGY_LABELS.get(k, k)) for k in STRATEGY_CYCLE],
+            self._current_strategy())
+        anchor = btn.mapToGlobal(btn.rect().bottomLeft())
+        self.model_effort_popover.pop_at(anchor)
+
+    def _on_input_effort_changed(self, effort: str):
+        from settings import update_settings
+        if effort not in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+            return
+        update_settings(lambda live: live.__setitem__("ai_reasoning_effort", effort))
+        self.settings["ai_reasoning_effort"] = effort
+        self.main.settings["ai_reasoning_effort"] = effort
+        if getattr(self.main, "settings_center", None) is not None:
+            self.main.settings_center.settings["ai_reasoning_effort"] = effort
+
+    def _on_input_model_changed(self, model_id: str):
+        """切换模型:builtin=内置本地,cloud:<prov>:<model>=云端。写回设置并刷新 UI。"""
+        try:
+            if model_id.startswith("builtin:"):
+                self.settings["ai_source"] = "local"
+                self.settings["ai_local_mode"] = "builtin"
+                self.settings["ai_provider"] = "local_builtin"
+            elif model_id.startswith("cloud:"):
+                _, prov, model = model_id.split(":", 2)
+                self.settings["ai_source"] = "cloud"
+                self.settings["ai_provider"] = prov
+                self.settings["ai_cloud_provider"] = prov
+                if model:
+                    self.settings["ai_cloud_model"] = model
+                    self.settings["ai_model"] = model
+            from settings import save_settings
+            self.main.settings.update(self.settings)
+            save_settings(self.settings)
+            self.apply_settings(self.settings)
+        except Exception:
+            pass
+
+    def _on_preference_selected(self, group: str, value):
+        """偏好面板任一项被点选:立即生效并保存到设置(三处同步)。"""
+        from settings import update_settings
+        if group == "response_style":
+            if value not in {"plain", "technical"}:
+                return
+            key = "ai_response_style"
+        elif group == "confirmation_mode":
+            if value not in {"per_action", "backup_continue"}:
+                return
+            key = "ai_confirmation_mode"
+        elif group == "permission":
+            # 提升到「工作区可写」需二次确认 + 免责声明(与旧开关一致)
+            if value == "workspace_write" and \
+                    self.settings.get("ai_permission", "launcher_write") != "workspace_write":
+                if not self._confirm_workspace_write():
+                    self.preferences_popover.set_current(
+                        "permission", self.settings.get("ai_permission", "launcher_write"))
+                    return
+            elif value not in {"readonly", "launcher_write", "workspace_write"}:
+                return
+            key = "ai_permission"
+        else:
+            return
+        update_settings(lambda live: live.__setitem__(key, value))
+        self.settings[key] = value
+        self.main.settings[key] = value
+        if getattr(self.main, "settings_center", None) is not None:
+            self.main.settings_center.settings[key] = value
+        if key == "ai_permission":
+            self._append_system("文件权限已切换为：" + {
+                "readonly": "只读（AI 不能改文件）",
+                "launcher_write": "日常可写（AMCL 与 .minecraft）",
+                "workspace_write": "工作区可写",
+            }[value])
+
+    def _confirm_workspace_write(self) -> bool:
+        """给 AI「工作区可写」是提升权限:弹二级确认 + 免责声明,确认后才生效。"""
+        from PySide6.QtWidgets import QMessageBox
+        plain = self.settings.get("ai_response_style", "plain") == "plain"
+        cap = "允许 AI 修改启动器程序？" if plain else "🛡️ 确认给 AI「工作区可写」权限?"
+        disc = (("修游戏、装 Mod 和改游戏设置不需要这个权限。\n\n"
+                 "开启后，AI 还可以修改启动器功能和插件。只有你打算让 AI 改启动器本身时才建议开启。\n\n"
+                 "是否允许？") if plain else
+                ("【免责声明】\n一旦开启，AI 就能在启动器程序、设置和游戏目录内创建、修改或删除文件。\n\n"
+                 "可能涉及插件、源码和存档；需要稳妥时可切回只读。\n\n确定要开启吗？"))
+        ret = QMessageBox.question(self, cap, disc,
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        return ret == QMessageBox.StandardButton.Yes
 
     def _refresh_confirmation_mode(self):
-        mode = self.settings.get("ai_confirmation_mode", "per_action")
-        index = self.confirmation_mode.findData(mode)
-        self.confirmation_mode.blockSignals(True)
-        self.confirmation_mode.setCurrentIndex(index if index >= 0 else 0)
-        self.confirmation_mode.blockSignals(False)
-
-    def _toggle_input_preferences(self):
-        panel = self.input_preferences
-        if panel.isVisible():
-            panel.hide()
-            return
-        panel.adjustSize()
-        panel.move(6, max(6, self.input.height() - self.input.preferences_btn.height() - 18 - panel.height()))
-        panel.show()
-        panel.raise_()
-        self.input.preferences_btn.raise_()
-
-    def _set_response_style(self, _index: int):
-        style = self.response_style.currentData()
-        if style not in {"plain", "technical"}:
-            return
-        from settings import update_settings
-        update_settings(lambda live: live.__setitem__("ai_response_style", style))
-        self.settings["ai_response_style"] = style
-        self.main.settings["ai_response_style"] = style
-        if getattr(self.main, "settings_center", None) is not None:
-            self.main.settings_center.settings["ai_response_style"] = style
-
-    def _set_confirmation_mode(self, _index: int):
-        mode = self.confirmation_mode.currentData()
-        if mode not in {"per_action", "backup_continue"}:
-            return
-        from settings import update_settings
-        update_settings(lambda live: live.__setitem__("ai_confirmation_mode", mode))
-        self.settings["ai_confirmation_mode"] = mode
-        self.main.settings["ai_confirmation_mode"] = mode
-        if getattr(self.main, "settings_center", None) is not None:
-            self.main.settings_center.settings["ai_confirmation_mode"] = mode
+        self._sync_preference_popover()
 
     # ---- 聊天记录·归档 tab ----
     def _build_archive_tab(self) -> QWidget:
@@ -2990,17 +3309,21 @@ class AIChatDock(QDockWidget):
                 context = build_launcher_context()
             except Exception:
                 context = ""
-            call = engine.tool_call(text, context=context)
+            from local_ai import two_stage_tool_call, reasoning_effort_from_settings
+            call = two_stage_tool_call(text, context=context, engine=engine,
+                                       effort=reasoning_effort_from_settings())
             name = call.get("name", "")
             args = call.get("arguments", {})
             if not name:
                 return ("(本地模型未给出明确动作)", False)
-            if on_tool:
-                on_tool(name, args, "(本地推理)")
             result = executor(name, args)
-            # 工具结果作为回复展示(本地单轮,不做多轮,规划 §0)
             text_result = str(result)
-            reply = f"✅ 已执行「{name}」:\n{text_result}"
+            if on_tool:
+                on_tool(name, args, text_result)   # 工具卡片显示真实结果
+            # 转人话:按混合路由把工具结果总结成正式回答,不再裸奔原始结果
+            reply = _synthesize_tool_reply(
+                text, name, text_result, self.settings,
+                context=context, executor=executor, engine=engine)
             return (reply, True)
         except PermissionDenied:
             return ("权限拒绝:当前是只读权限,不能修改文件(可在 AI 设置中改为\"工作区可写\")", True)
@@ -3135,7 +3458,7 @@ class AIChatDock(QDockWidget):
             return "本地模型:下载中…"
         if ready:
             return "本地模型:已就绪"
-        return "本地模型:未下载\n(首次使用会自动下载)"
+        return "本地模型:未下载\n(在设置 → AI 助手里点「下载模型」)"
 
     def _on_local_status(self, text: str):
         """主线程:更新顶部本地模型状态标签。"""
@@ -3472,7 +3795,7 @@ class AIChatDock(QDockWidget):
                         if self._local_model_ready():
                             reply, ok = self._local_tool_call(text, executor, on_tool)
                             if ok:
-                                if tools_called:
+                                if not tools_called:
                                     self.signals.no_tool.emit()
                                 self.signals.reply.emit(reply)
                                 self.signals.ring_update.emit()
@@ -3798,27 +4121,23 @@ class AIChatDock(QDockWidget):
     def apply_settings(self, settings: dict):
         """同步已保存配置及所有依赖配置的面板显示。"""
         self.settings = settings
-        self._rebuild_strategy_menu()
-        self._update_permission_label()
-        response_index = self.response_style.findData(settings.get("ai_response_style", "plain"))
-        self.response_style.blockSignals(True)
-        self.response_style.setCurrentIndex(response_index if response_index >= 0 else 0)
-        self.response_style.blockSignals(False)
-        self._refresh_confirmation_mode()
+        self._sync_preference_popover()
         self.update_vision_ui()
         self.update_local_status()
         self.maybe_preload_local()
 
     def open_settings(self):
-        dlg = AISettingsDialog(self.settings, self)
-        if dlg.exec():
-            self.settings = dlg.settings
-            self.main.settings = dlg.settings
+        def autosave(live: dict):
+            # 表单每次改动 → 立即落盘并同步三处(主窗/设置中心/dock),无需手动保存
+            self.settings = live
+            self.main.settings = live
             if getattr(self.main, "settings_center", None) is not None:
-                self.main.settings_center.settings.update(dlg.settings)
-            save_settings(dlg.settings)
-            self.apply_settings(dlg.settings)
+                self.main.settings_center.settings.update(live)
+            save_settings(live)
+            self.apply_settings(live)
             settings_center = getattr(self.main, "settings_center", None)
             if settings_center is not None and hasattr(settings_center, "refresh_ai_config_visibility"):
                 settings_center.refresh_ai_config_visibility()
-            self._append_system("AI 设置已保存")
+
+        dlg = AISettingsDialog(self.settings, self, autosave=autosave)
+        dlg.exec()   # 改动已实时自动保存;关闭即结束,无需再点保存

@@ -45,11 +45,11 @@ DEFAULTS = {
                                  # 之后任何时刻都能在 设置→界面→重播引导教程 重播。
                                  # 这里主要记住"是否已首次决定过",避免每次都弹。
     # AI 助手(OpenAI 兼容接口)
-    "ai_provider": "deepseek",
+    "ai_provider": "siliconflow",
     "ai_configured": False,
-    "ai_base_url": "https://api.deepseek.com/v1",
+    "ai_base_url": "https://api.siliconflow.cn/v1",
     "ai_api_key": "",
-    "ai_model": "deepseek-chat",
+    "ai_model": "deepseek-ai/DeepSeek-V4-Flash",
     # 默认仅允许启动器数据(AMCL)和游戏目录(.minecraft)内的正常操作；每项 AI 动作仍会先展示预览确认。
     "ai_permission": "launcher_write",    # AI 文件权限:readonly / launcher_write / workspace_write
     "ai_response_style": "plain",          # plain=普通用户语言 / technical=技术详情
@@ -71,14 +71,16 @@ DEFAULTS = {
     "ai_cloud_tool_log": True,                     # 云端工具调用训练日志:仅本机 JSONL，可在设置关闭
     # ---- 云端 / 本地 两组独立设置(设置 UI 分开,ai_source 决定当前用哪边)----
     "ai_source": "cloud",          # 当前模型来源:cloud(云端)/ local(本地)
-    # 云端模型(ai_source=cloud 时生效;DeepSeek/OpenRouter/硅基流动/智谱/通义/自定义)
-    "ai_cloud_provider": "deepseek",
-    "ai_cloud_base_url": "https://api.deepseek.com/v1",
+    # 云端模型(ai_source=cloud 时生效;硅基流动(默认)/DeepSeek/OpenRouter/智谱/通义/自定义)
+    "ai_cloud_provider": "siliconflow",
+    "ai_cloud_base_url": "https://api.siliconflow.cn/v1",
     "ai_cloud_api_key": "",
-    "ai_cloud_model": "deepseek-chat",
+    "ai_cloud_model": "deepseek-ai/DeepSeek-V4-Flash",
     # 本地模型(ai_source=local 时生效):builtin(内置)/ ollama / lmstudio
     "ai_local_mode": "builtin",
     "ai_local_endpoint": "",       # ollama/lmstudio 的服务地址(内置模型留空)
+    "ai_local_gpu": "auto",        # 内置本地模型推理后端:auto(优先 Vulkan)/ cpu / vulkan
+    "ai_reasoning_effort": "medium",  # 思考强度(none/minimal/low/medium/high/xhigh):云端=思考程度,本地=模拟悟深度
     # 下载镜像策略(见 downloader.MIRROR_STRATEGIES):
     #   smart_official 官方优先(官方慢/失败时换镜像) / mirror_first 镜像优先(失败回官方)
     #   official_only 只用官方 / mirror_only 只用镜像

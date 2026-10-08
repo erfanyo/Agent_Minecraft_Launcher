@@ -868,16 +868,27 @@ class InstanceManagerDialog(QWidget):
 
     # ---------- 指令库(模板 + 每实例自定义指令) ----------
     def _build_command_tab(self) -> QWidget:
-        from command_templates import COMMAND_TEMPLATES
-        self.cmd_templates = COMMAND_TEMPLATES
+        from command_templates import (BUCKET_NAME, BUCKET_TEMPLATES,
+                                       COMMAND_TEMPLATES, version_bucket)
+        # 按实例版本选模板表:1.20.5+ 物品改成「组件方括号」,与老 NBT 写法完全不同。
+        # 早期这里固定用 COMMAND_TEMPLATES(≤1.20.4 的 NBT),于是 1.21.1 实例从指令库
+        # 插进指令框的附魔/装备指令必然失败 —— 也就是"复杂指令一拼就错"的来源之一。
+        bucket = version_bucket(getattr(self, "_inst_base", "") or "")
+        self.cmd_templates = BUCKET_TEMPLATES.get(bucket) or COMMAND_TEMPLATES
         tab = QWidget()
 
         # 模板区:分类下拉 + 模板列表
         self.cmd_cat_combo = QComboBox()
-        self.cmd_cat_combo.addItems(list(COMMAND_TEMPLATES.keys()))
+        self.cmd_cat_combo.addItems(list(self.cmd_templates.keys()))
         self.cmd_template_list = QListWidget()
         self.cmd_template_list.currentItemChanged.connect(self._cmd_template_selected)
         left = QVBoxLayout()
+        ver_hint = QLabel(
+            f"模板已按实例版本适配:{getattr(self, '_inst_base', '') or '未知版本'}"
+            f" → {BUCKET_NAME.get(bucket, '')}")
+        ver_hint.setWordWrap(True)
+        ver_hint.setStyleSheet(hint_style())
+        left.addWidget(ver_hint)
         left.addWidget(QLabel("模板分类:"))
         left.addWidget(self.cmd_cat_combo)
         left.addWidget(QLabel("指令模板:"))
@@ -1164,14 +1175,35 @@ class InstanceManagerDialog(QWidget):
                 "再回来一键配置。")
 
     def _one_click_bridge(self):
-        """一键配置 bridge-mod(本地指令口,推荐):委托主窗口执行"""
-        parent = self.parent()
-        if parent is not None and hasattr(parent, "_one_click_bridge_for"):
-            parent._one_click_bridge_for({"id": self.inst_id,
-                                          "base": self._inst_base,
-                                          "loader": self._inst_loader})
-        else:
-            self.config_status.setText("请在主窗口「我的版本」里对实例执行一键配置")
+        """一键配置 bridge-mod(本地指令口,推荐):委托主窗口执行。
+
+        注意(踩坑):本页是被 addTab/addWidget 嵌进主窗口的,``self.parent()`` 并不等于
+        主窗口;实例详情又是 ``InstanceManagerDialog()`` 无 parent 创建的,于是早期实现
+        ``hasattr(self.parent(), "_one_click_bridge_for")`` 永远不成立 → 落到 else 分支,
+        只把下面那行状态小字改掉、**不弹任何对话框**(用户看到的就是"点了没反应、
+        说好的确认框也没有")。现在改为沿父链向上找主窗口,并保证一定有可见反馈。
+        """
+        handler = self._bridge_handler()
+        if handler is not None:
+            handler._one_click_bridge_for({"id": self.inst_id,
+                                           "base": self._inst_base,
+                                           "loader": self._inst_loader})
+            return
+        QMessageBox.information(
+            self, "一键配置 · bridge-mod",
+            "请在主窗口「我的版本」页使用「一键配置 ▾ → 一键配置 bridge-mod」。\n"
+            "(此处未能定位到主窗口,可能是从独立窗口打开的实例详情)")
+
+    def _bridge_handler(self):
+        """沿 QObject 父链找到带 _one_click_bridge_for 的主窗口(嵌入层级可能有多层)。"""
+        obj = self.parent()
+        for _ in range(12):
+            if obj is None:
+                return None
+            if hasattr(obj, "_one_click_bridge_for"):
+                return obj
+            obj = obj.parent()
+        return None
 
     def _one_click_rcon(self):
         """一键配置 RCON(临时方案,需对局域网开放)"""

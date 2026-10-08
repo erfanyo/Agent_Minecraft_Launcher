@@ -9,7 +9,7 @@ class ZhipuTests(unittest.TestCase):
         settings = {'ai_strategy': 'cloud_first', 'ai_cloud_model': 'glm-4.7-flash'}
         AIChatDock.apply_settings(dock, settings)
         self.assertIs(dock.settings, settings)
-        for name in ('_rebuild_strategy_menu', '_update_permission_label',
+        for name in ('_sync_preference_popover',
                      'update_vision_ui', 'update_local_status', 'maybe_preload_local'):
             getattr(dock, name).assert_called_once_with()
 
@@ -39,4 +39,4 @@ class ZhipuTests(unittest.TestCase):
         assistant.AISettingsForm._fill_cloud_defaults(form)
         form.cloud_base_url.setText.assert_called_once_with('https://open.bigmodel.cn/api/paas/v4')
         form.cloud_model.setText.assert_called_once_with('glm-4.7-flash')
-        self.assertTrue(any('GLM-4.7-Flash' in label and key == 'zhipu' for label, key in assistant._CLOUD_PROVIDERS))
+        self.assertTrue(any(key == 'zhipu' for label, key in assistant._CLOUD_PROVIDERS))

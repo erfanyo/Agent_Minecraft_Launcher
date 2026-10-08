@@ -89,21 +89,31 @@ public class LocalBridgeServer {
     }
 
     private void handle(Socket client) {
-        try (client;
-             BufferedReader in = new BufferedReader(
-                     new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
-             OutputStream out = client.getOutputStream()) {
+        OutputStream out = null;
+        try {
+            BufferedReader in = new BufferedReader(
+                    new InputStreamReader(client.getInputStream(), StandardCharsets.UTF_8));
+            out = client.getOutputStream();
             String line = in.readLine();
-            if (line == null || line.isBlank()) return;
+            if (line == null || line.isBlank()) {
+                closeQuietly(client);
+                return;
+            }
             JsonObject req;
             try {
                 req = new Gson().fromJson(line, JsonObject.class);
             } catch (Exception e) {
+                closeQuietly(client);
                 return;
             }
-            if (req == null) return;
+            if (req == null) {
+                closeQuietly(client);
+                return;
+            }
             if (!token.equals(req.get("token").getAsString())) {
-                out.write(("{\"error\":\"bad token\"}\n").getBytes(StandardCharsets.UTF_8));
+                out.write("{\"error\":\"bad token\"}\n".getBytes(StandardCharsets.UTF_8));
+                out.flush();
+                closeQuietly(client);
                 return;
             }
             String command = req.has("command") ? req.get("command").getAsString() : "";
@@ -111,10 +121,17 @@ public class LocalBridgeServer {
             String asPlayer = req.has("as_player") ? req.get("as_player").getAsString() : "";
             BridgeIO.log("bridge got command: " + command
                     + (asPlayer.isEmpty() ? "" : " (as_player=" + asPlayer + ")"));
-            if (command.isBlank()) return;
+            if (command.isBlank()) {
+                closeQuietly(client);
+                return;
+            }
 
+            final OutputStream replyOut = out;
             CommandBridgeSource sink = new CommandBridgeSource(seq, command, server);
-            // 服务器线程执行命令(execute 在主线程跑,避免并发问题)
+            // 服务器线程执行命令(execute 在主线程跑,避免并发问题)。
+            // ⚠ 坑:不能在这里用 try-with-resources 关 client —— 命令是异步排队的,
+            // handle 一旦返回连接就被关,结果永远写不回去,启动器只能收到空响应
+            // (表现就是"说发了指令,但游戏没执行/没反馈")。改由任务自己写完再关。
             server.execute(() -> {
                 try {
                     // 默认:服务端控制台身份(权限 level 2,能用 /op 等高级指令)
@@ -122,23 +139,35 @@ public class LocalBridgeServer {
                     // 可选:以在线玩家身份执行(位置/权限/@p 按玩家)
                     if (!asPlayer.isEmpty()) {
                         ServerPlayer p = findPlayer(asPlayer);
-                        if (p != null) {
-                            source = source.withEntity(p).withSource(p);
-                        } else {
+                        if (p == null) {
                             sink.fail("as_player 指定的玩家不在线: " + asPlayer);
-                            sink.flushTo(out, server);
                             return;
                         }
+                        source = source.withEntity(p).withSource(p);
                     }
                     source = source.withSource(sink);
-                    Commands commands = server.getCommands();
-                    commands.performPrefixedCommand(source, command);
-                    sink.flushTo(out, server);
+                    server.getCommands().performPrefixedCommand(source, command);
+                    // performPrefixedCommand 是 void(拿不到执行结果数),但语法/权限错误会以
+                    // CommandSyntaxException 抛出并落到下面的 fail();能正常返回即说明命令被接受。
+                    // 注意:早前这里没有任何 markResult → success 恒为 false,启动器把执行成功的
+                    // 指令也报成"⚠️ 命令未执行",玩家会以为没生效。
+                    sink.markResult(true);
                 } catch (Exception e) {
                     sink.fail(e.toString());
-                    sink.flushTo(out, server);
+                } finally {
+                    sink.flushTo(replyOut, server);
+                    closeQuietly(client);
                 }
             });
+        } catch (Exception e) {
+            BridgeIO.log("bridge handle error: " + e);
+            closeQuietly(client);
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            if (socket != null) socket.close();
         } catch (IOException ignored) {
         }
     }

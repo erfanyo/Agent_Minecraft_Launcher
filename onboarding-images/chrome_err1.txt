@@ -1,0 +1,2 @@
+[1004/184336.989:ERROR:third_party\crashpad\crashpad\client\crashpad_client_win.cc:421] OpenProcess: 拒绝访问。 (0x5)
+[1004/184337.061:ERROR:chrome\app\chrome_main.cc:204] Multiple targets are not supported in headless mode.

@@ -48,6 +48,20 @@ def installer_source(loader, mc, version):
     raise ValueError('自动补全目前支持 Forge / NeoForge。')
 
 
+def installer_sources(loader, mc, version):
+    """安装器下载源列表(官方优先)。
+
+    NeoForge 官方 maven 在国内常被墙/临时不可用,官方 CDN 镜像
+    (neoforged.forgecdn.net)结构一致,作为兜底源避免一次 404 直接失败。
+    """
+    primary = installer_source(loader, mc, version)
+    if loader == 'neoforge':
+        return [primary,
+                'https://neoforged.forgecdn.net/releases/net/neoforged/neoforge/'
+                f'{version}/neoforge-{version}-installer.jar']
+    return [primary]
+
+
 def _digest(path):
     h = hashlib.sha256()
     with open(path, 'rb') as stream:
@@ -57,7 +71,8 @@ def _digest(path):
 
 
 def install_server_runtime(root, loader, mc, version, java, status=lambda _: None):
-    source = installer_source(loader, mc, version)
+    sources = installer_sources(loader, mc, version)
+    source = sources[0]
     root = Path(root).resolve(strict=True)
     major, error = java_version_probe(java)
     if error:
@@ -66,16 +81,39 @@ def install_server_runtime(root, loader, mc, version, java, status=lambda _: Non
     if major < minimum or (maximum and major > maximum):
         raise ValueError(f'Java {major} 与 MC {mc} 不兼容，请重新选择 Java。')
     status('正在从官方 Maven 获取安装器校验值…')
-    response = requests.get(source + '.sha1', timeout=(10, 30), allow_redirects=False)
-    response.raise_for_status()
-    checksum = response.text.strip()
-    if not re.fullmatch(r'[a-fA-F0-9]{40}', checksum):
-        raise ValueError('官方未返回有效 SHA-1，已停止，不运行未校验安装器。')
+    checksum = None
+    last_error = None
+    for candidate in sources:
+        try:
+            response = requests.get(candidate + '.sha1', timeout=(10, 30),
+                                    allow_redirects=False)
+            response.raise_for_status()
+            value = response.text.strip()
+            if not re.fullmatch(r'[a-fA-F0-9]{40}', value):
+                raise ValueError('官方未返回有效 SHA-1，已停止，不运行未校验安装器。')
+        except Exception as exc:
+            last_error = exc
+            continue
+        checksum = value
+        source = candidate
+        break
+    if checksum is None:
+        raise last_error
     with tempfile.TemporaryDirectory(prefix='.amcl-runtime-', dir=root.parent) as temporary:
         staging = Path(temporary)
         installer = staging / 'installer.jar'
         status('正在下载安装器并校验…')
-        download_with_mirror(source, str(installer), sha1=checksum, strategy='official_only')
+        last_download = None
+        for candidate in [source] + [s for s in sources if s != source]:
+            try:
+                download_with_mirror(candidate, str(installer), sha1=checksum,
+                                     strategy='official_only')
+                last_download = None
+                break
+            except Exception as exc:
+                last_download = exc
+        if last_download is not None:
+            raise last_download
         runtime = staging / 'runtime'
         runtime.mkdir()
         environment = dict(os.environ)

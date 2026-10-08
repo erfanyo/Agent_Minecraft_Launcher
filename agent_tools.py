@@ -16,7 +16,15 @@ from backup import backup_instance as _backup_impl
 from instances import scan_instances
 from loaders import install_loader
 from modpack import _ensure_base as ensure_base
-from modrinth import download_mod, get_project, search_mods_cn
+from modrinth import download_mod, get_mod_version, get_project, search_mods_cn
+from resource_tools import (
+    install_resource_pack,
+    install_shader,
+    list_resource_packs,
+    list_shaders,
+    search_resource_packs,
+    search_shaders,
+)
 from settings import load_settings, save_settings
 
 # 可选 Mod 清单(与 GUI 共用;定义在这里避免 CLI 依赖 Qt)
@@ -26,6 +34,11 @@ OPTIMIZE_MODS = {
     "forge": ["embeddium", "ferrite-core"],
     "neoforge": ["sodium", "lithium", "ferrite-core"],
 }
+# Sodium 的 Modrinth 项目 id:Iris 把它列为 required 依赖,且两者必须精确配对
+# (Iris 的 compat mixin 直接引用 Sodium 内部类,版本不符会在进世界时崩)。
+SODIUM_PROJECT_ID = "AANobbMI"
+_SODIUM_JAR_MARKERS = ("sodium-neoforge-", "sodium-fabric-", "sodium-forge-")
+_SHADER_SLUGS = set(SHADER_MODS.values())          # {"iris", "oculus"}
 
 
 # ---------------- 读取类(只读) ----------------
@@ -437,6 +450,9 @@ def install_mod(slug: str, instance: str, version: str = "",
                             progress_callback=progress_callback,
                             strict=os.path.isfile(os.path.join(game_dir, 'diagnostic_snapshots', instance, 'constraint.json')))
     if filename:
+        if slug in _SHADER_SLUGS:
+            # 光影要按它声明的 Sodium 版本配套装,否则会装出"进世界必崩"的组合
+            _install_shader_dependencies(slug, gv, loader, mods_dir)
         return f"已安装 {filename} 到 {instance}"
     return (f"错误:{slug} 没有 {gv}+{loader} 的"
             f"{'指定版本' if version else '可用'}版本")
@@ -500,7 +516,72 @@ def install_mods(slugs: list[str] | str, instance: str, game_dir: str | None = N
                     results[s] = f"• {s}: 安装失败:{type(e).__name__}: {e} ❌"
     lines = [results[str(s)] for s in slugs]
     ok = sum(1 for l in lines if "已安装" in l)
+    # 光影装完后按声明补齐/锁定 Sodium:放在并行下载之后做,避免和下载线程抢同一文件
+    for s in slugs:
+        if "已安装" not in results.get(str(s), ""):
+            continue
+        slug = _resolve_slug(str(s))
+        if slug in _SHADER_SLUGS:
+            _install_shader_dependencies(slug, gv, loader, mods_dir)
     return f"共 {len(slugs)} 个,成功 {ok} 个:\n" + "\n".join(lines)
+
+
+def _disable_conflicting_sodium_jars(mods_dir: str, keep_name: str,
+                                     status: Callable = print) -> None:
+    """把 mods 里其它版本的 Sodium 改成 .disabled(可回退)。
+
+    两个 Sodium 并存时加载哪个取决于文件名顺序,极易复现"一进世界就崩";
+    这里只动 sodium-neoforge-/sodium-fabric-/sodium-forge- 这类本体 jar,
+    不会误伤 sodium-extra 等附属模组。
+    """
+    try:
+        names = os.listdir(mods_dir)
+    except OSError:
+        return
+    for name in names:
+        lowered = name.lower()
+        if lowered == keep_name.lower() or not lowered.endswith(".jar"):
+            continue
+        if not any(marker in lowered for marker in _SODIUM_JAR_MARKERS):
+            continue
+        try:
+            os.replace(os.path.join(mods_dir, name),
+                       os.path.join(mods_dir, name + ".disabled"))
+            status(f"已停用版本不匹配的 {name}(改名 .disabled,可回退)")
+        except OSError:
+            pass
+
+
+def _install_shader_dependencies(shader_slug: str, version: str, loader: str,
+                                 mods_dir: str, status: Callable = print) -> None:
+    """按光影声明的 required 依赖安装「锁定版本」的 Sodium。
+
+    Iris 与 Sodium 必须精确配对:Modrinth 上 Iris 的每个 release 都钉了 Sodium 版本
+    (例如 iris 1.8.12 → sodium mc1.21.1-0.6.13)。若像以前那样 iris 与 sodium 各自
+    取最新,就会装出 iris 找不到 Sodium 内部类、进世界即崩的组合。
+    """
+    try:
+        info = get_mod_version(shader_slug, version, loader)
+    except Exception:
+        return
+    for dep in (info or {}).get("dependencies", []) or []:
+        if dep.get("dependency_type") != "required":
+            continue
+        if dep.get("project_id") != SODIUM_PROJECT_ID:
+            continue
+        version_id = dep.get("version_id")
+        if not version_id:
+            status("提示:该光影未钉 Sodium 版本,请自行确认两者兼容")
+            continue
+        try:
+            filename = download_mod("sodium", version, loader, mods_dir,
+                                    version_number={"id": version_id})
+        except Exception as exc:
+            status(f"光影依赖 Sodium 安装失败:{type(exc).__name__}: {exc}")
+            continue
+        if filename:
+            status(f"已按光影要求安装 Sodium:{filename}")
+            _disable_conflicting_sodium_jars(mods_dir, filename, status)
 
 
 def install_instance(version: str, loader: str = "", loader_version: str = "",
@@ -544,8 +625,14 @@ def install_instance(version: str, loader: str = "", loader_version: str = "",
                 slug = SHADER_MODS.get(mr_loader)
                 if slug:
                     download_mod(slug, version, mr_loader, mods_dir)
+                    # 光影能否生效取决于它声明的 Sodium 版本,必须按声明装,
+                    # 不能和 optimize 里"各自取最新"的 Sodium 混着来。
+                    _install_shader_dependencies(slug, version, mr_loader,
+                                                 mods_dir, status)
             if optimize and mr_loader:
                 for slug in OPTIMIZE_MODS.get(mr_loader, []):
+                    if shader and slug == "sodium":
+                        continue   # sodium 已按光影依赖锁定,避免版本冲突
                     download_mod(slug, version, mr_loader, mods_dir)
     return f"实例就绪:{instance_id}"
 
@@ -855,4 +942,12 @@ TOOL_FUNCS = {
     "compare_items": compare_items,
     "translate_mod_desc": translate_mod_desc,
     "resolve_mc_name": resolve_mc_name,
+
+    # ---- 其他资源（光影包/资源包） ----
+    "search_resource_packs": search_resource_packs,
+    "search_shaders": search_shaders,
+    "list_resource_packs": list_resource_packs,
+    "list_shaders": list_shaders,
+    "install_resource_pack": install_resource_pack,
+    "install_shader": install_shader,
 }

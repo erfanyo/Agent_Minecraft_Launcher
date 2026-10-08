@@ -17,6 +17,7 @@
 - .launch_btn      —— 左列「启动游戏」大按钮(QPushButton)
 - .refresh_btn     —— 右列「版本」标签里的刷新按钮(QPushButton)
 """
+from __future__ import annotations
 import sys
 import threading
 from pathlib import Path
@@ -1128,7 +1129,6 @@ class VersionHome(QWidget):
         gdir_row.addWidget(self.game_dir_combo, 1)
         lay.addLayout(gdir_row)
 
-        from instance_drop_list import InstanceDropList
         self.instance_list = InstanceDropList()
         self.instance_list.ai_pin_provider = self._pin_instance
         self.instance_list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)   # 逐像素滚动,触控板更顺
@@ -1218,3 +1218,44 @@ class VersionHome(QWidget):
         """「版本选择」:切到右列「版本」标签并聚焦列表。"""
         self.tabs.setCurrentIndex(0)
         self.instance_list.setFocus()
+
+
+# ===================== Merged from instance_drop_list.py =====================
+import os
+from PySide6.QtCore import Signal, Qt
+from PySide6.QtWidgets import QListWidget
+
+
+class InstanceDropList(QListWidget):
+    folders_dropped = Signal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setToolTip('可以拖入已有实例文件夹，复制导入并保留原文件')
+
+    @staticmethod
+    def folders(event):
+        urls = event.mimeData().urls()
+        if not urls or not all(u.isLocalFile() and os.path.isdir(u.toLocalFile()) for u in urls):
+            return []
+        return list(dict.fromkeys(u.toLocalFile() for u in urls))
+
+    def dragEnterEvent(self, event):
+        if self.folders(event):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        folders = self.folders(event)
+        if folders:
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+            self.folders_dropped.emit(folders)
+        else:
+            event.ignore()

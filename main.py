@@ -647,9 +647,6 @@ class MainWindow(QMainWindow):
         set_theme_mode(self.settings.get('ui_theme', 'system'))
         apply_global_dark_palette(QApplication.instance())
         refresh_theme()
-        strategy_menu = self.ai_dock.strategy_btn.menu()
-        if strategy_menu is not None:
-            strategy_menu.setStyleSheet(popup_menu_style())
         self.title_bar.refresh_theme()
         self._paint_title_background()
         self.ai_dock._dock_header.refresh_theme()
@@ -2801,16 +2798,49 @@ class MainWindow(QMainWindow):
     def _one_click_bridge_for(self, inst):
         """一键配置 bridge-mod(本地指令口,推荐):检测 → 确认 → 自动下载安装。
         兼容(能自动发现该加载器+版本)则下载;不兼容 → 明确提示 + 说明可改走 RCON。
-        已装但版本旧(check_bridge_mod=outdated)→ 提示可更新到最新。"""
-        import bridge_mod_dist
-        inst_dir = self.game_dir_for(inst["id"])
+        已装但版本旧(check_bridge_mod=outdated)→ 提示可更新到最新。
+
+        ⚠ 状态检测要读本地 dist 并访问 GitHub(同步网络请求),必须放后台线程:
+        早期直接在 UI 线程里调,最坏会卡十几秒,用户看到的就是"点了没反应、也没弹框"。
+        """
         loader = inst.get("loader")
         if loader not in ("fabric", "forge", "neoforge"):
             QMessageBox.information(self, f"一键配置 · {inst['id']}",
                                     "该实例没有加载器(原版),bridge-mod 是 mod 需要加载器。\n"
                                     "先给这个实例装个 Fabric/Forge 等加载器再回来。")
             return
-        status = bridge_mod_dist.check_bridge_mod(inst_dir, loader, inst["base"])
+        self._check_bridge_async(inst, self._on_bridge_status_ready)
+
+    def _check_bridge_async(self, inst, on_ready):
+        """后台检测 bridge-mod 状态,完成后在 UI 线程回调 on_ready(inst, payload)。
+
+        payload = {"status": ..., "info": ...};检测失败会弹提示(不静默失败)。
+        """
+        import bridge_mod_dist
+        inst_dir = self.game_dir_for(inst["id"])
+        loader = inst.get("loader")
+        self.statusBar().showMessage(f"正在检测 {inst['id']} 的 bridge-mod 状态…")
+
+        def work(_task):
+            status = bridge_mod_dist.check_bridge_mod(inst_dir, loader, inst["base"])
+            # not_installed 时还要拿版本号给确认框用;同一次后台往返里取完,避免二次阻塞
+            info = (bridge_mod_dist.bridge_mod_info(loader, inst["base"])
+                    if status == "not_installed" else None)
+            return {"status": status, "info": info}
+
+        task = BackgroundTask(work, self)
+        task.succeeded.connect(lambda payload: on_ready(inst, payload))
+        task.failed.connect(lambda err: QMessageBox.warning(
+            self, f"一键配置 · {inst['id']}",
+            f"检测 bridge-mod 状态失败:{err}\n"
+            "(可能是无法访问 GitHub;也可以手动把 agentmc-bridge-*.jar 放进实例 mods 目录)"))
+        task.finished.connect(self.statusBar().clearMessage)
+        task.start()
+
+    def _on_bridge_status_ready(self, inst, payload):
+        """bridge-mod 状态检测完成(信号已回到 UI 线程)→ 弹确认框并决定是否安装。"""
+        status = (payload or {}).get("status")
+        info = (payload or {}).get("info")
         if status == "up_to_date":
             QMessageBox.information(self, f"一键配置 · {inst['id']}",
                                     "✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n"
@@ -2820,32 +2850,31 @@ class MainWindow(QMainWindow):
             ret = QMessageBox.question(
                 self, f"一键配置 · {inst['id']}",
                 "检测到当前 mods 目录中有其他 MC 版本或加载器的 bridge-mod。\n\n"
-                f"将替换为适用于 {inst['base']}+{loader} 的版本吗？")
+                f"将替换为适用于 {inst['base']}+{inst['loader']} 的版本吗？")
             if ret == QMessageBox.StandardButton.Yes:
                 self._install_bridge_mod(inst)
             return
         if status == "outdated":
             ret = QMessageBox.question(
                 self, f"一键配置 · {inst['id']}",
-                f"⚠️ 检测到已装 bridge-mod 但版本较旧({inst['base']}+{loader})。\n\n"
+                f"⚠️ 检测到已装 bridge-mod 但版本较旧({inst['base']}+{inst['loader']})。\n\n"
                 "自动更新到最新版吗?(会覆盖旧的 jar)")
             if ret == QMessageBox.StandardButton.Yes:
                 self._install_bridge_mod(inst)
             return
-        # status == "not_installed" (或不兼容组合的兜底检查)
-        info = bridge_mod_dist.bridge_mod_info(loader, inst["base"])
         if info is None:
             # 不兼容:明确提示,并引导走 RCON 临时方案
             QMessageBox.information(
                 self, f"一键配置 · {inst['id']}",
-                f"💡 bridge-mod 暂不兼容 {inst['base']}+{loader}(版本表/自动发现都没有这个组合)。\n\n"
+                f"💡 bridge-mod 暂不兼容 {inst['base']}+{inst['loader']}"
+                "(版本表/自动发现都没有这个组合)。\n\n"
                 "可以改用临时方案 RCON:功能略弱(指令结果不精确),但覆盖更多版本。\n"
                 "要换 RCON 的话,点菜单里的「一键配置 RCON」。")
             return
         ret = QMessageBox.question(self, f"一键配置 · {inst['id']}",
                                    f"未安装 bridge-mod(本地指令口,推荐)。\n\n"
-                                   f"检测到 {inst['base']}+{loader} 可用的 bridge-mod v{info['version']},"
-                                   "自动下载安装吗?")
+                                   f"检测到 {inst['base']}+{inst['loader']} 可用的 "
+                                   f"bridge-mod v{info['version']},自动下载安装吗?")
         if ret != QMessageBox.StandardButton.Yes:
             return
         self._install_bridge_mod(inst)
@@ -2953,24 +2982,25 @@ class MainWindow(QMainWindow):
     def _one_click_config_for(self, inst):
         """对指定实例执行一键配置(自动:bridge-mod 优先,不兼容则提示走 RCON)。
         菜单里两个显式入口(bridge / RCON)之外的兜底逻辑。
-        已装但版本旧(outdated)→ 走 _one_click_bridge_for(触发更新提示)。"""
-        import bridge_mod_dist
-        inst_dir = self.game_dir_for(inst["id"])
-        status = self.statusBar()
+        已装但版本旧(outdated)→ 走 bridge 提示(触发更新)。"""
         loader = inst.get("loader")
         if loader in ("fabric", "forge", "neoforge"):
-            bstatus = bridge_mod_dist.check_bridge_mod(inst_dir, loader, inst["base"])
-            if bstatus != "not_installed":
-                # 已装(up_to_date / outdated)→ 交给 _one_click_bridge_for 处理(最新=提示就绪;旧=提示更新)
-                self._one_click_bridge_for(inst)
-                return
-            if bridge_mod_dist.bridge_mod_info(loader, inst["base"]):
-                self._one_click_bridge_for(inst)
-                return
-        # bridge-mod 不可用(无加载器 / 不兼容)→ 提示原因,然后走 RCON 临时方案
-        if status:
-            status.showMessage(
-                f"bridge-mod 暂不可用于 {inst['base']}+{loader or '原版'},改走 RCON 临时方案")
+            # 与 bridge 入口共用同一个后台检测,避免在 UI 线程同步访问 GitHub 卡住界面
+            self._check_bridge_async(inst, self._on_config_auto_ready)
+            return
+        self.statusBar().showMessage(
+            f"bridge-mod 暂不可用于 {inst['base']}+{loader or '原版'},改走 RCON 临时方案")
+        self._one_click_rcon_for(inst)
+
+    def _on_config_auto_ready(self, inst, payload):
+        """自动模式的检测结果:bridge 已装/可用 → 走 bridge 提示;否则回退 RCON。"""
+        status = (payload or {}).get("status")
+        info = (payload or {}).get("info")
+        if status != "not_installed" or info:
+            self._on_bridge_status_ready(inst, payload)
+            return
+        self.statusBar().showMessage(
+            f"bridge-mod 暂不可用于 {inst['base']}+{inst['loader'] or '原版'},改走 RCON 临时方案")
         self._one_click_rcon_for(inst)
 
     def _install_bridge_mod(self, inst):
@@ -3238,6 +3268,14 @@ if __name__ == "__main__":
     from ui_style import apply_global_dark_palette, set_theme_mode
     set_theme_mode(load_settings().get('ui_theme', 'system'))
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
+
+    # 退出兜底:强制回收本地模型 llama-server 子进程,避免孤儿(关闭走 closeEvent.shutdown,
+    # 但异常退出/多路径时可能漏;atexit + aboutToQuit 双保险,配合 local_ai._TRACKED_PROCS)。
+    try:
+        from local_ai import _reap_tracked as _reap_llama
+        app.aboutToQuit.connect(_reap_llama)
+    except Exception:
+        pass
 
     # Protect one launcher data directory across processes on Windows, Linux,
     # and macOS. Keep the lock object alive for the full GUI lifetime.

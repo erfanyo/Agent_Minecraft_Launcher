@@ -14,6 +14,7 @@ config.json(游戏目录/AI 设置)、.minecraft、runtime 全部持久化在 ex
 - set_game_dir() 更新模块级 GAME_DIR / RUNTIME_DIR,改完立即全局生效
 - 模块导入时会先读 config.json 里保存的 game_dir(有则优先,没有就用默认 .minecraft)
 """
+from __future__ import annotations
 import json
 import os
 import sys
@@ -173,5 +174,93 @@ def runtime_llama_dir() -> str:
     return _ensure(os.path.join(CONFIG_DIR, "runtime", "llama-cpp"))
 
 
+def runtime_llama_vulkan_dir() -> str:
+    """llama.cpp Vulkan 后端 runtime(AMCL/runtime/llama-cpp-vulkan)。
+    与 CPU 版分目录共存:两者是不同的 llama-server 二进制,运行时按设置/探测选一个。"""
+    return _ensure(os.path.join(CONFIG_DIR, "runtime", "llama-cpp-vulkan"))
+
+
 # 兼容旧引用:image_cache 用 CACHE_ROOT;mc_names 等用 cache/xxx
 CACHE_ROOT = cache_dir()
+
+
+# ===================== Merged from safe_paths.py =====================
+"""Portable validation of untrusted pack paths, including Windows path syntax."""
+import ntpath
+import os
+
+def _resolved(path):
+    value = os.path.realpath(path)
+    # Windows may return extended-length syntax when a directory is created
+    # concurrently. Compare equivalent path spellings consistently.
+    if value.startswith('\\\\?\\UNC\\'):
+        value = '\\\\' + value[8:]
+    elif value.startswith('\\\\?\\'):
+        value = value[4:]
+    return value
+
+def safe_child(root, relative):
+    if not isinstance(relative, str) or not relative:
+        raise ValueError("整合包里有空文件路径，已停止导入")
+    normalized = relative.replace('\\', '/')
+    parts = normalized.split('/')
+    if (ntpath.splitdrive(normalized)[0] or normalized.startswith('/')
+            or any(p in {'', '.', '..'} or p.endswith((' ', '.'))
+                   or any(c in '<>:"|?*' or ord(c) < 32 for c in p)
+                   or p.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL',
+                       *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+                   for p in parts)):
+        raise ValueError("整合包包含不安全的文件路径，已停止导入")
+    base = _resolved(root)
+    target = _resolved(os.path.join(base, *parts))
+    base_key, target_key = os.path.normcase(base), os.path.normcase(target)
+    if os.path.commonpath([base_key, target_key]) != base_key or target_key == base_key:
+        raise ValueError("整合包文件指向实例目录之外，已停止导入")
+    return target
+
+def safe_component(value):
+    if not isinstance(value, str) or '/' in value or '\\' in value:
+        raise ValueError("实例或版本名称包含路径分隔符")
+    safe_child(os.getcwd(), value)
+    return value
+
+
+# ===================== Merged from safe_paths.py =====================
+"""Portable validation of untrusted pack paths, including Windows path syntax."""
+import ntpath
+import os
+
+def _resolved(path):
+    value = os.path.realpath(path)
+    # Windows may return extended-length syntax when a directory is created
+    # concurrently. Compare equivalent path spellings consistently.
+    if value.startswith('\\\\?\\UNC\\'):
+        value = '\\\\' + value[8:]
+    elif value.startswith('\\\\?\\'):
+        value = value[4:]
+    return value
+
+def safe_child(root, relative):
+    if not isinstance(relative, str) or not relative:
+        raise ValueError("整合包里有空文件路径，已停止导入")
+    normalized = relative.replace('\\', '/')
+    parts = normalized.split('/')
+    if (ntpath.splitdrive(normalized)[0] or normalized.startswith('/')
+            or any(p in {'', '.', '..'} or p.endswith((' ', '.'))
+                   or any(c in '<>:"|?*' or ord(c) < 32 for c in p)
+                   or p.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL',
+                       *(f'COM{i}' for i in range(1, 10)), *(f'LPT{i}' for i in range(1, 10))}
+                   for p in parts)):
+        raise ValueError("整合包包含不安全的文件路径，已停止导入")
+    base = _resolved(root)
+    target = _resolved(os.path.join(base, *parts))
+    base_key, target_key = os.path.normcase(base), os.path.normcase(target)
+    if os.path.commonpath([base_key, target_key]) != base_key or target_key == base_key:
+        raise ValueError("整合包文件指向实例目录之外，已停止导入")
+    return target
+
+def safe_component(value):
+    if not isinstance(value, str) or '/' in value or '\\' in value:
+        raise ValueError("实例或版本名称包含路径分隔符")
+    safe_child(os.getcwd(), value)
+    return value

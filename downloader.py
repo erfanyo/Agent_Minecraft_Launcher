@@ -331,7 +331,10 @@ def _maven_repos_for_path(path: str) -> list[str]:
     if normalized.startswith("net/minecraftforge/forge/"):
         return ["https://maven.minecraftforge.net/{path}"]
     if normalized.startswith("net/neoforged/"):
-        return ["https://maven.neoforged.net/releases/{path}"]
+        # NeoForge 官方 maven 在国内有被墙/临时不可用的历史;官方 CDN 镜像
+        # (neoforged.forgecdn.net)目录结构完全一致,作为兜底源。
+        return ["https://maven.neoforged.net/releases/{path}",
+                "https://neoforged.forgecdn.net/releases/{path}"]
     if normalized.startswith("net/fabricmc/"):
         return ["https://maven.fabricmc.net/{path}"]
     return list(MAVEN_REPOS)

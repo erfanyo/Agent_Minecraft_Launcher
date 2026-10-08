@@ -28,10 +28,11 @@ import html
 from typing import Any, Callable, Iterable
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QTextBrowser
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QMenu, QTextBrowser
 
-from ui_style import (accent_color, current_color, muted_color, success_color,
-                      text_color, warning_color, danger_color)
+from ui_style import (accent_color, current_color, muted_color, popup_menu_style,
+                      success_color, text_color, warning_color, danger_color)
 
 
 # ---------------- 数据模型 ----------------
@@ -405,6 +406,26 @@ class ChatView(QTextBrowser):
         """允许外层注入主题来源(测试可注入固定 token 以避免依赖全局主题)。"""
         self._tokens_provider = provider
 
+    def contextMenuEvent(self, event):
+        """覆盖 QTextBrowser 默认英文右键菜单,提供中文"复制/全选"并跟随主题。"""
+        menu = QMenu(self)
+        menu.setStyleSheet(popup_menu_style())
+
+        copy_action = QAction("复制", self)
+        copy_action.setShortcut("Ctrl+C")
+        copy_action.setEnabled(self.textCursor().hasSelection())
+        copy_action.triggered.connect(self.copy)
+        menu.addAction(copy_action)
+
+        menu.addSeparator()
+
+        select_all_action = QAction("全选", self)
+        select_all_action.setShortcut("Ctrl+A")
+        select_all_action.triggered.connect(self.selectAll)
+        menu.addAction(select_all_action)
+
+        menu.exec(event.globalPos())
+
     def set_entries(self, entries: Iterable[ChatEntry], *,
                     tool_level: Callable[[int], int] | None = None,
                     expanded_ai: set | None = None) -> None:
@@ -414,6 +435,10 @@ class ChatView(QTextBrowser):
         空白但界面照常响应,极难定位。现在只对「C++ 对象已销毁」静默,其余异常
         打印到 stderr 并降级为纯文本,保证消息至少可见。
         """
+        sb = self.verticalScrollBar()
+        old_max = sb.maximum()
+        old_val = sb.value()
+        was_at_bottom = old_max <= 0 or old_val + 20 >= old_max
         try:
             self.clear()
         except RuntimeError:
@@ -436,7 +461,10 @@ class ChatView(QTextBrowser):
         try:
             if body:
                 self.append(body)
-            self.verticalScrollBar().setValue(
-                self.verticalScrollBar().maximum())
+            # 只在用户已经在底部时自动跟到底部,否则保留当前阅读位置
+            if was_at_bottom:
+                sb.setValue(sb.maximum())
+            else:
+                sb.setValue(min(old_val, sb.maximum()))
         except RuntimeError:
             pass   # C++ 对象已销毁 → 忽略

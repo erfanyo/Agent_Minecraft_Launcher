@@ -29,8 +29,17 @@ FABRIC_META = "https://meta.fabricmc.net/v2/versions/loader/{mc}"
 FABRIC_PROFILE = "https://meta.fabricmc.net/v2/versions/loader/{mc}/{loader}/profile/json"
 FORGE_META = "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
 FORGE_INSTALLER = "https://maven.minecraftforge.net/net/minecraftforge/forge/{ver}/forge-{ver}-installer.jar"
-NEOFORGE_META = "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
-NEOFORGE_INSTALLER = "https://maven.neoforged.net/releases/net/neoforged/neoforge/{ver}/neoforge-{ver}-installer.jar"
+# NeoForge 的 maven 是 Reposilite。2025 起 /releases/.../maven-metadata.xml 经常直接
+# 返回 404(Reposilite 不再生成该索引,用户看到的就是"文件好像不在原来的地址了"),
+# 而官方 JSON API 与安装包本体都正常 —— 因此版本列表优先走 JSON API。
+NEOFORGE_RELEASE_BASES = (
+    "https://maven.neoforged.net/releases",
+    "https://neoforged.forgecdn.net/releases",   # 官方 CDN 镜像,结构一致,作兜底
+)
+NEOFORGE_API = ("https://maven.neoforged.net/api/maven/versions/releases/"
+                "net/neoforged/{artifact}")
+NEOFORGE_INSTALLER_TMPL = ("{base}/net/neoforged/{artifact}/{ver}/"
+                           "{artifact}-{ver}-installer.jar")
 
 
 def loader_processor_java_major(base_version: dict, mc_version: str) -> int:
@@ -99,14 +108,59 @@ def _latest_forge_version(mc: str) -> str:
     return max(matches, key=_forge_version_key)
 
 
+def _neoforge_artifact(mc: str) -> tuple:
+    """返回 (maven artifact, 版本前缀)。
+
+    - 1.20.1:NeoForge 早期沿用 ``net.neoforged:forge`` 坐标,版本形如 ``1.20.1-47.1.x``
+      (与 Forge 的坐标同形,所以老版本要走 forge 这个 artifact);
+    - 1.20.2 起改用 ``net.neoforged:neoforge``,版本形如 ``21.1.x`` / ``26.2.x``。
+    """
+    if mc == "1.20.1":
+        return "forge", "1.20.1-"
+    prefix = (mc[2:] + ".") if mc.startswith("1.") else (mc + ".")
+    return "neoforge", prefix
+
+
+def _neoforge_versions(artifact: str) -> list:
+    """取某 NeoForge artifact 的版本列表:官方 JSON API 优先,maven 索引兜底。
+
+    Reposilite 的 ``maven-metadata.xml`` 已不可靠(常年 404),只在 API 失败时才试;
+    两个源都失败时把每个源的具体原因都报出来,避免用户以为是"版本不存在"。
+    """
+    errors = []
+    api = NEOFORGE_API.format(artifact=artifact)
+    try:
+        resp = requests.get(api, timeout=20)
+        resp.raise_for_status()
+        found = [str(v) for v in (resp.json().get("versions") or [])]
+        if found:
+            return found
+        errors.append(f"{api} → versions 为空")
+    except Exception as exc:
+        errors.append(f"{api} → {type(exc).__name__}: {exc}")
+    for base in NEOFORGE_RELEASE_BASES:
+        url = f"{base}/net/neoforged/{artifact}/maven-metadata.xml"
+        try:
+            resp = requests.get(url, timeout=20)
+            resp.raise_for_status()
+            found = re.findall(r"<version>([^<]+)</version>", resp.text)
+            if found:
+                return found
+            errors.append(f"{url} → 没有 version 节点")
+        except Exception as exc:
+            errors.append(f"{url} → {type(exc).__name__}: {exc}")
+    raise RuntimeError(
+        "无法获取 NeoForge 版本列表(官方 JSON API 与 maven 索引都不通)。"
+        "这通常是网络到 maven.neoforged.net 被拦截,不是版本不存在。"
+        "可尝试:1) 设置里切换下载源/镜像;2) 挂代理或换网络;3) 稍后重试。"
+        "详情:" + " | ".join(errors))
+
+
 def list_neoforge_versions(mc: str) -> list:
     """NeoForge 可用于 mc 的版本列表(新的在前,如 1.21.1 → 21.1.248)。
-    版本规则:1.21.1 → 21.1.*;26.2 → 26.2.*"""
-    resp = requests.get(NEOFORGE_META, timeout=20)
-    resp.raise_for_status()
-    versions = re.findall(r"<version>([^<]+)</version>", resp.text)
-    prefix = (mc[2:] + ".") if mc.startswith("1.") else (mc + ".")
-    matches = [v for v in versions if v.startswith(prefix)]
+    版本规则:1.21.1 → 21.1.*;26.2 → 26.2.*;1.20.1 → 1.20.1-47.1.*"""
+    artifact, prefix = _neoforge_artifact(mc)
+    matches = [v for v in _neoforge_versions(artifact) if v.startswith(prefix)]
     return list(reversed(matches))
 
 
@@ -144,16 +198,28 @@ def _forge_profile(ver: str, dest_dir: str) -> dict:
 
 
 def _installer_download(installer_url: str, ver: str, game_dir: str,
-                        progress_callback=None) -> tuple:
+                        progress_callback=None, alt_urls: tuple = ()) -> tuple:
     """下载 loader installer jar,返回 (版本JSON, 安装profile, installer路径, 临时目录)。
 
     Forge/NeoForge 的 installer 里有两个 JSON,各管一件事:
     - version.json           —— 版本 JSON(继承原版,给启动用)
-    - install_profile.json   —— 安装配置(processors 补丁步骤,给安装用)"""
+    - install_profile.json   —— 安装配置(processors 补丁步骤,给安装用)
+    alt_urls: 备用下载源(如 NeoForge 的官方 CDN 镜像),官方源失败时依次尝试。"""
     tmp = os.path.join(game_dir, "versions", "_installer_tmp")
     os.makedirs(tmp, exist_ok=True)
     jar_path = os.path.join(tmp, f"installer-{ver}.jar")
-    download_with_mirror(installer_url, jar_path, progress_callback=progress_callback)
+    urls = [installer_url, *alt_urls]
+    last_err = None
+    for url in urls:
+        try:
+            download_with_mirror(url, jar_path, progress_callback=progress_callback)
+            last_err = None
+            break
+        except Exception as exc:
+            last_err = exc
+    if last_err is not None:
+        raise RuntimeError(
+            f"加载器安装包下载失败(已尝试 {len(urls)} 个下载源):{last_err}") from last_err
     with zipfile.ZipFile(jar_path) as z:
         installer_profile = json.loads(z.read("install_profile.json"))
         # Forge 1.12.2 早期及更老的安装器把版本 JSON 直接放在
@@ -211,9 +277,14 @@ def _forge_installer(ver: str, game_dir: str, progress_callback=None) -> tuple:
                                progress_callback=progress_callback)
 
 
-def _neoforge_installer(ver: str, game_dir: str, progress_callback=None) -> tuple:
-    return _installer_download(NEOFORGE_INSTALLER.format(ver=ver), ver, game_dir,
-                               progress_callback=progress_callback)
+def _neoforge_installer(ver: str, game_dir: str, mc: str,
+                        progress_callback=None) -> tuple:
+    artifact, _prefix = _neoforge_artifact(mc)
+    urls = [NEOFORGE_INSTALLER_TMPL.format(base=base, artifact=artifact, ver=ver)
+            for base in NEOFORGE_RELEASE_BASES]
+    return _installer_download(urls[0], ver, game_dir,
+                               progress_callback=progress_callback,
+                               alt_urls=tuple(urls[1:]))
 
 
 def _main_class(jar_path: str) -> str:
@@ -399,7 +470,7 @@ def install_loader(loader: str, mc: str, game_dir: str,
         elif loader == "neoforge":
             loader_ver = loader_version or _latest_neoforge_version(mc)
             profile, installer_profile, forge_installer, forge_tmp = _neoforge_installer(
-                loader_ver, game_dir, progress_callback)
+                loader_ver, game_dir, mc, progress_callback)
         else:
             raise ValueError(f"不支持的加载器:{loader}")
 
