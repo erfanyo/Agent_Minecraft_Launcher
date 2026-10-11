@@ -17,6 +17,137 @@ import paths
 from instance_metadata import read_metadata
 
 
+def detect_running_instances(instance_dirs: dict[str, str]) -> set[str]:
+    return {row['id'] for row in detect_running_clients(instance_dirs)}
+
+
+def detect_running_clients(instance_dirs: dict[str, str], inspect_ports=False) -> list[dict]:
+    """Read client launch arguments, including Java argument files used by launchers."""
+    import psutil
+    import shlex
+
+    def normalized(value):
+        return os.path.normcase(os.path.realpath(value.strip('"')))
+
+    directories = {name: normalized(folder) for name, folder in instance_dirs.items()}
+    running = []
+    for process in psutil.process_iter(['name', 'cmdline']):
+        try:
+            if 'java' not in (process.info['name'] or '').lower():
+                continue
+            args = process.info['cmdline'] or []
+            expanded = []
+            for arg in args:
+                if arg.startswith('@'):
+                    filename = arg[1:].strip('"')
+                    if not os.path.isabs(filename):
+                        filename = os.path.join(process.cwd(), filename)
+                    try:
+                        with open(filename, encoding='utf-8-sig') as stream:
+                            content = stream.read(1024 * 1024 + 1)
+                        if len(content) <= 1024 * 1024:
+                            expanded.extend(shlex.split(content, posix=False, comments=True))
+                    except (OSError, UnicodeError, ValueError):
+                        pass
+                else:
+                    expanded.append(arg)
+            args = [arg.strip('"') for arg in expanded]
+            for index in range(len(args) - 1, -1, -1):
+                if args[index].startswith(('--gameDir=', '--version=')):
+                    args[index:index + 1] = args[index].split('=', 1)
+            # Servers and unrelated Java programs do not carry these client arguments.
+            if '--gameDir' not in args or not any(
+                    flag in args for flag in ('--version', '--assetsDir', '--assetIndex')):
+                continue
+            game_dir = args[args.index('--gameDir') + 1]
+            version = args[args.index('--version') + 1] if '--version' in args else ''
+            if not os.path.isabs(game_dir):
+                game_dir = os.path.join(process.cwd(), game_dir)
+            matching = [name for name, folder in directories.items()
+                        if folder == normalized(game_dir)]
+            instance_id = matching[0] if len(matching) == 1 else version if version in matching else None
+            # PCL may use version isolation independently of AMCL's setting.
+            if instance_id is None:
+                candidate = os.path.basename(normalized(game_dir))
+                for name, folder in directories.items():
+                    if name.casefold() == candidate.casefold() and (
+                            normalized(game_dir) == normalized(os.path.join(folder, 'versions', name))):
+                        instance_id = name
+                        break
+            external = instance_id is None
+            instance_id = instance_id or os.path.basename(normalized(game_dir)) or version
+            row = {'id': instance_id, 'pid': process.pid,
+                            'game_dir': normalized(game_dir), 'external': external,
+                            'name': instance_id + ('（外部启动）' if external else '')}
+            if inspect_ports:
+                row['lan_ports'] = []
+                try:
+                    for connection in process.net_connections(kind='tcp'):
+                        if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+                            continue
+                        port = connection.laddr.port
+                        host = connection.laddr.ip
+                        if host in ('0.0.0.0', '::'):
+                            host = '::1' if host == '::' else '127.0.0.1'
+                        if port not in row['lan_ports'] and _minecraft_status_available(host, port):
+                            row['lan_ports'].append(port)
+                except (psutil.Error, OSError):
+                    row['port_detection_unavailable'] = True
+            running.append(row)
+        except (psutil.Error, OSError, IndexError, ValueError):
+            continue
+    return running
+
+
+def _minecraft_status_available(host, port):
+    """Verify a Java Edition status response, rather than treating any listener as LAN."""
+    import socket
+    import struct
+
+    def varint(value):
+        result = bytearray()
+        while value >= 128:
+            result.append((value & 127) | 128)
+            value >>= 7
+        result.append(value)
+        return bytes(result)
+
+    try:
+        with socket.create_connection((host, port), timeout=0.4) as stream:
+            stream.settimeout(0.4)
+            address = host.encode('utf-8')
+            handshake = b'\x00' + varint(47) + varint(len(address)) + address + struct.pack('>H', port) + b'\x01'
+            stream.sendall(varint(len(handshake)) + handshake + b'\x01\x00')
+
+            def read_varint():
+                value = 0
+                for shift in range(0, 35, 7):
+                    byte = stream.recv(1)
+                    if not byte:
+                        raise ValueError('Incomplete packet')
+                    value |= (byte[0] & 127) << shift
+                    if not byte[0] & 128:
+                        return value
+                raise ValueError('Invalid packet')
+
+            packet_size = read_varint()
+            if not 0 < packet_size <= 256 * 1024 or read_varint() != 0:
+                return False
+            size = read_varint()
+            if not 0 < size <= packet_size:
+                return False
+            payload = bytearray()
+            while len(payload) < size:
+                chunk = stream.recv(min(4096, size - len(payload)))
+                if not chunk:
+                    return False
+                payload.extend(chunk)
+            response = json.loads(payload.decode('utf-8'))
+            return isinstance(response, dict) and 'version' in response and 'players' in response
+    except (OSError, ValueError, UnicodeError):
+        return False
+
+
 def find_instance_version_json(folder: str, instance_id: str) -> str | None:
     """Find the launch JSON in a manually copied instance folder.
 

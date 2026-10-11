@@ -6,16 +6,19 @@
 # By default: sync all uncommitted changes (git diff HEAD).
 # Pass -Minutes 60 to use timestamp-based scan instead (last 60 min).
 
-param([int]$Minutes = 0)
+param([int]$Minutes = 0, [string[]]$Files = @())
 
 $ErrorActionPreference = "Stop"
 $REMOTE = "bazzite"
 $REMOTE_DIR = "/home/erfanyo/amcl"
-$LOCAL = "E:\Agent_Minecraft_Launcher 0.0.1"
+$LOCAL = $PSScriptRoot
+$backupDir = "$REMOTE_DIR/.sync-backups/$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 
 Write-Host "[sync] Scanning changed files..." -ForegroundColor Cyan
 
-if ($Minutes -gt 0) {
+if ($Files.Count -gt 0) {
+    $changed = $Files
+} elseif ($Minutes -gt 0) {
     # Timestamp mode: files modified in the last N minutes
     $cutoff = (Get-Date).AddMinutes(-$Minutes)
     $changed = Get-ChildItem -Recurse -File -Path $LOCAL |
@@ -30,7 +33,8 @@ if ($Minutes -gt 0) {
     # Git mode (default): all uncommitted changes (staged + unstaged + untracked)
     Push-Location $LOCAL
     $gitFiles = git diff --name-only HEAD 2>$null
-    $gitUntracked = git ls-files --others --exclude-standard 2>$null
+    # Do not upload unrelated untracked workspaces or credentials.
+    $gitUntracked = @()
     Pop-Location
     $allGit = @()
     if ($gitFiles) { $allGit += $gitFiles }
@@ -42,7 +46,8 @@ if ($Minutes -gt 0) {
         $_ -notmatch '^dist' -and
         $_ -notmatch '^build' -and
         $_ -notmatch '^\.venv' -and
-        $_ -notmatch '^AMCL'
+        $_ -notmatch '^AMCL' -and
+        $_ -notmatch '^(acl-recovery|comfy|host_fixes|outputs)/'
     }
 }
 
@@ -54,12 +59,20 @@ if (-not $changed -or $changed.Count -eq 0) {
 Write-Host "[sync] Syncing $($changed.Count) files to bazzite..." -ForegroundColor Cyan
 
 foreach ($rel in $changed) {
+    if ($rel -match "(^|/)\.\.(/|$)|:|'" -or $rel.StartsWith('/')) {
+        throw "Invalid relative path: $rel"
+    }
     $localFile = Join-Path $LOCAL ($rel -replace '/', '\')
     if (-not (Test-Path $localFile)) { continue }
     $targetDir = "$REMOTE_DIR/" + [System.IO.Path]::GetDirectoryName($rel).Replace('\', '/')
-    ssh $REMOTE "mkdir -p '$targetDir'" 2>$null
-    scp -q $localFile "${REMOTE}:${REMOTE_DIR}/$rel"
+    $backupFile = "$backupDir/$rel"
+    $backupParent = $backupFile.Substring(0, $backupFile.LastIndexOf('/'))
+    ssh -o BatchMode=yes -o ConnectTimeout=10 $REMOTE "mkdir -p '$targetDir' '$backupParent' && if test -f '$REMOTE_DIR/$rel'; then cp -p '$REMOTE_DIR/$rel' '$backupFile'; fi"
+    if ($LASTEXITCODE -ne 0) { throw "Remote preparation failed: $rel" }
+    scp -q -o BatchMode=yes -o ConnectTimeout=10 $localFile "${REMOTE}:${REMOTE_DIR}/$rel"
+    if ($LASTEXITCODE -ne 0) { throw "Copy failed: $rel" }
     Write-Host "  $rel" -ForegroundColor DarkGray
 }
 
 Write-Host "[sync] Done. $($changed.Count) files synced." -ForegroundColor Green
+Write-Host "[sync] Previous remote files: $backupDir"

@@ -70,7 +70,7 @@ SCHEMES = [
         ("ZeroTier",
          "跨平台虚拟局域网,免费支持 25 台设备;适合天南海北的朋友远程一起玩。",
          "https://www.zerotier.com"),
-        ("Radmin VPN",
+        ("Radmin VPN（仅支持 Windows）",
          "安装即用,创建一个网络后朋友加入,即可像局域网一样联机,延迟低(纯 GUI,无命令行)。",
          "https://www.radmin-vpn.com"),
         ("蒲公英(Oray)",
@@ -125,7 +125,7 @@ SCHEME_META = {
         "needs_genuine": False, "easytier": False,
     },
     "Radmin VPN": {
-        "name": "Radmin VPN",
+        "name": "Radmin VPN（仅支持 Windows）",
         "desc": "Windows 专用,安装即用;创建网络后朋友加入即可像局域网一样联机,延迟低。",
         "url": "https://www.radmin-vpn.com",
         "needs_genuine": False, "easytier": False,

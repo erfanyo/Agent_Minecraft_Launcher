@@ -342,27 +342,20 @@ class MainWindow(QMainWindow):
         self.details_stack.addWidget(self.server_details)
         self._details_tab_idx = self.main_tabs.addTab(self.details_stack, t("INSTANCE_DETAILS"))
         self.main_tabs.addTab(self.resource_center, t("RESOURCES"))
-        # 联机方案中心留在主窗口右侧，可和当前页面并排查看。
+        # 联机使用非模态独立窗口，不参与主窗口 Dock 布局。
         from online_center import OnlineCenter
-        self.online_dock = QDockWidget("联机", self)
-        self.online_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
-        self.online_dock.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
-        self.online_dock.setMinimumWidth(0)
+        from PySide6.QtWidgets import QDialog
+        self.online_dock = QDialog(self, Qt.WindowType.Window)
+        self.online_dock.setWindowTitle("联机 · AMCL")
+        self.online_dock.setModal(False)
+        self.online_dock.resize(960, 720)
+        self.online_dock.setMinimumSize(560, 400)
+        self.online_dock.setSizeGripEnabled(True)
         from ui_style import current_color
         set_style(self.online_dock, lambda: (
-            f'QDockWidget {{ background: {current_color("panel_bg")};'
-            f' border-left: 1px solid {current_color("panel_border")}; }}'))
-        online_header = QWidget()
-        online_header_layout = QHBoxLayout(online_header)
-        online_header_layout.setContentsMargins(12, 4, 8, 4)
-        online_header_layout.addWidget(QLabel("联机方案"))
-        online_header_layout.addStretch()
-        online_close = QPushButton("✕")
-        online_close.setFixedSize(28, 28)
-        set_style(online_close, card_btn_style)
-        online_close.clicked.connect(self._close_online_center)
-        online_header_layout.addWidget(online_close)
-        self.online_dock.setTitleBarWidget(online_header)
+            f'QDialog {{ background: {current_color("bg1")}; }}'))
+        online_window_layout = QVBoxLayout(self.online_dock)
+        online_window_layout.setContentsMargins(0, 0, 0, 0)
         from ui_background import BackgroundWidget
         self.online_surface = BackgroundWidget(self.online_dock)
         self.online_surface.setMinimumWidth(0)
@@ -372,7 +365,7 @@ class MainWindow(QMainWindow):
         self.online_center.setMinimumWidth(0)
         self.online_center.setObjectName("online_center")
         online_body.addWidget(self.online_center)
-        self.online_dock.setWidget(self.online_surface)
+        online_window_layout.addWidget(self.online_surface)
         # 设置页嵌入主窗口，由两种模式共用。
         from settings.center import SettingsCenter
         self.settings_center = SettingsCenter(self.settings)
@@ -483,9 +476,7 @@ class MainWindow(QMainWindow):
         self.ai_dock.topLevelChanged.connect(lambda _floating: QTimer.singleShot(0, self._update_window_shape))
         self.ai_dock.visibilityChanged.connect(lambda _visible: QTimer.singleShot(0, self._update_window_shape))
         self.ai_dock.show()
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.online_dock)
         self.online_dock.hide()
-        self.online_surface.installEventFilter(self)
 
         # 游戏日志已挪进实例详情,不再有独立 dock(AI 助手单独在右侧作标签页)
 
@@ -503,6 +494,15 @@ class MainWindow(QMainWindow):
         self.game_processes = GameProcessController(self)
         self.game_processes.line_received.connect(self._on_game_log_line)
         self.game_processes.exited.connect(self._on_game_process_exited)
+        self._game_controllers = [self.game_processes]
+        self._owned_game_instances = {}
+        self._detected_game_clients = []
+        self._running_scan_task = None
+        self._running_scan_timer = QTimer(self)
+        self._running_scan_timer.setInterval(2500)
+        self._running_scan_timer.timeout.connect(self._scan_running_games)
+        self._running_scan_timer.start()
+        QTimer.singleShot(0, self._scan_running_games)
         self.download_tasks = DownloadTaskController(self)
         self.download_tasks.status.connect(self._on_download_status)
         self.download_tasks.progress.connect(self._on_download_progress)
@@ -565,8 +565,6 @@ class MainWindow(QMainWindow):
             self.settings_center.shell.switch_by_label(t("MIRROR"))
         if self._settings_open:
             return
-        if self.online_dock.isVisible():
-            self._close_online_center()
         self._settings_restore = {
             'dock_visible': self.ai_dock.isVisible(),
             'strip_visible': self.ai_strip_dock.isVisible(),
@@ -605,16 +603,11 @@ class MainWindow(QMainWindow):
     def _on_mode_button_clicked(self):
         if self._settings_open:
             self._close_settings()
-        elif self.online_dock.isVisible():
-            self._close_online_center()
-            if not self._ai_focus_mode:
-                self.main_tabs.setCurrentIndex(self._my_inst_tab_idx)
-            self._update_mode_button()
         else:
             self._toggle_ai_focus_mode()
 
     def _update_mode_button(self):
-        other_page = self._settings_open or self.online_dock.isVisible()
+        other_page = self._settings_open
         if other_page:
             self.ai_mode_button.setText('主页')
             self.ai_mode_button.setToolTip('返回当前模式的主页')
@@ -717,7 +710,8 @@ class MainWindow(QMainWindow):
         pix = getattr(self, "_wallpaper_source", None)
         mask = getattr(self, "_wallpaper_mask", 0.55)
         online = getattr(self, 'online_surface', None)
-        online_visible = bool(online is not None and self.online_dock.isVisible())
+        if online is not None:
+            online.set_wallpaper(pix, mask)
         if getattr(self, '_settings_open', False):
             self.settings_page.set_wallpaper(pix, mask)
             return
@@ -735,11 +729,6 @@ class MainWindow(QMainWindow):
                 self._wallpaper_scaled = scaled
                 self._wallpaper_ox, self._wallpaper_oy = ox, oy
                 sidebar.set_shared_view(scaled, ox, oy, mask)
-                if online_visible:
-                    origin = sidebar.mapTo(self, QPoint(0, 0))
-                    position = online.mapTo(self, QPoint(0, 0))
-                    online.set_shared_view(scaled, position.x() - origin.x() + ox,
-                                           position.y() - origin.y() + oy, mask)
             self._sync_ai_wallpaper()
             return
         bg = getattr(self, "_background", None)
@@ -752,18 +741,13 @@ class MainWindow(QMainWindow):
                 online.clear()
             self._sync_ai_wallpaper()
             return
-        right_width = online.width() if online_visible else self._ai_dock_width()
+        right_width = self._ai_dock_width()
         scaled, ox, oy = prepare_shared_wallpaper(pix, bg.size(), right_width)
         self._wallpaper_scaled = scaled
         self._wallpaper_ox = ox
         self._wallpaper_oy = oy
         if scaled is not None:
             bg.set_shared_view(scaled, ox, oy, mask)
-            if online_visible:
-                origin = bg.mapTo(self, QPoint(0, 0))
-                position = online.mapTo(self, QPoint(0, 0))
-                online.set_shared_view(scaled, position.x() - origin.x() + ox,
-                                       position.y() - origin.y() + oy, mask)
         self._sync_ai_wallpaper()
 
     def _ai_dock_width(self) -> int:
@@ -1092,7 +1076,11 @@ class MainWindow(QMainWindow):
         if self._launch_task is not None:
             self._launch_task.cancel()
         self.version_manifest.cancel()
-        self.game_processes.detach()
+        for controller in self._game_controllers:
+            controller.detach()
+        self._running_scan_timer.stop()
+        if self._running_scan_task is not None:
+            self._running_scan_task.cancel()
         if hasattr(self, "ai_dock"):
             try:
                 self.ai_dock.shutdown()
@@ -1195,46 +1183,27 @@ class MainWindow(QMainWindow):
             self.ai_dock.setVisible(bool(checked))
 
     def open_online_center(self):
-        """在主窗口右侧展开联机抽屉，左侧页面保持可用。"""
-        if self.online_dock.isVisible():
-            return
-        if self._settings_open:
-            self._close_settings()
-        self._online_restore = {
-            'dock_visible': self.ai_dock.isVisible(),
-            'dock_width': self.ai_dock.width(),
-            'strip_visible': self.ai_strip_dock.isVisible(),
-        }
-        self.ai_dock.hide()
-        self.ai_strip_dock.hide()
-        self.online_dock.show()
-        from ui_anim import reveal
-        QTimer.singleShot(0, lambda: reveal(self.online_surface)
-                          if self.online_dock.isVisible() else None)
-        width = (max(760, self.width() - 320) if self._ai_focus_mode
-                 else min(1000, max(800, self.width() - 280)))
-        QTimer.singleShot(0, lambda: self.resizeDocks(
-            [self.online_dock], [width], Qt.Orientation.Horizontal)
-            if self.online_dock.isVisible() else None)
-        self._update_mode_button()
+        """打开可拖动、缩放的联机浮窗，保留主窗口原有布局。"""
+        if not getattr(self, '_online_window_positioned', False):
+            area = self.screen().availableGeometry()
+            width = min(960, area.width())
+            height = min(720, area.height())
+            self.online_dock.resize(width, height)
+            self.online_dock.move(area.center() - QPoint(width // 2, height // 2))
+            self._online_window_positioned = True
+        was_visible = self.online_dock.isVisible()
+        self.online_dock.showNormal()
+        self.online_dock.raise_()
+        self.online_dock.activateWindow()
+        self.online_surface.set_wallpaper(
+            getattr(self, '_wallpaper_source', None), getattr(self, '_wallpaper_mask', 0.55))
+        if not was_visible:
+            from ui_anim import reveal
+            QTimer.singleShot(0, lambda: reveal(self.online_surface)
+                              if self.online_dock.isVisible() else None)
 
     def _close_online_center(self):
-        if not self.online_dock.isVisible():
-            return
         self.online_dock.hide()
-        saved = getattr(self, '_online_restore', {})
-        self.ai_dock.setVisible(saved.get('dock_visible', False))
-        self.ai_strip_dock.setVisible(saved.get('strip_visible', False))
-        if saved.get('dock_visible') and not self.ai_dock.isFloating():
-            width = saved.get('dock_width', self.ai_dock.width())
-            QTimer.singleShot(0, lambda: self.resizeDocks(
-                [self.ai_dock], [width], Qt.Orientation.Horizontal)
-                if self.ai_dock.isVisible() and not self.ai_dock.isFloating() else None)
-        self._online_restore = None
-        from ui_anim import reveal
-        reveal(self._central_stack.currentWidget())
-        self._recompute_wallpaper()
-        self._update_mode_button()
 
     def _toggle_online_center(self):
         if self.online_dock.isVisible():
@@ -1872,9 +1841,7 @@ class MainWindow(QMainWindow):
         moved_while_docked = (watched is dock and event.type() == QEvent.Type.Move
                               and not dock.isFloating())
         focus_sidebar = getattr(self, 'ai_focus_sidebar', None)
-        online_surface = getattr(self, 'online_surface', None)
-        if (watched is central or watched is dock or watched is focus_sidebar
-                or watched is online_surface) and (resized or moved_while_docked):
+        if (watched is central or watched is dock or watched is focus_sidebar) and (resized or moved_while_docked):
             # Dock 拖宽/浮出只改变子控件，不一定触发主窗口 resizeEvent。
             # 两者的输入 mask 必须在新几何下同步，否则旧宽度外无法交互。
             QTimer.singleShot(0, self._refresh_central_geometry)
@@ -1947,16 +1914,39 @@ class MainWindow(QMainWindow):
             self._update_window_shape()
             self._position_resize_handles()
 
+    def _scan_running_games(self):
+        if self._running_scan_task is not None and self._running_scan_task.is_running:
+            return
+        from instances import scan_instances, detect_running_clients
+        directories = {row['id']: self.game_dir_for(row['id']) for row in scan_instances()}
+        task = BackgroundTask(lambda current: detect_running_clients(directories), self)
+        self._running_scan_task = task
+        task.succeeded.connect(self._apply_running_games)
+        task.start()
+
+    def _apply_running_games(self, clients):
+        self._detected_game_clients = clients
+        self._update_running_label()
+
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
         from ui_style import muted_color, success_color
-        n = len(self._running_instances)
+        live = {controller.process.pid: self._owned_game_instances.get(controller.process.pid, '')
+                for controller in self._game_controllers
+                if controller.is_running}
+        for client in self._detected_game_clients:
+            if client['pid'] in self._owned_game_instances and client['pid'] not in live:
+                continue
+            live.setdefault(client['pid'], client['id'])
+        self._running_instances = set(live.values()) - {''}
+        n = len(live)
         if n:
-            running_text = "🟢 正在运行：" + ", ".join(sorted(self._running_instances))
+            running_text = f"已启动实例:{n}个" if n > 1 else "已启动实例：" + next(iter(live.values()))
             self._running_label.setText(
                 self._running_label.fontMetrics().elidedText(
                     running_text, Qt.TextElideMode.ElideRight, 160))
-            self._running_label.setToolTip("运行中的实例:\n" + "\n".join(sorted(self._running_instances)))
+            self._running_label.setToolTip("运行中的实例:\n" + "\n".join(
+                f"{name}（PID {pid}）" for pid, name in live.items()))
             self._running_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
         else:
             self._running_label.setText("尚未启动游戏")
@@ -2155,21 +2145,44 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1800, lambda: self._stop_launch_button_animation()
                           if self._launch_button_generation == generation else None)
 
-    def launch_selected(self):
+    def launch_selected(self, _processes_checked=False):
         """启动当前选中版本:准备 Java → 拼命令 → 拉起进程 → 日志实时显示"""
         v = self.selected_version
         if v is None:
             self.statusBar().showMessage("请先在列表里选中一个版本")
             return
-        if self.game_process and self.game_process.poll() is None:
-            self.statusBar().showMessage("游戏正在运行中,请先退出再启动")
-            return
         if (self._launch_task is not None and self._launch_task.is_running) or self.download_tasks.is_running:
             self.statusBar().showMessage("正在准备或安装，等这一小步完成再启动吧")
             return
 
+        if not _processes_checked:
+            from instances import scan_instances, detect_running_clients
+            directories = {row['id']: self.game_dir_for(row['id']) for row in scan_instances()}
+            task = BackgroundTask(lambda current: detect_running_clients(directories), self)
+            self._launch_task = task
+            self.launch_btn.setEnabled(False)
+            self.statusBar().showMessage('正在检测已启动的游戏…')
+
+            def detected(clients):
+                self._launch_task = None
+                self.launch_btn.setEnabled(True)
+                self._apply_running_games(clients)
+                self.launch_selected(_processes_checked=True)
+
+            task.succeeded.connect(detected)
+            task.failed.connect(self._on_launch_prepare_failed)
+            task.start()
+            return
+
+        self._update_running_label()
+        if self._running_instances:
+            if QMessageBox.question(self, '启动另一个实例',
+                    f"已有游戏正在运行，是否继续启动「{v['id']}」？\n多开会增加内存占用，同一实例共用存档时请勿同时进入同一个世界。",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+
         self.statusBar().showMessage(f"正在获取 {v['id']} 的启动信息...")
-        self._running_instance_id = v["id"]   # 实例 id(= 游戏目录名),供退出后自动 debug 定位日志
 
         v = dict(v)
         from copy import deepcopy
@@ -2243,6 +2256,15 @@ class MainWindow(QMainWindow):
             self.ai_dock.stop_local_engine()
 
         try:
+            if self.game_processes.is_running:
+                previous = self.game_processes
+                previous.line_received.disconnect(self._on_game_log_line)
+                previous.exited.disconnect(self._on_game_process_exited)
+                previous.exited.connect(lambda code: self._scan_running_games())
+                self.game_processes = GameProcessController(self)
+                self._game_controllers.append(self.game_processes)
+                self.game_processes.line_received.connect(self._on_game_log_line)
+                self.game_processes.exited.connect(self._on_game_process_exited)
             if exit_after:
                 self.game_process = self.game_processes.start(cmd, java_exe, game_dir, independent=True)
             else:
@@ -2257,6 +2279,7 @@ class MainWindow(QMainWindow):
             return
 
         self._show_launch_button_success()
+        self.launch_btn.setEnabled(True)
         self.dl_indicator.set_completed(True)
         self.dl_indicator.setToolTip("游戏已启动，点击查看状态与日志")
 
@@ -2273,6 +2296,8 @@ class MainWindow(QMainWindow):
                 pass
 
         # 运行实例指示:登记并刷新底部标签
+        self._owned_game_instances[self.game_process.pid] = d['id']
+        self._running_instance_id = v['id']
         self._running_instances.add(d["id"])
         self._update_running_label()
         # 游戏内 AI 通道(ai_in_game=cloud/local):启动 .bridge/ai_request↔ai_reply 轮询器
@@ -2306,9 +2331,15 @@ class MainWindow(QMainWindow):
         if inst_id:
             self._running_instances.discard(inst_id)
         self._update_running_label()
+        self._scan_running_games()
         self.skill_mgr.on_game_stop(code)
         try:
-            self.ai_dock.set_game_stopped()
+            remaining = next((controller.process for controller in self._game_controllers
+                              if controller.is_running), None)
+            if remaining is not None:
+                self.ai_dock.set_game_running(remaining)
+            else:
+                self.ai_dock.set_game_stopped()
         except Exception:
             pass
         self._stop_in_game_ai()
@@ -2552,6 +2583,7 @@ class MainWindow(QMainWindow):
         # 正向依赖提示(灵感 #4):下载 Mod 前,解析该版本依赖,提示"需要什么/冲突";
         # 用户可一并安装缺少的必需依赖。仅 Mod 下载时提示,光影/数据包等跳过。
         extra_deps = []
+        skipped_deps = False
         if sub_dir == "mods":
             try:
                 from modrinth import (dependency_is_installed,
@@ -2571,18 +2603,29 @@ class MainWindow(QMainWindow):
                 if deps["incompatible"]:
                     lines.append("⚠ 冲突(不建议同装):\n" + "\n".join(f" · {d['title']}" for d in deps["incompatible"]))
                 if len(lines) > 1:
-                    cont = QMessageBox.question(
-                        self, "依赖提示",
-                        "\n".join(lines) +
-                        "\n\n是否继续下载该 Mod?(缺少的必需依赖会尝试一并安装到该实例)",
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                    if cont != QMessageBox.StandardButton.Yes:
+                    dialog = QMessageBox(self)
+                    dialog.setWindowTitle('依赖提示')
+                    dialog.setText('\n'.join(lines))
+                    dialog.setInformativeText('跳过必需前置后，Mod 可能无法加载。' if missing else '是否继续下载该 Mod？')
+                    install = dialog.addButton('下载并安装前置' if missing else '继续下载',
+                                               QMessageBox.ButtonRole.AcceptRole)
+                    skip = dialog.addButton('跳过前置，继续下载', QMessageBox.ButtonRole.ActionRole) if missing else None
+                    dialog.addButton('取消', QMessageBox.ButtonRole.RejectRole)
+                    dialog.setDefaultButton(install)
+                    dialog.exec()
+                    selected = dialog.clickedButton()
+                    if selected is install:
+                        extra_deps = missing
+                    elif skip is not None and selected is skip:
+                        skipped_deps = True
+                    else:
                         return
-                    extra_deps = missing
 
         def worker(status, progress):
             from modrinth import (dependency_is_installed, download_mod,
                                   installed_mod_identifiers)
+            if skipped_deps:
+                status('已手动跳过前置，仅下载所选 Mod；缺少必需前置可能导致游戏无法加载。')
             installed_ids = installed_mod_identifiers(target_dir) if extra_deps else set()
             for dep in extra_deps:
                 dep_slug = dep["slug"]
