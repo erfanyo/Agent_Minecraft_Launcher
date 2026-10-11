@@ -529,7 +529,7 @@ def save_plugin(name: str, code: str) -> dict:
 
 # ---------------- 插件商店(仓库注册 / 远程插件清单 / 安装) ----------------
 # 仓库清单格式(仓库根 plugins.json,或某仓库 URL 直接返回 JSON):
-#   [ {"name": "lan_bridge", "version": "0.1.0", "title": "联机 CLI 桥接",
+#   [ {"name": "lan_bridge", "version": "0.5.0", "title": "联机",
 #      "description": "…", "download_url": "https://…/lan_bridge.py",
 #      "repo": "官方", "author": "…"}, ... ]
 # 安装 = 下载 download_url 的单文件 .py → 校验 → 落盘 plugins/<name>.py(复用 save_plugin)。
