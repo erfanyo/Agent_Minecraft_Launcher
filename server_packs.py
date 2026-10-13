@@ -26,10 +26,19 @@ def _server_record(folder):
     server_root = report.get('serverRoot')
     launch_root = safe_child(folder, server_root) if server_root else str(folder)
     build_report = folder / 'amcl-build-report.json'
+    candidate = build_report.is_file() and not build_report.is_symlink()
+    if candidate:
+        try:
+            if build_report.stat().st_size <= 2 * 1024 * 1024:
+                outcome = json.loads(build_report.read_text(encoding='utf-8')).get('testOutcome')
+                if outcome in ('ready', 'untested'):
+                    candidate = False
+        except (OSError, ValueError, AttributeError):
+            pass
     return {'id': folder.name, 'name': str(data.get('name', folder.name)),
             'path': launch_root, 'packagePath': str(folder), 'report': report,
             'launchJar': data.get('launchJar'),
-            'candidate': build_report.is_file() and not build_report.is_symlink(),
+            'candidate': candidate,
             '_registeredAt': metadata.stat().st_mtime_ns}
 
 

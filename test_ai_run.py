@@ -31,7 +31,11 @@ class RunTests(unittest.TestCase):
         self.settings = {'ai_model': 'test', 'ai_base_url': 'https://example.invalid', 'ai_api_key': 'secret-test-key'}
 
     def events(self):
-        return [json.loads(x) for x in next(Path(self.temp.name).glob('*.jsonl')).read_text(encoding='utf-8').splitlines()]
+        # Run records use UUID names; training records share this mocked root.
+        logs = [p for p in Path(self.temp.name).glob('*.jsonl')
+                if len(p.stem) == 32 and all(c in '0123456789abcdef' for c in p.stem)]
+        self.assertEqual(len(logs), 1)
+        return [json.loads(x) for x in logs[0].read_text(encoding='utf-8').splitlines()]
 
     def test_beyond_old_limit(self):
         with patch('ai_run.requests.post', side_effect=[response(n) for n in range(15)] + [response()]):

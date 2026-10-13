@@ -4,6 +4,9 @@ import sys
 import tempfile
 import time
 import unittest
+import psutil
+import shutil
+from pathlib import Path
 from memory_relief import pressure
 from memory_policy import GIB
 
@@ -20,7 +23,9 @@ class ReliefTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             marker = os.path.join(folder, 'survived.txt')
             # A disposable host really exits before the child writes to inherited stdout.
-            child = "import time,pathlib;time.sleep(.5);print('x'*100000);pathlib.Path(" + repr(marker) + ").write_text('ok')"
+            child = ("import os,time,pathlib;"
+                     "pathlib.Path(" + repr(marker + '.pid') + ").write_text(str(os.getpid()));"
+                     "time.sleep(.5);print('x'*100000);pathlib.Path(" + repr(marker) + ").write_text('ok')")
             host = "\n".join([
                 'import sys',
                 'from PySide6.QtCore import QCoreApplication',
@@ -36,6 +41,24 @@ class ReliefTests(unittest.TestCase):
             while not os.path.exists(marker) and time.monotonic() < until:
                 time.sleep(.1)
             self.assertTrue(os.path.isfile(marker), 'Child failed after host exit')
+            # The marker is written before process exit. Wait for its cwd handle
+            # to close before TemporaryDirectory deletes the Windows directory.
+            with open(marker + '.pid', encoding='utf-8') as stream:
+                child_pid = int(stream.read())
+            try:
+                psutil.Process(child_pid).wait(timeout=5)
+            except psutil.NoSuchProcess:
+                pass
+            cleanup_root = Path(folder).resolve()
+            self.assertEqual(cleanup_root.parent, Path(tempfile.gettempdir()).resolve())
+            for attempt in range(20):
+                try:
+                    shutil.rmtree(cleanup_root)
+                    break
+                except OSError as error:
+                    if getattr(error, 'winerror', None) not in (5, 32, 145) or attempt == 19:
+                        raise
+                    time.sleep(.1)
 
 
 if __name__ == '__main__':

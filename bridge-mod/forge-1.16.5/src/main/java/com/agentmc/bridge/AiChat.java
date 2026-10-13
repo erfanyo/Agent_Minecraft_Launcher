@@ -38,23 +38,23 @@ public final class AiChat {
         // 实际命令仍以该玩家身份执行，MC 自己决定是否允许该命令。
         boolean dedicated = server.isDedicatedServer();
         boolean integratedOwner = player != null && !dedicated
-                && server.isSingleplayerOwner(player.getGameProfile());
-        boolean console = text.startsWith("--console") && (source.hasPermission(4) || integratedOwner);
+                && player.getGameProfile().getName().equals(server.getServerOwner());
+        boolean console = text.startsWith("--console") && (source.hasPermissionLevel(4) || integratedOwner);
         if (text.startsWith("--console")) text = text.substring("--console".length()).trim();
         if (text.length() == 0) return usage(source);
         long seq = SEQ.incrementAndGet();
         JsonObject request = new JsonObject();
         request.addProperty("seq", seq); request.addProperty("text", text); request.addProperty("ts", System.currentTimeMillis()); request.addProperty("protocol_version", 2);
         request.addProperty("player", player == null ? "" : player.getGameProfile().getName());
-        request.addProperty("is_op", source.hasPermission(2) || integratedOwner);
+        request.addProperty("is_op", source.hasPermissionLevel(2) || integratedOwner);
         int permissionLevel = 0;
         for (int level = 4; level >= 0; level--) {
-            if (source.hasPermission(level)) { permissionLevel = level; break; }
+            if (source.hasPermissionLevel(level)) { permissionLevel = level; break; }
         }
         if (integratedOwner) permissionLevel = Math.max(permissionLevel, 4);
         request.addProperty("permission_level", permissionLevel);
         request.addProperty("exec_mode", console ? "console" : "player");
-        request.addProperty("server_type", dedicated ? "dedicated" : (server.isPublished() ? "lan" : "singleplayer"));
+        request.addProperty("server_type", dedicated ? "dedicated" : (server.getPublic() ? "lan" : "singleplayer"));
         request.addProperty("is_integrated_owner", integratedOwner);
         File requestFile = new File(BridgeIO.bridgeDir(server), "ai_request.json");
         BridgeIO.write(requestFile, new Gson().toJson(request) + System.lineSeparator());
@@ -69,7 +69,7 @@ public final class AiChat {
     private static void tell(CommandSource source, String text) {
         if (source.getEntity() instanceof ServerPlayerEntity) {
             ServerPlayerEntity player = (ServerPlayerEntity) source.getEntity();
-            player.sendMessage(new net.minecraft.util.text.StringTextComponent(text), player.getUUID());
+            player.sendMessage(new net.minecraft.util.text.StringTextComponent(text), player.getUniqueID());
         }
     }
 
@@ -100,7 +100,7 @@ public final class AiChat {
                                 server.execute(new Runnable() {
                                     @Override public void run() {
                                         if (requester != null && requester.isAlive()) {
-                                            requester.sendMessage(new net.minecraft.util.text.StringTextComponent("[AI] " + text), requester.getUUID());
+                                            requester.sendMessage(new net.minecraft.util.text.StringTextComponent("[AI] " + text), requester.getUniqueID());
                                         }
                                     }
                                 });

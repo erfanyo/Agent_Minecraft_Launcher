@@ -22,6 +22,10 @@ public final class AiChatCommand extends CommandBase {
     @Override public String getName() { return "ai"; }
     @Override public String getUsage(ICommandSender sender) { return "/ai <想问的问题>"; }
     @Override public int getRequiredPermissionLevel() { return 0; }
+    // Legacy singleplayer senders can reject even permission level 0 when
+    // cheats are disabled. Conversation is public; executed commands retain
+    // the player's own permission checks in FileCommandBridge.
+    @Override public boolean checkPermission(MinecraftServer server, ICommandSender sender) { return true; }
 
     @Override public void execute(final MinecraftServer server, final ICommandSender sender, String[] args) throws CommandException {
         String text = String.join(" ", Arrays.asList(args)).trim();

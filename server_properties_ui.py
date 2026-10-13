@@ -15,6 +15,8 @@
 """
 from __future__ import annotations
 
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGroupBox,
@@ -206,12 +208,12 @@ class ServerPropertiesDialog(QDialog):
         dangerous = [key for key in changes if sp.is_dangerous(key)]
         if dangerous:
             names = '、'.join(sp.label_for(key) for key in dangerous)
-            answer = QMessageBox.warning(
+            answer = action_question(
                 self, '确认修改危险项',
                 f'以下改动可能让服务端起不来，或生成一个全新的空世界：\n\n{names}\n\n'
                 '确定要保存吗？',
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
+                QMessageBox.StandardButton.Yes, kind='warning')
             if answer != QMessageBox.StandardButton.Yes:
                 return
         result = sp_io.apply_update(self.server_root, changes)

@@ -17,7 +17,7 @@ class DownloadTaskController(QObject):
     """串行执行启动器下载任务，并暴露统一的 UI 信号。"""
 
     status = Signal(str)
-    progress = Signal(int, int)
+    progress = Signal(object, object)
     completed = Signal(bool, str)
     cancelled = Signal()
 

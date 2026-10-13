@@ -9,6 +9,8 @@
 - 运行配置:一键配置(下拉菜单,未来持续扩展;当前含 RCON 一键配置)
 - 备份·存档:手动备份、备份历史(查看/删除)、查看存档、FTB Backups 频率联动
 """
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 import os
 import re
 import shutil
@@ -306,7 +308,7 @@ class InstanceManagerDialog(QWidget):
         try:
             custom_jvm = self.jvm_editor.values()
         except ValueError as error:
-            QMessageBox.warning(self, 'JVM 参数', str(error))
+            inline_warning(self, 'JVM 参数', str(error))
             return
         if custom_jvm is None:
             opts.pop('jvm_args', None)
@@ -319,11 +321,11 @@ class InstanceManagerDialog(QWidget):
             from java_manager import java_major, minecraft_java_warning
             warning = minecraft_java_warning(self._inst_base, java_major(java_path))
             if warning:
-                answer = QMessageBox.warning(
+                answer = action_question(
                     self, "Java 可能不兼容",
                     warning + "\n\n仍要为此实例保存该 Java 吗？",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No)
+                    QMessageBox.StandardButton.Yes, kind='warning')
                 if answer != QMessageBox.StandardButton.Yes:
                     return
         opts["java_path"] = java_path
@@ -412,12 +414,12 @@ class InstanceManagerDialog(QWidget):
         layout.addWidget(title)
         layout.addWidget(desc)
         layout.addWidget(btn)
-        server_btn = QPushButton("自动转换为候选服务端…")
+        server_btn = QPushButton("导出为服务端…")
         set_style(server_btn, card_btn_style)
         server_btn.clicked.connect(self._open_server_builder_dialog)
         layout.addWidget(server_btn)
         server_hint = QLabel(
-            "自动转换会安装并打包对应服务端运行库，生成可导入 AMCL 的候选服务端 ZIP；"
+            "安装对应服务端运行库，可先启动测试并排除客户端 Mod，最后生成服务端 ZIP；"
             "不会只把客户端 mods/config 原样压缩。")
         server_hint.setWordWrap(True)
         server_hint.setStyleSheet(hint_style())
@@ -623,7 +625,7 @@ class InstanceManagerDialog(QWidget):
         mods_dir = os.path.join(self.inst_dir, "mods")
         jars = self._mod_files()
         if not jars:
-            QMessageBox.information(self, "Mod 依赖网络",
+            inline_notice(self, "Mod 依赖网络",
                                     "该实例还没有可分析的 Mod\n(先在 mods 目录放几个 mod,或去下载页装)")
             return
         # 进度条(非模态,带"正在分析依赖关系")
@@ -643,7 +645,7 @@ class InstanceManagerDialog(QWidget):
         def on_done(graph):
             dlg.close()
             if graph.stats()["edges"] == 0:
-                QMessageBox.information(self, "Mod 依赖网络",
+                inline_notice(self, "Mod 依赖网络",
                                         "没解析出 mod 间的依赖关系(可能都只依赖游戏本体/加载器,"
                                         "或元数据不完整)。可点节点看每个 mod 信息。")
                 return
@@ -663,7 +665,7 @@ class InstanceManagerDialog(QWidget):
 
         def on_err(msg):
             dlg.close()
-            QMessageBox.warning(self, "Mod 依赖网络失败", f"解析依赖出错:\n{msg}")
+            inline_warning(self, "Mod 依赖网络失败", f"解析依赖出错:\n{msg}")
 
         worker.done.connect(on_done)
         worker.error.connect(on_err)
@@ -698,8 +700,8 @@ class InstanceManagerDialog(QWidget):
                  if it.data(Qt.ItemDataRole.UserRole)]
         if not names:
             return
-        if QMessageBox.question(self, "确认删除",
-                                f"确定删除 {len(names)} 个 Mod 文件吗?") != QMessageBox.StandardButton.Yes:
+        if action_question(self, "确认删除",
+                                f"确定删除 {len(names)} 个 Mod 文件吗?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         for n in names:
             try:
@@ -802,7 +804,7 @@ class InstanceManagerDialog(QWidget):
 
     def _open_pack_dir(self, ptype: str):
         if ptype == "datapack" and not self._pack_dest_dir(ptype).endswith("datapacks"):
-            QMessageBox.information(self, "提示", "还没有存档,先创建一个世界后再管理数据包")
+            inline_notice(self, "提示", "还没有存档,先创建一个世界后再管理数据包")
             return
         self._open_dir(self._pack_dest_dir(ptype))
 
@@ -817,10 +819,10 @@ class InstanceManagerDialog(QWidget):
             hits = search_mods(kw.strip(), None, None,
                                limit=12, project_type=ptype)
         except Exception as e:
-            QMessageBox.warning(self, "搜索失败", str(e))
+            task_warning(self, "搜索失败", str(e))
             return
         if not hits:
-            QMessageBox.information(self, "没有结果", f"没找到匹配的{title},换个关键词试试")
+            task_notice(self, "没有结果", f"没找到匹配的{title},换个关键词试试")
             return
         items = [f"{h['title']}  (⬇{h['downloads']:,})" for h in hits]
         choice, ok = QInputDialog.getItem(self, "选择", "选择要下载的项目:", items, 0, False)
@@ -829,18 +831,18 @@ class InstanceManagerDialog(QWidget):
         slug = hits[items.index(choice)]["slug"]
         dest = self._pack_dest_dir(ptype)
         if not os.path.isdir(os.path.dirname(dest)) and ptype == "datapack":
-            QMessageBox.information(self, "提示", "还没有存档,先创建一个世界后再下载数据包")
+            task_notice(self, "提示", "还没有存档,先创建一个世界后再下载数据包")
             return
         try:
             filename = download_mod(slug, self._game_version(), None, dest)
         except Exception as e:
-            QMessageBox.warning(self, "下载失败", str(e))
+            task_warning(self, "下载失败", str(e))
             return
         if filename:
-            QMessageBox.information(self, "完成", f"已下载到:\n{dest}\n{filename}")
+            task_notice(self, "完成", f"已下载到:\n{dest}\n{filename}")
             self._refresh_pack_list(ptype)
         else:
-            QMessageBox.warning(self, "没有版本", "该项目没有可下载的文件版本")
+            task_warning(self, "没有版本", "该项目没有可下载的文件版本")
 
     def _game_version(self) -> str:
         return self._inst_base
@@ -1027,7 +1029,7 @@ class InstanceManagerDialog(QWidget):
             line = line.strip()
             if line and not line.startswith("#"):
                 results.append(send_command(line, main))
-        QMessageBox.information(self, "发送结果", "\n".join(results))
+        inline_notice(self, "发送结果", "\n".join(results))
 
     def _cmd_copy(self):
         from PySide6.QtGui import QGuiApplication
@@ -1078,7 +1080,7 @@ class InstanceManagerDialog(QWidget):
         it = self.cmd_custom_list.currentItem()
         if it is None:
             return
-        if QMessageBox.question(self, "确认", "删除这条自定义指令?") != QMessageBox.StandardButton.Yes:
+        if action_question(self, "确认", "删除这条自定义指令?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         commands = self._cmd_load_custom()
         idx = self.cmd_custom_list.currentRow()
@@ -1102,7 +1104,7 @@ class InstanceManagerDialog(QWidget):
             line = line.strip()
             if line:
                 results.append(send_command(line, main))
-        QMessageBox.information(self, "发送结果", "\n".join(results))
+        inline_notice(self, "发送结果", "\n".join(results))
 
     def _cmd_copy_custom(self):
         it = self.cmd_custom_list.currentItem()
@@ -1189,7 +1191,7 @@ class InstanceManagerDialog(QWidget):
                                            "base": self._inst_base,
                                            "loader": self._inst_loader})
             return
-        QMessageBox.information(
+        inline_notice(
             self, "一键配置 · bridge-mod",
             "请在主窗口「我的版本」页使用「一键配置 ▾ → 一键配置 bridge-mod」。\n"
             "(此处未能定位到主窗口,可能是从独立窗口打开的实例详情)")
@@ -1276,7 +1278,7 @@ class InstanceManagerDialog(QWidget):
             out = backup_instance(self.inst_id, self.game_dir)
             self.status_msg(f"备份完成:{out}")
         except Exception as e:
-            QMessageBox.warning(self, "备份失败", str(e))
+            task_warning(self, "备份失败", str(e))
         self._refresh_backups()
 
     def _refresh_backups(self):
@@ -1289,7 +1291,7 @@ class InstanceManagerDialog(QWidget):
         items = self.bak_list.selectedItems()
         if not items:
             return
-        if QMessageBox.question(self, "确认删除", f"删除 {len(items)} 个备份?") != QMessageBox.StandardButton.Yes:
+        if task_question(self, "确认删除", f"删除 {len(items)} 个备份?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         for it in items:
             shutil.rmtree(os.path.join(self.game_dir, "backups", self.inst_id, it.text().split()[0]),
@@ -1314,17 +1316,17 @@ class InstanceManagerDialog(QWidget):
     def _open_selected_save(self):
         it = self.saves_list.currentItem()
         if it is None:
-            QMessageBox.information(self, "提示", "先在列表里选一个存档")
+            inline_notice(self, "提示", "先在列表里选一个存档")
             return
         self._open_dir(os.path.join(self.inst_dir, "saves", it.text()))
 
     def _delete_selected_save(self):
         it = self.saves_list.currentItem()
         if it is None:
-            QMessageBox.information(self, "提示", "先在列表里选一个存档")
+            inline_notice(self, "提示", "先在列表里选一个存档")
             return
-        if QMessageBox.question(self, "确认删除",
-                                f"确定删除存档 {it.text()} 吗?\n(建议先备份)") != QMessageBox.StandardButton.Yes:
+        if action_question(self, "确认删除",
+                                f"确定删除存档 {it.text()} 吗?\n(建议先备份)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         shutil.rmtree(os.path.join(self.inst_dir, "saves", it.text()), ignore_errors=True)
         self._refresh_saves()

@@ -36,13 +36,13 @@ class SettingsLayoutTests(unittest.TestCase):
         text = '\n'.join(label.text() for label in page.findChildren(QLabel))
         self.assertIn('鸣谢', text)
         for component in ('PySide6', 'Requests', 'psutil', 'cryptography', 'pywebview',
-                          'llama.cpp', 'Qwen3.5-0.8B', 'EasyTier', 'PyInstaller'):
+                          'llama.cpp', 'Qwen3.5-0.8B', 'EasyTier', 'Terracotta', 'PyInstaller'):
             self.assertIn(component, text)
         for license_name in ('LGPL-3.0', 'Apache-2.0', 'BSD-3-Clause', 'MIT'):
             self.assertIn(license_name, text)
         cards = [widget for widget in page.findChildren(QWidget)
                  if widget.objectName() == 'software_component_card']
-        self.assertEqual(9, len(cards))
+        self.assertEqual(10, len(cards))
         self.assertIn('Modrinth', text)
         self.assertIn('BMCLAPI', text)
 

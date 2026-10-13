@@ -85,7 +85,7 @@ class AutoRestart(Skill):
         if not self.manager.main.game_process or self.manager.main.game_process.poll() is not None:
             ret = QMessageBox.question(
                 self.manager.main, "游戏异常退出",
-                f"游戏异常退出(退出码 {exit_code})。\n要自动重启吗?")
+                f"游戏异常退出(退出码 {exit_code})。\n要自动重启吗?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret == QMessageBox.StandardButton.Yes:
                 self.manager.main.launch_selected()   # 重新启动当前实例
 
@@ -146,6 +146,7 @@ class BackupReminder(Skill):
             dialog.setText("本次游玩的本地世界有变化。你也不希望坏档时没有存档点吧？")
             dialog.setInformativeText("现在备份这个实例的世界吗？")
             dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            dialog.setDefaultButton(QMessageBox.StandardButton.Yes)
             dialog.button(QMessageBox.StandardButton.Yes).setText("现在备份")
             dialog.button(QMessageBox.StandardButton.No).setText("这次不用")
             skip = QCheckBox("以后不再提醒（可在设置 → 备份中恢复）", dialog)

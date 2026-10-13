@@ -607,8 +607,53 @@ def load_registry(url: str) -> list:
             "download_url": it.get("download_url", it.get("url", "")),
             "repo": it.get("repo", url),
             "author": it.get("author", ""),
+            "category": it.get("category", ""),
         })
     return out
+
+
+def plugin_category(name: str, category=None) -> str:
+    if category in ('mod管理', 'Mod 管理', 'mods'):
+        return 'Mod 管理'
+    if category in ('功能', 'features'):
+        return '功能'
+    return 'Mod 管理' if name in {
+        'create_schematics', 'hotai_patches', 'kubejs_tools',
+        'tacz_gunpacks', 'tlm_packs', 'ysm_skins'} else '功能'
+
+
+def parse_plugin_share_code(text: str) -> dict:
+    """Versioned locator only; download URLs still come from the registry manifest."""
+    import base64
+    import json
+    import re
+    from urllib.parse import urlparse
+    prefix = 'AMCLPLUGIN1:'
+    text = text.strip()
+    if not text.startswith(prefix) or len(text) > 8192:
+        raise ValueError('不是有效的 AMCL 插件分享码')
+    payload = text[len(prefix):]
+    try:
+        row = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+    except (ValueError, UnicodeError):
+        raise ValueError('分享码格式错误') from None
+    if not isinstance(row, dict):
+        raise ValueError('分享码格式错误')
+    registry, name = row.get('registry'), row.get('plugin')
+    if not isinstance(registry, str) or urlparse(registry).scheme != 'https' or not urlparse(registry).hostname:
+        raise ValueError('分享码需要 HTTPS 仓库或清单链接')
+    if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_]+', name):
+        raise ValueError('分享码中的插件 ID 无效')
+    return {'registry': registry, 'plugin': name,
+            'category': plugin_category(name, row.get('category'))}
+
+
+def make_plugin_share_code(registry: str, name: str, category=None) -> str:
+    import base64
+    import json
+    payload = json.dumps({'registry': registry, 'plugin': name,
+                          'category': plugin_category(name, category)}, ensure_ascii=False).encode('utf-8')
+    return 'AMCLPLUGIN1:' + base64.urlsafe_b64encode(payload).decode('ascii').rstrip('=')
 
 
 def list_remote_plugins(registries: list) -> dict:
@@ -619,7 +664,7 @@ def list_remote_plugins(registries: list) -> dict:
         if not url:
             continue
         for e in load_registry(url):
-            merged[e["name"]] = e   # 后注册的仓库覆盖同名
+            merged[e["name"]] = dict(e, _registry_url=url)   # 后注册的仓库覆盖同名
     return merged
 
 

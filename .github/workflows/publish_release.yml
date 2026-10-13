@@ -33,7 +33,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" --jq '{conclusion,head_sha,event}' > run.json
           test "$(jq -r .conclusion run.json)" = success
           test "$(jq -r .event run.json)" = workflow_dispatch
-          git merge-base --is-ancestor "$(jq -r .head_sha run.json)" HEAD
+          test "$(jq -r .head_sha run.json)" = "$(git rev-parse HEAD)"
 
       - uses: actions/download-artifact@v4
         with:
@@ -54,6 +54,9 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          NOTES_FILE="RELEASE_NOTES_${VERSION#v}.md"
+          test -f "$NOTES_FILE"
+          grep -Fq "## [$VERSION]" CHANGELOG.md
           WINDOWS_DIR="$(dirname "$(find release/windows -name SHA256SUMS.txt -print -quit)")"
           LINUX_DIR="$(dirname "$(find release/linux -name SHA256SUMS-linux.txt -print -quit)")"
           (cd "$WINDOWS_DIR" && sha256sum -c SHA256SUMS.txt)
@@ -66,9 +69,12 @@ jobs:
           cp "$LINUX_DIR/SHA256SUMS-linux.txt" release/assets/
           cp erfanyo.asc release/assets/
           {
-            cat RELEASE_NOTES_1.0.0.md
+            cat "$NOTES_FILE"
             printf '\n<details>\n<summary>技术版更新日志</summary>\n\n'
-            sed -n '/^## \[v1\.0\.0\]/,/^## \[v0\.7\.0\]/{ /^## \[v0\.7\.0\]/d; p; }' CHANGELOG.md
+            awk -v heading="## [$VERSION]" '
+              /^## / { if (active) exit; if (index($0, heading) == 1) active=1 }
+              active { print }
+            ' CHANGELOG.md
             printf '\n</details>\n'
           } > release/body.md
 

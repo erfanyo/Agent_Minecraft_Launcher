@@ -62,13 +62,15 @@ class TutorialStepsTests(unittest.TestCase):
 
     def test_walkthrough_uses_current_entry_and_no_automatic_install(self):
         steps = first_game_steps()
-        self.assertEqual(len(steps), 9)
+        self.assertEqual(len(steps), 10)
         self.assertEqual(steps[0]['focus_main_tab'], t('RESOURCES'))
         self.assertEqual(steps[2]['focus_tree_item'], '1.21.xx')
         self.assertEqual(steps[3]['focus_tree_item'], '1.21.1')
         self.assertIn('最新正式版', steps[2]['text'])
         self.assertIn('不会替你下载', steps[5]['text'])
-        self.assertIn('启动游戏', steps[-1]['text'])
+        self.assertIn('启动游戏', steps[-2]['text'])
+        self.assertIn('AI', steps[-1]['text'])
+        self.assertIn('返工', steps[-1]['text'])
 
     def test_overlay_and_spotlight_share_host_local_coordinates(self):
         host = QWidget()

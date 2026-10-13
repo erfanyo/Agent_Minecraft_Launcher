@@ -287,7 +287,7 @@ TOOLS = [
           ["name", "code"]),
 ]
 
-TOOLS.extend([{"type":"function","function":{"name":"snapshot_instance","description":"创建完整隔离实例快照，包含存档、Mod、配置和核心；默认锁定当前 MC/加载器。需游戏退出。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"lock_environment":{"type":"boolean"}},"required":["instance"]}}},{"type":"function","function":{"name":"restore_instance_snapshot","description":"校验并恢复指定快照；恢复前实例保留。必须用户确认并退出游戏。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"snapshot_id":{"type":"string"}},"required":["instance","snapshot_id"]}}},{"type":"function","function":{"name":"list_instance_snapshots","description":"列出此实例可恢复的快照 ID。","parameters":{"type":"object","properties":{"instance":{"type":"string"}},"required":["instance"]}}},{"type":"function","function":{"name":"inspect_mod_jar","description":"检查一个 Mod 文件的内部元数据、SHA256 和 ZIP CRC。文件名不是身份；CRC 正常也不证明没有缺文件。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"}},"required":["instance","filename"]}}},{"type":"function","function":{"name":"set_mod_enabled","description":"可回退启用或禁用一个 Mod。禁用不删除，用 .disabled 后缀；必须说明功能损失。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"},"enabled":{"type":"boolean"}},"required":["instance","filename","enabled"]}}},{"type":"function","function":{"name":"observe_game","description":"读取工具启动的本轮游戏进程状态、退出码和日志尾部。不把进程运行当作进入世界成功。","parameters":{"type":"object","properties":{"instance":{"type":"string"}},"required":["instance"]}}},{"type":"function","function":{"name":"find_compatible_mod_versions","description":"严格查询当前 MC/加载器下的 Modrinth 项目版本 ID、文件哈希及前置，不放宽条件。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"project":{"type":"string"}},"required":["instance","project"]}}},{"type":"function","function":{"name":"replace_mod_version","description":"以精确 Modrinth 版本 ID 替换一个旧 JAR，严格检查 MC/加载器并校验下载；旧文件保留，前置不自动装。需先查内部身份和兼容候选，说明功能变化。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"},"version_id":{"type":"string"}},"required":["instance","filename","version_id"]}}}])
+TOOLS.extend([{"type":"function","function":{"name":"snapshot_instance","description":"创建完整隔离实例快照，包含存档、Mod、配置和核心；记录当前 MC/加载器，不锁定实例。需游戏退出。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"lock_environment":{"type":"boolean"}},"required":["instance"]}}},{"type":"function","function":{"name":"restore_instance_snapshot","description":"校验并恢复指定快照；恢复前实例保留。必须用户确认并退出游戏。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"snapshot_id":{"type":"string"}},"required":["instance","snapshot_id"]}}},{"type":"function","function":{"name":"list_instance_snapshots","description":"列出此实例可恢复的快照 ID。","parameters":{"type":"object","properties":{"instance":{"type":"string"}},"required":["instance"]}}},{"type":"function","function":{"name":"inspect_mod_jar","description":"检查一个 Mod 文件的内部元数据、SHA256 和 ZIP CRC。文件名不是身份；CRC 正常也不证明没有缺文件。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"}},"required":["instance","filename"]}}},{"type":"function","function":{"name":"set_mod_enabled","description":"可回退启用或禁用一个 Mod。禁用不删除，用 .disabled 后缀；必须说明功能损失。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"},"enabled":{"type":"boolean"}},"required":["instance","filename","enabled"]}}},{"type":"function","function":{"name":"observe_game","description":"读取工具启动的本轮游戏进程状态、退出码和日志尾部。不把进程运行当作进入世界成功。","parameters":{"type":"object","properties":{"instance":{"type":"string"}},"required":["instance"]}}},{"type":"function","function":{"name":"find_compatible_mod_versions","description":"严格查询当前 MC/加载器下的 Modrinth 项目版本 ID、文件哈希及前置，不放宽条件。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"project":{"type":"string"}},"required":["instance","project"]}}},{"type":"function","function":{"name":"replace_mod_version","description":"以精确 Modrinth 版本 ID 替换一个旧 JAR，严格检查 MC/加载器并校验下载；旧文件保留，前置不自动装。需先查内部身份和兼容候选，说明功能变化。","parameters":{"type":"object","properties":{"instance":{"type":"string"},"filename":{"type":"string"},"version_id":{"type":"string"}},"required":["instance","filename","version_id"]}}}])
 
 TOOLS.append(_tool('find_compatible_mod_replacement', '仅在证据已确认 Mod 游戏版本或加载器不匹配后调用一次。合并读取 JAR 内部身份、文件指纹反查和当前实例精确兼容版本查询；结果缓存，找到时返回可交给 replace_mod_version 的 version_id。', {'instance': {'type': 'string'}, 'filename': {'type': 'string'}}, ['instance', 'filename']))
 
@@ -617,6 +617,7 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
     continuous = (settings.get("ai_confirmation_mode", "per_action") == "backup_continue" and
                   confirm_action is not None)
     auto_snapshots = set()
+    repair_environments = {}
     autonomy_notified = False
     snapshot_before = {
         'repair_instance_core', 'complete_instance_files', 'reset_instance',
@@ -808,7 +809,18 @@ def build_executor(settings: dict, progress_cb: Callable | None = None,
             kwargs = {k: v for k, v in out_args.items() if k in sig.parameters}
         except (TypeError, ValueError):
             kwargs = out_args
-        result = fn(**kwargs)
+        from diagnostic_tools import environment, repair_environment_scope, check_constraint
+        instance = str(args.get('instance') or '').strip()
+        repair_tools = {'set_mod_enabled', 'replace_mod_version', 'repair_instance_core',
+                        'complete_instance_files', 'inspect_instance_core',
+                        'find_compatible_mod_replacement', 'find_compatible_mod_versions'}
+        if instance and name in repair_tools and instance not in repair_environments:
+            repair_environments[instance] = environment(instance)
+        scoped = repair_environments if name in repair_tools | {'launch_game', 'observe_game'} else {}
+        with repair_environment_scope(scoped):
+            if instance and instance in scoped:
+                check_constraint(instance)
+            result = fn(**kwargs)
         if continuous and name == 'snapshot_instance':
             instance = str(args.get('instance') or '').strip()
             if instance:
@@ -1768,7 +1780,7 @@ class AISettingsForm(QWidget):
                  "可能涉及插件、源码和存档；需要稳妥时可切回只读。\n\n确定要开启吗？"))
         ret = QMessageBox.question(self, cap, disc,
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                   QMessageBox.StandardButton.No)
+                                   QMessageBox.StandardButton.Yes)
         if ret != QMessageBox.StandardButton.Yes:
             # 取消 → 回只读
             self.permission.blockSignals(True)
@@ -2892,7 +2904,7 @@ class AIChatDock(QDockWidget):
                  "可能涉及插件、源码和存档；需要稳妥时可切回只读。\n\n确定要开启吗？"))
         ret = QMessageBox.question(self, cap, disc,
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                                   QMessageBox.StandardButton.No)
+                                   QMessageBox.StandardButton.Yes)
         return ret == QMessageBox.StandardButton.Yes
 
     def _refresh_confirmation_mode(self):
@@ -3903,7 +3915,7 @@ class AIChatDock(QDockWidget):
             self, "继续对话?",
             f"当前对话已用约 {used / 1000:.1f}k tokens(占上下文 {used * 100 // limit}%)。\n"
             "继续这一轮会消耗不少 token,确定要继续吗?\n\n"
-            "(选择\"No\"可保留输入内容,或开启新对话后重发)")
+            "(选择\"No\"可保留输入内容,或开启新对话后重发)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
         return ret == QMessageBox.StandardButton.Yes
 
     def _trim_history(self):

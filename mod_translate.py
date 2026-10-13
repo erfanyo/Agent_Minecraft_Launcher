@@ -37,6 +37,7 @@ _LANG_NAME = {
 
 _store_lock = threading.RLock()   # 缓存读写锁(线程安全)
 _engine = None                    # 模块级懒加载引擎单例
+_engine_key = None
 _engine_lock = threading.Lock()
 
 
@@ -57,7 +58,14 @@ def enabled() -> bool:
 def _active_model_id() -> str:
     try:
         from settings import load_settings
-        mid = (load_settings().get("ai_local_model") or "").strip()
+        settings = load_settings()
+        selection = settings.get('ai_mod_translate_selection') or {}
+        if selection.get('kind') == 'builtin':
+            return selection.get('model') or settings.get('ai_local_model') or ''
+        mid = (settings.get('ai_mod_translate_builtin_model')
+               if settings.get('ai_mod_translate_source') == 'builtin'
+               else settings.get('ai_local_model')) or ''
+        mid = mid.strip()
         if mid:
             return mid
     except Exception:
@@ -70,7 +78,11 @@ def translation_source() -> str:
     """当前描述翻译来源；独立于聊天策略，默认本地以避免意外消耗云端额度。"""
     try:
         from settings import load_settings
-        return "cloud" if load_settings().get("ai_mod_translate_source") == "cloud" else "local"
+        settings = load_settings()
+        selection = settings.get('ai_mod_translate_selection') or {}
+        if selection.get('kind'):
+            return 'cloud' if selection['kind'] == 'api' else 'local'
+        return "cloud" if settings.get("ai_mod_translate_source") == "cloud" else "local"
     except Exception:
         return "local"
 
@@ -80,11 +92,19 @@ def model_cache_version() -> str:
     清单版本号变更 / 模型资源定义变更 → 指纹变 → 缓存整批作废。"""
     try:
         import model_registry
+        from settings import load_settings
+        s = load_settings()
+        selection = s.get('ai_mod_translate_selection') or {}
+        if selection.get('kind') == 'api':
+            config = _translation_api_config(s)
+            return 'api|' + '|'.join((selection.get('provider', ''), config['base_url'], config['model']))
+        selected = (s.get('ai_mod_translate_models') or {}).get(s.get('ai_mod_translate_source'), '')
         if translation_source() == "cloud":
-            from settings import load_settings
-            s = load_settings()
             return "cloud|" + "|".join(str(s.get(k, "")) for k in
-                                         ("ai_cloud_provider", "ai_cloud_base_url", "ai_cloud_model"))
+                                         ("ai_cloud_provider", "ai_cloud_base_url", "ai_cloud_model")) + '|' + selected
+        if selection.get('kind') != 'builtin' and (s.get('ai_mod_translate_source') == 'external' or (s.get('ai_mod_translate_source') != 'builtin' and s.get('ai_local_mode') in ('lmstudio', 'ollama'))):
+            return 'external|' + '|'.join(str(s.get(k, '')) for k in
+                                         ('ai_local_mode', 'ai_local_endpoint', 'ai_external_model')) + '|' + selected
         mid = _active_model_id()
         res = model_registry.RESOURCES.get(mid, {})
         manifest_ver = "?"
@@ -200,11 +220,21 @@ def _external_config() -> tuple:
     try:
         from settings import load_settings
         s = load_settings()
+        if (s.get('ai_mod_translate_selection') or {}).get('kind') == 'builtin':
+            return '', ''
+        if s.get('ai_mod_translate_source') == 'builtin':
+            return '', ''
         mode = (s.get("ai_local_mode") or "builtin")
+        explicit = s.get('ai_mod_translate_source') == 'external'
+        if not explicit and mode not in ("lmstudio", "ollama"):
+            return "", ""
         base = (s.get("ai_local_endpoint") or "").strip()
         # 外部模型名单独存 ai_external_model(与 ai_local_model 本地 GGUF 分离,避免撞字段爆内存)
         model = (s.get("ai_external_model") or "").strip()
-        if mode in ("lmstudio", "ollama"):
+        if explicit:
+            model = ((s.get('ai_mod_translate_models') or {}).get('external') or model).strip()
+            base = base or ('http://127.0.0.1:11434' if mode == 'ollama' else 'http://127.0.0.1:1234')
+        if mode in ("lmstudio", "ollama") or explicit:
             if not model:
                 # 没单独存模型名 → 从 LM Studio 探测一个(通常 qwen 9B)
                 from settings import load_settings as _ls
@@ -213,14 +243,9 @@ def _external_config() -> tuple:
                 model = _m
             if base and model:
                 return base, model
-        if (base and model):
-            return base, model
-        # 防御:显式 builtin 但本地 LM Studio(1234)可达且有较大模型 → 优先外部,
-        # 避免自起 llama-server 加载大模型爆内存(用户常手动用 LM Studio 跑大模型)。
-        base, model = _probe_local_lmstudio()
-        if base and model:
-            return base, model
-        return "", ""
+        raise TranslationUnavailable('外部本地 AI 未配置模型，请在设置 → AI 助手选择模型。')
+    except TranslationUnavailable:
+        raise
     except Exception:
         return "", ""
 
@@ -251,15 +276,26 @@ def get_translation_engine():
     """返回可用的 GrammarToolEngine(懒加载单例)。
     - 若设置指定了外部 OpenAI 兼容引擎(LM Studio 9B)→ 用外部,不起 llama-server;
     - 否则若 8090 已有健康 llama-server → 复用;否则检查模型已下载 → start();否则 TranslationUnavailable"""
-    global _engine
+    global _engine, _engine_key
     with _engine_lock:
-        if _engine is None:
+        base, model = _external_config()
+        key = (base, model, _active_model_id())
+        if _engine is None or _engine_key != key:
+            if _engine is not None and getattr(_engine, 'proc', None) is not None:
+                process = _engine.proc
+                _engine.stop()
+                process.wait(timeout=5)
             from local_ai import GrammarToolEngine
-            base, model = _external_config()
             if base and model:
                 _engine = GrammarToolEngine(external_base=base, external_model=model)
             else:
-                _engine = GrammarToolEngine()
+                from settings import load_settings
+                settings = load_settings()
+                # A separate translation model must not reuse the chat model's server.
+                port = 8091 if ((settings.get('ai_mod_translate_selection') or {}).get('kind') == 'builtin'
+                                or settings.get('ai_mod_translate_source') == 'builtin') else 8090
+                _engine = GrammarToolEngine(model_id=_active_model_id(), port=port)
+            _engine_key = key
         if _engine.is_external:
             # 外部引擎:探一下连通性,通了就直接用;不通抛异常(优雅降级)
             try:
@@ -270,7 +306,7 @@ def get_translation_engine():
                 requests.get(url + "/models", timeout=5).raise_for_status()
                 return _engine
             except Exception as e:
-                raise TranslationUnavailable(f"外部翻译引擎不可用:{type(e).__name__}: {e}")
+                raise TranslationUnavailable(translation_error_message(str(e), external=True)) from e
         try:
             import requests
             if requests.get(f"{_engine.base}/health", timeout=2).status_code == 200:
@@ -287,21 +323,46 @@ def get_translation_engine():
         return _engine
 
 
+def _translation_api_config(settings):
+    selection = settings.get('ai_mod_translate_selection') or {}
+    pid = selection.get('provider')
+    config = dict((settings.get('ai_model_providers') or {}).get(pid) or {})
+    if not config and pid == settings.get('ai_cloud_provider'):
+        config = {'base_url': settings.get('ai_cloud_base_url', ''),
+                  'api_key': settings.get('ai_cloud_api_key', '')}
+    if not config and pid in ('ollama', 'lmstudio'):
+        config = {'base_url': settings.get('ai_local_endpoint') or
+                  ('http://127.0.0.1:11434/v1' if pid == 'ollama' else 'http://127.0.0.1:1234/v1')}
+    config['model'] = selection.get('model', '')
+    config.setdefault('base_url', '')
+    config.setdefault('api_key', '')
+    return config
+
+
 def _translate_with_cloud(text: str, timeout: int, target_lang: str, target_name: str) -> str:
     """用用户已配置的 OpenAI 兼容云端模型翻译；不新建中转、不保存密钥。"""
     from settings import load_settings
     import requests
     s = load_settings()
+    selection = s.get('ai_mod_translate_selection') or {}
     base = (s.get("ai_cloud_base_url") or "").rstrip("/")
     key = (s.get("ai_cloud_api_key") or "").strip()
-    model = (s.get("ai_cloud_model") or "").strip()
-    if not (base and key and model):
+    model = ((s.get('ai_mod_translate_models') or {}).get('cloud') or s.get("ai_cloud_model") or "").strip()
+    if selection.get('kind') == 'api':
+        config = _translation_api_config(s)
+        base, key, model = config['base_url'].rstrip('/'), config['api_key'], config['model']
+    if not (base and model):
         raise TranslationUnavailable("云端翻译未配置：请先在设置 → AI 助手填写云端接口、密钥和模型。")
     target = target_name or ("简体中文" if target_lang == "zh" else target_lang)
     prompt = (f"把下面 Minecraft Mod 描述翻译成{target}。只输出译文，不解释；保留 Mod 名、版本号、URL、"
               "配置项和代码标识。\n\n" + text)
     try:
-        r = requests.post(base + "/chat/completions", headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+        if selection.get('provider') in ('ollama', 'lmstudio') and not base.endswith('/v1'):
+            base += '/v1'
+        headers = {'Content-Type': 'application/json'}
+        if key:
+            headers['Authorization'] = 'Bearer ' + key
+        r = requests.post(base + "/chat/completions", headers=headers,
                           json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.1, "max_tokens": 1024},
                           timeout=(15, timeout))
         r.raise_for_status()
@@ -407,6 +468,30 @@ def translate_text_safe(text: str, slug: str = "", field: str = "description",
                 "confidence": "low", "machine": False, "cached": False,
                 "source": "failed", "glossary_hit": False,
                 "error": str(e)}
+
+
+def translation_error_message(error: str, *, external=False) -> str:
+    """Keep transport tracebacks and endpoint details out of resource cards."""
+    error = str(error or '')
+    low = error.lower()
+    if any(term in low for term in ('connectionerror', 'connection refused', '10061', 'max retries', 'newconnectionerror')):
+        return ('无法连接外部本地 AI。请启动 LM Studio / Ollama 的 API 服务后重试，'
+                '或在设置 → AI 助手切换为内置本地模型。' if external or '外部' in error
+                else '无法连接翻译服务，请检查服务是否启动及网络连接。')
+    if 'timeout' in low or 'timed out' in low:
+        return '翻译等待超时，请稍后重试。'
+    if any(term in low for term in ('401', '403')):
+        return '翻译接口拒绝访问，请检查 API 密钥与权限。'
+    if '429' in low:
+        return '翻译接口请求过于频繁或额度不足，请稍后重试。'
+    if error.startswith(('本地模型未下载', '外部本地 AI 未配置', '云端翻译未配置', '无法连接', '翻译等待')):
+        return error
+    return '翻译暂不可用，请检查 AI 设置后重试。'
+
+
+def description_cache_key(slug: str, text: str) -> str:
+    fingerprint = model_cache_version() + '|' + (text or '')
+    return slug + '-' + hashlib.sha256(fingerprint.encode('utf-8')).hexdigest()[:20]
 
 
 def _now_ts() -> float:

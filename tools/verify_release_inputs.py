@@ -33,12 +33,7 @@ def main() -> int:
         errors.append(str(exc))
 
     bridge_dir = os.path.join(ROOT, "bridge-mod", "dist")
-    for _loader, _mc, name, _url, sha1 in fetch_bridge_mod_jars._JARS:
-        path = os.path.join(bridge_dir, name)
-        if not os.path.isfile(path):
-            errors.append(f"缺少已发布 bridge-mod：{name}")
-        elif fetch_bridge_mod_jars._sha1(path) != sha1:
-            errors.append(f"bridge-mod 校验失败：{name}")
+    errors.extend(fetch_bridge_mod_jars.verify_bundle(bridge_dir))
 
     required_files = [os.path.join("icons", "grass_block.png"),
                       os.path.join("icons", "server_cabinet_dark.png"),

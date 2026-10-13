@@ -6,7 +6,7 @@ from collections import deque
 from PySide6.QtCore import Qt, QTimer, QEvent, QPointF, QPropertyAnimation
 from PySide6.QtGui import QPainter, QPainterPath, QColor, QPen
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox
-from ui_style import set_style, panel_style, card_btn_style, muted_color, accent_color
+from ui_style import set_style, card_btn_style, muted_color, accent_color, current_color, text_color
 from memory_policy import snapshot, automatic_budget, history_peak, enabled_mod_count, GIB
 from memory_relief import pressure, visible_game_window
 
@@ -63,7 +63,10 @@ class MemoryCompanion(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
         self.setObjectName('memoryCompanion')
-        set_style(self, lambda: f'QWidget#memoryCompanion {{ {panel_style()} }}')
+        set_style(self, lambda: (
+            f'QWidget#memoryCompanion {{ background: {current_color("bg1")};'
+            f' color: {text_color()}; border: 1px solid {current_color("panel_border")};'
+            ' border-radius: 12px; }'))
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(12, 8, 12, 8)
         self.body.setSpacing(6)
@@ -87,7 +90,11 @@ class MemoryCompanion(QWidget):
         self.status_button = QPushButton('内存守护')
         set_style(self.status_button, card_btn_style)
         self.status_button.clicked.connect(self.reopen)
-        owner.statusBar().addPermanentWidget(self.status_button)
+        self._status_host = getattr(owner, 'title_bar', None)
+        if self._status_host is not None:
+            self._status_host.add_status_widget(self.status_button)
+        else:
+            owner.statusBar().addPermanentWidget(self.status_button)
         owner.installEventFilter(self)
 
     def setWidget(self, content):
@@ -123,10 +130,12 @@ class MemoryCompanion(QWidget):
         height = self.sizeHint().height()
         x = max(available.left(), min(main.left(), available.right() - width + 1))
         y = main.bottom() + 6
-        if y + height > available.bottom() + 1:
+        can_attach = not QApplication.platformName().lower().startswith('wayland')
+        if not can_attach or y + height > available.bottom() + 1:
             if not explicit and not self.detached:
                 self.hide()
-                self.status_button.setToolTip('下方空间不足，点击打开内存守护窗口')
+                self.status_button.setToolTip('点击打开独立内存守护窗口' if not can_attach
+                                              else '下方空间不足，点击打开内存守护窗口')
                 return
             # User explicitly opens the panel when there is no attachment space.
             if self.detached and self.isVisible() and not explicit:
@@ -175,7 +184,10 @@ class MemoryCompanion(QWidget):
         for timer in self.findChildren(QTimer):
             timer.stop()
         self.owner.removeEventFilter(self)
-        self.owner.statusBar().removeWidget(self.status_button)
+        if self._status_host is not None:
+            self._status_host.remove_status_widget(self.status_button)
+        else:
+            self.owner.statusBar().removeWidget(self.status_button)
         self.status_button.deleteLater()
         super().deleteLater()
 
@@ -329,7 +341,7 @@ def offer_memory_actions(owner, plan, version, launch):
     stop_ai_control = button('关闭本地 AI', stop_ai)
     button('重新检测', refresh)
     if os.name == 'nt':
-        relief = button('尝试整理内存 🛡', optimize)
+        relief = button('尝试整理内存', optimize)
         relief.setToolTip('需要管理员授权。缩减当前用户会话中程序的工作集，不关闭应用；切回其他应用可能暂时变慢。')
     button('忽略', dismiss)
     dock.setWidget(content)

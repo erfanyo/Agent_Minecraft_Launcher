@@ -40,6 +40,24 @@ def _mod(file, mod_id="", environment="unknown", disabled=False, description="")
 
 
 class ParseEvidenceTests(unittest.TestCase):
+    def test_plain_forge_loading_summary_attributes_each_client_error(self):
+        log = ('LootBeams (lootbeams) has failed to load correctly\n'
+               'java.lang.NoClassDefFoundError: net/minecraft/client/renderer/RenderStateShard,\n'
+               'Aim Bot (aim_bot) has failed to load correctly\n'
+               'java.lang.RuntimeException: Attempted to load class net/minecraft/client/player/LocalPlayer '
+               'for invalid dist DEDICATED_SERVER\n')
+        result = build_diagnosis([_mod('lootbeams.jar', 'lootbeams'),
+                                  _mod('aim_bot.jar', 'aim_bot')], log)
+        self.assertEqual(len(result['suggestions']), 2)
+        self.assertTrue(all(row['level'] == 'high' and '客户端类' in row['reason']
+                            for row in result['suggestions']))
+
+    def test_cli_diagnosis_uses_named_mod_records_not_reversed_arguments(self):
+        from server_service import diagnose_server_log
+        report = diagnose_server_log(CRASH_LOG)
+        self.assertIn('lootbeams', report)
+        self.assertIn('客户端类', report)
+
     def test_extracts_mod_and_class_error(self):
         ev = parse_log_evidence(CRASH_LOG)
         self.assertIn("lootbeams", ev["mods"])

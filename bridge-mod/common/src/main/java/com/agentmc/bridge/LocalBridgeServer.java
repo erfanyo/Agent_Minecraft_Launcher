@@ -143,15 +143,11 @@ public class LocalBridgeServer {
                             sink.fail("as_player 指定的玩家不在线: " + asPlayer);
                             return;
                         }
-                        source = source.withEntity(p).withSource(p);
+                        source = p.createCommandSourceStack();
                     }
                     source = source.withSource(sink);
-                    server.getCommands().performPrefixedCommand(source, command);
-                    // performPrefixedCommand 是 void(拿不到执行结果数),但语法/权限错误会以
-                    // CommandSyntaxException 抛出并落到下面的 fail();能正常返回即说明命令被接受。
-                    // 注意:早前这里没有任何 markResult → success 恒为 false,启动器把执行成功的
-                    // 指令也报成"⚠️ 命令未执行",玩家会以为没生效。
-                    sink.markResult(true);
+                    CommandExecutor.execute(server, source, command, sink);
+                    // 执行回调判定成功；正常返回不代表通过语法或权限检查。
                 } catch (Exception e) {
                     sink.fail(e.toString());
                 } finally {

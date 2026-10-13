@@ -45,14 +45,14 @@ public final class FileCommandBridge {
         }
         // 游戏内 AI 一律指定发起玩家；找不到玩家时宁可拒绝，也绝不使用控制台身份。
         ServerPlayerEntity player = playerName.length() == 0 ? null
-                : server.getPlayerList().getPlayerByName(playerName);
+                : server.getPlayerList().getPlayerByUsername(playerName);
         if (player == null) {
             reply.addProperty("success", false); reply.addProperty("result", "发起玩家不在线，未执行命令");
             BridgeIO.write(new File(dir, "command_reply.json"), new Gson().toJson(reply)); return;
         }
         try {
-            CommandSource source = player.createCommandSourceStack();
-            int result = server.getCommands().performCommand(source, command);
+            CommandSource source = player.getCommandSource();
+            int result = server.getCommandManager().handleCommand(source, command);
             reply.addProperty("success", result > 0);
             reply.addProperty("result", result > 0 ? "命令已执行" : "命令未执行（Minecraft 拒绝或没有匹配目标）");
         } catch (Exception e) {

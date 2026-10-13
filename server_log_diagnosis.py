@@ -28,12 +28,13 @@ _MOD_LINE_SKIP = {'loading', 'mod', 'none', 'unknown'}
 # 明确的类加载失败(几乎必然是「这个 Mod 在服务端跑不起来」)。
 _CLASS_ERROR = re.compile(
     r'(NoClassDefFoundError|ClassNotFoundException|NoSuchMethodError|'
-    r'NoSuchFieldError)')
+    r'NoSuchFieldError|Attempted to load class .+ for invalid dist DEDICATED_SERVER)')
 # 加载器报「某 Mod 加载失败」。形如:
 #   Failure message: LootBeams (lootbeams) has failed to load correctly
 # 优先取括号里的 modId,没有括号才退回显示名。
 _LOAD_FAIL = re.compile(
     r'Failure message:\s*(.+?)\s*has failed to load correctly|'
+    r'^\s*(.+?\([A-Za-z0-9_.\-]+\))\s+has failed to load correctly|'
     r'(?:Mod|模组)\s+([A-Za-z0-9_.\-]+)\s+(?:has failed|failed to load)', re.I)
 _FAIL_BRACKET = re.compile(r'\(([A-Za-z0-9_.\-]+)\)')
 # 明确的客户端专属痕迹:错误里提到客户端类包。
@@ -68,15 +69,17 @@ def parse_log_evidence(text: str) -> dict:
             continue
         failure = _LOAD_FAIL.search(line)
         if failure:
-            clause = failure.group(1)
+            clause = failure.group(1) or failure.group(2)
             if clause:
                 inside = _FAIL_BRACKET.search(clause)
                 named = inside.group(1) if inside else clause.strip()
             else:
-                named = failure.group(2)
+                named = failure.group(3)
             if named and named.casefold() not in _MOD_LINE_SKIP:
                 mods.setdefault(named, {'errors': [], 'reasons': []})
                 mods[named]['reasons'].append('加载器报告该 Mod 加载失败')
+                # Forge 普通日志将异常写在点名行之后，不一定包含 -- MOD -- 分节。
+                current = named
             continue
         if current and _CLASS_ERROR.search(line):
             message = line.strip()[:200]

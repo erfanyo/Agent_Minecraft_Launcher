@@ -45,10 +45,10 @@ def _read_state(root):
         return None
 
 
-def _request(state, action, **values):
+def _request(state, action, *, timeout=0.8, **values):
     message = {'token': state['token'], 'action': action, **values}
     with socket.create_connection(('127.0.0.1', state['port']), timeout=0.35) as connection:
-        connection.settimeout(0.8)
+        connection.settimeout(timeout)
         connection.sendall((json.dumps(message, ensure_ascii=False) + '\n').encode('utf-8'))
         data = b''
         while b'\n' not in data and len(data) <= 16 * 1024:
@@ -74,6 +74,45 @@ def managed_status(root, probe=True):
             running = False
     state['running'] = running
     return state
+
+
+def force_stop_server(root, expected_session, expected_pid):
+    """Only end the exact session the user confirmed, including older hosts."""
+    state = managed_status(root)
+    if not state or not state.get('running'):
+        return
+    if state.get('sessionId') != expected_session or state.get('pid') != expected_pid:
+        raise RuntimeError('服务端会话已变化，请重新确认。')
+    try:
+        _request(state, 'force_stop', timeout=8)
+        return
+    except RuntimeError as exc:
+        if 'unknown action' not in str(exc):
+            raise
+    # Compatibility with a host launched before the force_stop API existed.
+    import psutil
+    from datetime import datetime
+    process = psutil.Process(expected_pid)
+    started = datetime.fromisoformat(state['startedAt']).timestamp()
+    if (abs(process.create_time() - started) > 10
+            or Path(process.cwd()).resolve() != Path(root).resolve()
+            or process.name().lower() not in ('java', 'java.exe', 'javaw.exe')):
+        raise RuntimeError('进程身份无法确认，未执行强制结束。')
+    latest = _read_state(root)
+    if not latest or latest.get('sessionId') != expected_session:
+        raise RuntimeError('服务端会话已变化，未执行强制结束。')
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except psutil.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
+def abort_failed_server_startup(root):
+    state = managed_status(root)
+    if state and state.get('running'):
+        _request(state, 'abort_failed_startup')
 
 
 def send_server_command(root, command):
@@ -125,9 +164,13 @@ def start_managed_server(root, java, arguments, timeout=8.0):
         'close_fds': True,
     }
     if os.name == 'nt':
-        kwargs['creationflags'] = (getattr(subprocess, 'DETACHED_PROCESS', 0x00000008)
-                                   | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
+        # CREATE_NO_WINDOW is ignored when combined with DETACHED_PROCESS.
+        kwargs['creationflags'] = (getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0x00000200)
                                    | getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000))
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        kwargs['startupinfo'] = startup
     else:
         kwargs['start_new_session'] = True
     host_process = subprocess.Popen(_host_command(request_path), cwd=root, **kwargs)

@@ -53,7 +53,7 @@ Windows 构建流程和包内路径约定记录在本文档，后续参与项目
 ## CI 覆盖范围
 
 - Windows、macOS、Linux：源码导入检查。
-- Windows：完整自动测试和 Python 文件编译检查。
+- Windows、macOS、Linux：完整自动测试、Python 文件编译检查，以及普通/150% 缩放的 Qt UI 自动化。
 - Windows 手动任务：使用 Python 3.14.7 构建单文件 exe 和预装本地 AI ZIP，并实际启动
   标准版成品验证内置资源；模型由包生成脚本单独校验。
 - Linux 手动任务：在 Ubuntu 22.04 上构建 `onedir`，实际启动成品验证内置资源，
@@ -62,9 +62,11 @@ Windows 构建流程和包内路径约定记录在本文档，后续参与项目
 打包任务只在手动触发 CI 时运行；日常提交仍运行三平台加载检查和完整自动测试。这样既不
 隐藏现有打包问题，也不会让尚未解决的第三方冻结问题阻塞普通开发。
 
-目前 CI 下载并校验的是已发布的四个 bridge-mod 包。本地 `bridge-mod/dist` 中尚未发布的
-其他版本不会自动进入 CI 成品；发布这些包并把地址和校验值加入
-`tools/fetch_bridge_mod_jars.py` 后，CI 才能稳定包含它们。
+BridgeMod 发布输入固定在 `bridge-mod/prebuilt/manifest.json`：0.2.0 共八个 JAR，
+随源码保存，以 SHA256 校验。准备脚本将它们原子复制到 `bridge-mod/dist`，
+不依赖旧 GitHub Release 的四个包；预检会拒绝遗漏、损坏或清单外的 JAR。
+更新桥接源码时，须重新编译对应 JAR、更新 prebuilt 文件与清单，并重新验证。
+运行时历史在线下载兜底与 CI 固定构建输入分开管理。
 
 WSL 的准备、自动测试和 WSLg 界面测试见 `WSL_TESTING.md`。
 

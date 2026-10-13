@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from server_staging import server_staging_directory
 import requests
 
 from downloader import download_with_mirror
@@ -22,7 +23,7 @@ def inferred_runtime_identity(report):
               **{key: value for key, value in report.items()
                  if value not in (None, '', 'unknown')}}
     loader = str(merged.get('loader') or '').lower()
-    if loader not in ('forge', 'neoforge'):
+    if loader not in ('forge', 'neoforge', 'fabric'):
         loader = ''
     return {'loader': loader,
             'minecraftVersion': str(merged.get('minecraftVersion') or '').strip(),
@@ -37,6 +38,8 @@ def installer_source(loader, mc, version):
         raise ValueError('请输入加载器版本号，不要填网址或文件路径。')
     if tuple(int(p) for p in mc.split('.')[1:]) < (17,):
         raise ValueError('本轮自动补全仅支持 Minecraft 1.17 及以上。')
+    if loader == 'fabric':
+        return 'https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.2/fabric-installer-1.1.2.jar'
     if loader == 'forge':
         coordinate = f'{mc}-{version}'
         return f'https://maven.minecraftforge.net/net/minecraftforge/forge/{coordinate}/forge-{coordinate}-installer.jar'
@@ -45,7 +48,7 @@ def installer_source(loader, mc, version):
         if mc != f'1.{parts[0]}.{parts[1]}':
             raise ValueError('NeoForge 版本号与 Minecraft 版本不匹配。')
         return f'https://maven.neoforged.net/releases/net/neoforged/neoforge/{version}/neoforge-{version}-installer.jar'
-    raise ValueError('自动补全目前支持 Forge / NeoForge。')
+    raise ValueError('自动补全目前支持 Forge / NeoForge / Fabric。')
 
 
 def installer_sources(loader, mc, version):
@@ -99,7 +102,7 @@ def install_server_runtime(root, loader, mc, version, java, status=lambda _: Non
         break
     if checksum is None:
         raise last_error
-    with tempfile.TemporaryDirectory(prefix='.amcl-runtime-', dir=root.parent) as temporary:
+    with server_staging_directory(prefix='.amcl-runtime-', dir=root.parent, status=status) as temporary:
         staging = Path(temporary)
         installer = staging / 'installer.jar'
         status('正在下载安装器并校验…')
@@ -120,7 +123,11 @@ def install_server_runtime(root, loader, mc, version, java, status=lambda _: Non
         for key in ('JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'JDK_JAVA_OPTIONS', 'CLASSPATH'):
             environment.pop(key, None)
         status('正在安装服务端运行库；可能需要几分钟，不会修改世界和配置…')
-        result = run_process([java, '-jar', str(installer), '--installServer'], cwd=str(runtime),
+        command = [java, '-jar', str(installer), '--installServer']
+        if loader == 'fabric':
+            command = [java, '-jar', str(installer), 'server', '-mcversion', mc,
+                       '-loader', version, '-dir', str(runtime), '-downloadMinecraft']
+        result = run_process(command, cwd=str(runtime),
                              timeout=1800, env=environment,
                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         if result.returncode:
@@ -138,7 +145,8 @@ def install_server_runtime(root, loader, mc, version, java, status=lambda _: Non
                 continue
             relative = file.relative_to(runtime).as_posix()
             # Never merge scripts, EULA, worlds, properties, or installer logs.
-            if not (relative.startswith('libraries/') or relative.endswith('.jar') and '/' not in relative):
+            if not (relative.startswith('libraries/') or relative.endswith('.jar') and '/' not in relative
+                    or loader == 'fabric' and relative == 'fabric-server-launcher.properties'):
                 continue
             target = Path(safe_child(root, relative))
             digest = _digest(file)

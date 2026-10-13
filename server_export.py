@@ -92,8 +92,8 @@ def export_runtime_pack(root, destination):
     if destination.exists():
         raise ValueError('目标文件已存在，请选择新文件名。')
     plan = build_launch_plan(root)
-    if plan['loader'] not in ('forge', 'neoforge'):
-        raise ValueError('运行包导出暂支持已验证的 Forge / NeoForge 服务端。')
+    if plan['loader'] not in ('forge', 'neoforge', 'fabric'):
+        raise ValueError('运行包导出支持已验证的 Forge / NeoForge / Fabric 服务端。')
     entry_parent = (root / plan['entry']).parent
     for platform, filename in [('windows', 'win_args.txt'), ('linux', 'unix_args.txt')]:
         if (entry_parent / filename).exists():
@@ -114,9 +114,18 @@ def export_runtime_pack(root, destination):
             relative = path.relative_to(root).as_posix()
             if path.suffix.lower() == '.jar' or (directory == 'libraries' and path.name in ('win_args.txt', 'unix_args.txt')):
                 selected.append((relative, local_file(root, relative)))
-    version = plan['entry'].split('/')[-2]
-    if plan['loader'] == 'forge':
-        version = version.split('-', 1)[1]
+    if plan['loader'] == 'fabric':
+        for name in ('fabric-server-launch.jar', 'server.jar', 'fabric-server-launcher.properties'):
+            if (root / name).exists():
+                selected.append((name, local_file(root, name)))
+        versions = list((root / 'libraries/net/fabricmc/fabric-loader').glob('*/*.jar'))
+        if len(versions) != 1:
+            raise ValueError('无法确认唯一的 Fabric Loader 版本，请检查服务端运行库。')
+        version = versions[0].parent.name
+    else:
+        version = plan['entry'].split('/')[-2]
+        if plan['loader'] == 'forge':
+            version = version.split('-', 1)[1]
     manifest = {'schemaVersion': 1, 'name': 'AMCL 服务端运行包',
                 'minecraftVersion': plan['minecraftVersion'], 'loader': plan['loader'],
                 'loaderVersion': version, 'requiredJava': plan['requiredJava'],

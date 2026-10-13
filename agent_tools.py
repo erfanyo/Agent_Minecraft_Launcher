@@ -414,17 +414,27 @@ def diagnose_server_mods(server: str, game_dir: str | None = None) -> dict:
             log_text = str(raw)
     except Exception:
         pass
-    if not log_text:
-        try:
-            crashes = os.path.join(item['path'], 'crash-reports')
-            if os.path.isdir(crashes):
-                reports = sorted(f for f in os.listdir(crashes) if f.endswith('.txt'))
-                if reports:
-                    newest = os.path.join(crashes, reports[-1])
+    # A failed JVM can be terminated before its console log has fully drained.
+    # Forge writes the crash report first: include that report when it belongs
+    # to this exact launch, rather than falling back only for an empty log.
+    try:
+        from server_host_client import managed_status
+        from datetime import datetime
+        state = managed_status(item['path'], probe=False) or {}
+        started_at = state.get('startedAt')
+        started = datetime.fromisoformat(started_at).timestamp() if started_at else None
+        crashes = os.path.join(item['path'], 'crash-reports')
+        if os.path.isdir(crashes):
+            reports = sorted(f for f in os.listdir(crashes) if f.endswith('.txt'))
+            if reports:
+                newest = os.path.join(crashes, reports[-1])
+                if (not os.path.islink(newest)
+                        and (started is None and not log_text
+                             or started is not None and os.path.getmtime(newest) >= started)):
                     with open(newest, encoding='utf-8', errors='replace') as stream:
-                        log_text = stream.read(512 * 1024)
-        except OSError:
-            pass
+                        log_text += '\n' + stream.read(512 * 1024)
+    except (OSError, ValueError, TypeError):
+        pass
 
     result = build_diagnosis(mods, redact_text(log_text) if log_text else '')
     by_file = {row['file']: row for row in mods}

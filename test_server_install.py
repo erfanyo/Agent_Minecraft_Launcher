@@ -6,6 +6,28 @@ import server_install as install
 
 
 class InstallTests(unittest.TestCase):
+    def test_fabric_installer_command_and_properties_are_preserved(self):
+        plan = {'loader': 'fabric', 'minecraftVersion': '1.21.1'}
+        def process(command, **kwargs):
+            self.assertIn('server', command)
+            self.assertIn('-downloadMinecraft', command)
+            self.assertEqual(command[command.index('-loader') + 1], '0.19.5')
+            stage = Path(kwargs['cwd'])
+            (stage / 'fabric-server-launch.jar').write_bytes(b'launcher')
+            (stage / 'server.jar').write_bytes(b'server')
+            (stage / 'fabric-server-launcher.properties').write_text('serverJar=server.jar')
+            (stage / 'run.bat').write_text('not copied')
+            return Mock(returncode=0)
+        with tempfile.TemporaryDirectory() as root, \
+                patch.object(install, 'java_version_probe', return_value=(21, '')), \
+                patch.object(install.requests, 'get', return_value=Mock(text='a' * 40)), \
+                patch.object(install, 'download_with_mirror'), \
+                patch.object(install, 'run_process', side_effect=process), \
+                patch.object(install, 'build_launch_plan', return_value=plan):
+            install.install_server_runtime(root, 'fabric', '1.21.1', '0.19.5', 'java')
+            self.assertTrue(Path(root, 'fabric-server-launcher.properties').is_file())
+            self.assertFalse(Path(root, 'run.bat').exists())
+
     def test_runtime_identity_prefers_detected_values_and_uses_declared_fallback(self):
         identity = install.inferred_runtime_identity({
             'loader': 'unknown', 'minecraftVersion': None,

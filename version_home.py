@@ -18,6 +18,8 @@
 - .refresh_btn     —— 右列「版本」标签里的刷新按钮(QPushButton)
 """
 from __future__ import annotations
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 import sys
 import threading
 from pathlib import Path
@@ -457,7 +459,7 @@ class LoginCard(QWidget):
         names = offline_names(load_settings())
         if new.casefold() != cur.casefold() and any(
                 name.casefold() == new.casefold() for name in names):
-            QMessageBox.information(self, "昵称已存在", "这个离线昵称已在列表中，直接从下拉框切换即可。")
+            inline_notice(self, "昵称已存在", "这个离线昵称已在列表中，直接从下拉框切换即可。")
             return
         def change(settings):
             settings["offline_accounts"] = [new if item.casefold() == cur.casefold() else item
@@ -471,7 +473,7 @@ class LoginCard(QWidget):
         import re
         if re.fullmatch(r"[A-Za-z0-9_]{3,16}", name or ""):
             return True
-        QMessageBox.warning(self, "离线昵称无效", "昵称需为 3–16 位英文字母、数字或下划线。")
+        inline_warning(self, "离线昵称无效", "昵称需为 3–16 位英文字母、数字或下划线。")
         return False
 
     def _add_offline_account(self):
@@ -483,7 +485,7 @@ class LoginCard(QWidget):
         if not self._valid_offline_name(name):
             return
         if any(existing.casefold() == name.casefold() for existing in offline_names(load_settings())):
-            QMessageBox.information(self, "昵称已存在", "这个昵称已在列表中，直接从下拉框切换即可。")
+            inline_notice(self, "昵称已存在", "这个昵称已在列表中，直接从下拉框切换即可。")
             return
         select_offline(name)
         self.refresh()
@@ -492,10 +494,10 @@ class LoginCard(QWidget):
     def _remove_offline_account(self):
         from accounts import remove_offline
         name = load_settings().get("username", "Steve")
-        if QMessageBox.question(self, "移除离线账号",
+        if action_question(self, "移除离线账号",
                 f"从启动器移除离线昵称 {name}？存档文件不会删除。",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         remove_offline(name)
         self.refresh()
@@ -533,10 +535,15 @@ class LoginCard(QWidget):
         dl.addWidget(url_lbl)
         btn_row = QHBoxLayout()
         copy_btn = QPushButton("复制代码")
+        copy_url_btn = QPushButton("复制网址")
         open_btn = QPushButton("打开授权页面")
         copy_btn.setEnabled(False)
+        copy_url_btn.setEnabled(False)
         open_btn.setEnabled(False)
+        for button in (copy_btn, copy_url_btn, open_btn):
+            set_style(button, card_btn_style)
         btn_row.addWidget(copy_btn)
+        btn_row.addWidget(copy_url_btn)
         btn_row.addWidget(open_btn)
         dl.addLayout(btn_row)
         wait = QLabel("网络慢时可能需要稍等。授权网页也可在手机上打开，启动器仍需连接微软与 Minecraft 服务。")
@@ -550,13 +557,14 @@ class LoginCard(QWidget):
         def code_ready(info):
             if state["closed"]:
                 return
-            state["code"] = info.get("user_code", "")
+            state["code"] = str(info.get("user_code") or "").strip()
             state["url"] = info.get("verification_uri", "")
             title.setText("请在浏览器输入设备代码，授权后保持此窗口打开：")
             code_lbl.setText(f"<span style='font-size:28px;font-weight:bold;'>{state['code']}</span>")
             url_lbl.setText(state["url"])
-            copy_btn.setEnabled(True)
-            open_btn.setEnabled(True)
+            copy_btn.setEnabled(bool(state["code"]))
+            copy_url_btn.setEnabled(bool(state["url"]))
+            open_btn.setEnabled(bool(state["url"]))
             if state["url"]:
                 QDesktopServices.openUrl(QUrl(state["url"]))
 
@@ -570,12 +578,35 @@ class LoginCard(QWidget):
             if state["closed"]:
                 return
             dlg.reject()
-            QMessageBox.warning(self, "微软登录", message)
+            inline_warning(self, "微软登录", message)
 
         bridge.code_ready.connect(code_ready)
         bridge.done.connect(finish)
         bridge.fail.connect(failed)
-        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(state["code"]))
+        def copy_device_code():
+            code = state['code']
+            if state['closed'] or not code:
+                return
+            try:
+                clipboard = QApplication.clipboard()
+                clipboard.setText(code)
+                if clipboard.text() != code:
+                    raise RuntimeError('剪贴板未能保存设备代码')
+            except Exception:
+                copy_btn.setText('重新复制')
+                inline_warning(dlg, '复制失败',
+                                    '无法写入系统剪贴板，请重试或选中上方设备代码，按 Ctrl+C 复制。')
+                return
+            from ui_feedback import copy_with_feedback
+            copy_with_feedback(copy_btn, code)
+            wait.setText('设备代码已复制，请在微软授权网页中粘贴。授权后保持此窗口打开。')
+        copy_btn.clicked.connect(copy_device_code)
+        def copy_login_url():
+            if state['closed'] or not state['url']:
+                return
+            from ui_feedback import copy_with_feedback
+            copy_with_feedback(copy_url_btn, state['url'])
+        copy_url_btn.clicked.connect(copy_login_url)
         open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(state["url"])))
 
         def worker():
@@ -622,10 +653,10 @@ class LoginCard(QWidget):
         uuid = account.get("uuid")
         if not uuid:
             return
-        if QMessageBox.question(self, "移除正版账号",
+        if action_question(self, "移除正版账号",
                 f"从本机移除 {account.get('username') or '当前账号'} 的登录凭证？再次使用需要重新授权。",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         remove_microsoft(uuid)
         self.refresh()
@@ -846,7 +877,29 @@ class VersionHome(QWidget):
         self.launch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         set_style(self.launch_btn, launch_btn_style)
         self.launch_btn.clicked.connect(self._on_primary_launch)
-        lay.addWidget(self.launch_btn)
+        launch_row = QHBoxLayout()
+        launch_row.addWidget(self.launch_btn, 1)
+        self.force_stop_btn = QPushButton('⋯', self.launch_btn)
+        self.force_stop_btn.setObjectName('server_stop_more')
+        self.force_stop_btn.setFixedSize(32, 32)
+        self.force_stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.force_stop_btn.setToolTip('服务端高级操作')
+        self.force_stop_btn.setStyleSheet(
+            'QPushButton#server_stop_more { background: transparent; color: white;'
+            ' border: none; border-radius: 8px; padding: 0; font-size: 22px; }'
+            'QPushButton#server_stop_more:hover { background: rgba(255,255,255,35); }'
+            'QPushButton#server_stop_more:pressed { background: rgba(255,255,255,60); }')
+        more_layout = QHBoxLayout(self.launch_btn)
+        more_layout.setContentsMargins(8, 0, 8, 0)
+        more_layout.addStretch()
+        more_layout.addWidget(self.force_stop_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        force_menu = QMenu(self.force_stop_btn)
+        set_style(force_menu, popup_menu_style)
+        force_menu.addAction('强制结束服务端…', lambda: self.server_center.force_stop())
+        self.force_stop_btn.clicked.connect(lambda: force_menu.popup(
+            self.force_stop_btn.mapToGlobal(self.force_stop_btn.rect().bottomLeft())))
+        self.force_stop_btn.hide()
+        lay.addLayout(launch_row)
 
         return left
 
@@ -1061,6 +1114,7 @@ class VersionHome(QWidget):
         """Keep the primary action visibly tied to the selected instance."""
         name = (inst or {}).get("name") or (inst or {}).get("id", "")
         self.launch_btn.setText(t("VERSION_HOME_LAUNCH_GAME"))
+        self.force_stop_btn.hide()
         self.launch_btn.setToolTip(f"将启动：{name}" if name else t("VERSION_HOME_SELECT_INSTANCE_FIRST"))
         self.launch_btn.setEnabled(inst is not None)
 
@@ -1079,6 +1133,7 @@ class VersionHome(QWidget):
         if not self._server_mode:
             return
         running = self.server_center.is_running()
+        self.force_stop_btn.setVisible(running)
         self.launch_btn.setText('停止服务端' if running else '启动服务端')
         server = self.server_center.selected()
         self.launch_btn.setToolTip(

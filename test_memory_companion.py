@@ -31,10 +31,10 @@ class MemoryCompanionTests(unittest.TestCase):
     def tearDown(self):
         self.panel.hide()
         self.panel.deleteLater()
-        self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.sendPostedEvents(self.panel, QEvent.Type.DeferredDelete)
         self.owner.close()
         self.owner.deleteLater()
-        self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.sendPostedEvents(self.owner, QEvent.Type.DeferredDelete)
 
     def test_attached_window_preserves_owner_and_follows_movement(self):
         before = self.owner.geometry()
@@ -86,7 +86,7 @@ class MemoryCompanionTests(unittest.TestCase):
 
     def test_advice_launches_without_dock_and_hides_inactive_ai(self):
         self.panel.deleteLater()
-        self.app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        self.app.sendPostedEvents(self.panel, QEvent.Type.DeferredDelete)
         self.owner.ai_dock = SimpleNamespace(_local_engine=None)
         plan = SimpleNamespace(command=['-Xmx8G'], instance_id='test', game_dir='.')
         calls = []

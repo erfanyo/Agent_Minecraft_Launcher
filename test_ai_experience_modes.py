@@ -10,6 +10,13 @@ from settings import DEFAULTS
 
 
 class AIExperienceModeTests(unittest.TestCase):
+    def setUp(self):
+        # Tool handlers are mocked here; give the task scope a matching environment.
+        environment = patch('diagnostic_tools.environment', return_value={
+            'minecraft': '1.21.1', 'loader': 'neoforge'})
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def settings(self, **values):
         result = dict(DEFAULTS)
         result.update(ai_permission='launcher_write', ai_confirmation_mode='backup_continue',

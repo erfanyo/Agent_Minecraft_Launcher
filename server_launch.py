@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import shlex
 import zipfile
+import json
 from safe_paths import safe_child
 from archive_inspection import required_java
 
@@ -132,6 +133,13 @@ def build_launch_plan(root, platform=None, selected_jar=None):
                 _classpath(root, args[i], ';' if windows else ':')
             elif not main_seen and arg.startswith('-DlegacyClassPath='):
                 _classpath(root, arg.split('=', 1)[1], ';' if windows else ':')
+            elif not main_seen and loader == 'neoforge' and arg.startswith((
+                    '-Dfml.pluginLayerLibraries=', '-Dfml.gameLayerLibraries=')):
+                value = arg.split('=', 1)[1]
+                # An empty plugin-layer list is valid. Nonempty entries must
+                # still resolve to existing libraries inside this server.
+                if value:
+                    _classpath(root, value, ';' if windows else ':')
             elif not main_seen and arg == '-DlibraryDirectory=libraries':
                 pass
             elif not main_seen and re.fullmatch(r'-Djava\.net\.preferIPv6Addresses=(?:true|false|system)', arg):
@@ -148,7 +156,7 @@ def build_launch_plan(root, platform=None, selected_jar=None):
                 pass
             elif main_seen and arg in ('--launchTarget', '--fml.forgeVersion', '--fml.mcVersion',
                                        '--fml.forgeGroup', '--fml.mcpVersion', '--fml.neoForgeVersion',
-                                       '--fml.neoFormVersion'):
+                                       '--fml.neoFormVersion', '--fml.fmlVersion'):
                 i += 1
                 if i >= len(args) or not re.fullmatch(r'[\w.+\-]+', args[i]):
                     raise ValueError('无效的加载器参数')
@@ -188,7 +196,23 @@ def build_launch_plan(root, platform=None, selected_jar=None):
     for jar, loader in [('fabric-server-launch.jar', 'fabric'), ('server.jar', 'vanilla-or-custom')]:
         if (root / jar).exists():
             local_file(root, jar)
-            return _jar_plan(root, jar, user_args, loader)
+            plan = _jar_plan(root, jar, user_args, loader)
+            if loader == 'fabric' and (root / 'server.jar').exists():
+                server_jar = local_file(root, 'server.jar')
+                try:
+                    with zipfile.ZipFile(server_jar) as archive:
+                        info = archive.getinfo('version.json')
+                        if info.file_size > 64 * 1024:
+                            raise ValueError('Minecraft 版本信息过大')
+                        version = json.loads(archive.read(info)).get('id', '')
+                    if not re.fullmatch(r'1\.\d+(?:\.\d+)?', version):
+                        raise ValueError('无法确认 Fabric 服务端的 Minecraft 版本')
+                    plan.update(minecraftVersion=version, requiredJava=required_java(version))
+                except (KeyError, zipfile.BadZipFile, json.JSONDecodeError):
+                    # Imported legacy launchers may not have a readable version
+                    # manifest; preserve their existing launch support.
+                    pass
+            return plan
     if len(executable_jars) == 1:
         return _jar_plan(root, executable_jars[0], user_args)
     if len(executable_jars) > 1:

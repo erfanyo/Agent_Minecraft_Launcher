@@ -28,6 +28,7 @@ class FramelessTitleBar(QWidget):
         self._drag_offset = None
         self._center_widget = None
         self._trailing_widget = trailing_widget
+        self._status_widgets = []
         self.setFixedHeight(36)
         self.setObjectName("framelessTitleBar")
 
@@ -71,6 +72,26 @@ class FramelessTitleBar(QWidget):
         self.refresh_theme()
 
     # ---- 控件 ----
+    def add_status_widget(self, widget: QWidget):
+        """Keep compact status actions visible even when the status bar is hidden."""
+        widget.setProperty('titleNav', True)
+        widget.setFixedHeight(28)
+        widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout = self.layout()
+        anchor = self._trailing_widget or self.reset_size_btn
+        layout.insertWidget(layout.indexOf(anchor), widget)
+        self._status_widgets.append(widget)
+        widget.show()
+        self.refresh_theme()
+        QTimer.singleShot(0, self._place_center_widget)
+
+    def remove_status_widget(self, widget: QWidget):
+        self.layout().removeWidget(widget)
+        if widget in self._status_widgets:
+            self._status_widgets.remove(widget)
+        widget.hide()
+        QTimer.singleShot(0, self._place_center_widget)
+
     def set_center_widget(self, widget: QWidget):
         """Center navigation independently from the status and window controls."""
         widget.setParent(self)
@@ -87,6 +108,9 @@ class FramelessTitleBar(QWidget):
         right = self.reset_size_btn.geometry().left() - 12
         if self._trailing_widget is not None and self._trailing_widget.isVisible():
             right = min(right, self._trailing_widget.geometry().left() - 12)
+        for status in self._status_widgets:
+            if status.isVisible():
+                right = min(right, status.geometry().left() - 12)
         centered = (self.width() - widget.width()) // 2
         x = max(left, min(centered, right - widget.width()))
         widget.move(x, (self.height() - widget.height()) // 2)

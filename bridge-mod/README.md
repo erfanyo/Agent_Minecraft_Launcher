@@ -83,6 +83,15 @@ bridge-mod/
 
 ## 构建
 
+本机批量构建入口是项目根目录的 `build_bridge_all.ps1`。直接执行会构建当前已实现的
+8 个变体，也可用 `-Only forge-1.16.5,neoforge-1.21.1` 选择目标。
+脚本为每个目标选择 Gradle/JDK，执行 clean/build（跳过测试），成功后复制到 `bridge-mod/dist/`。
+完整日志保存在 `.tmp/bridge-build-logs/`；任一目标失败时脚本返回非零退出码，不会用旧 JAR 冒充成功产物。
+编译通过仅代表构建成功，游戏内功能仍需实机验证。
+
+Forge 1.16.5 当前使用 ForgeGradle 5.1 + Gradle 7.6.4，Gradle 运行于 JDK 17，编译任务使用 JDK 8；
+Forge 1.12.2 则使用 ForgeGradle 2.3 + Gradle 4.10.3 + JDK 8。
+
 需要:JDK(带 javac)+ Gradle(或 gradle wrapper,首次联网下载)。
 
 ### 要准备的 JDK（构建与运行矩阵）
@@ -96,9 +105,14 @@ bridge-mod/
 因此开发机至少保留 **JDK 8、JDK 17、JDK 21**。不要只改全局 `JAVA_HOME`；各构建脚本
 显式选择对应 JDK，旧版还要使用独立的 Gradle 用户目录和旧 ForgeGradle，避免污染现代构建缓存。
 
-**构建状态(2026-09)**:✅ Fabric 1.21.1、Forge 1.20.1 / 1.19.2 / 1.18.2、
-**Forge 1.16.5 与 Forge 1.12.2** 已编译通过。Forge 1.20.1
-产物为 `forge/build/libs/agentmc-bridge-forge-1.20.1-0.2.0.jar`；NeoForge 与其他目标版本仍待核验。
+**构建状态(2026-10-08)**：0.2.0 的 8 个变体全部编译通过：Fabric 1.20.1 / 1.21.1，
+Forge 1.12.2 / 1.16.5 / 1.18.2 / 1.19.2 / 1.20.1，以及 NeoForge 1.21.1。
+产物在 `dist/`；本次同时生成 `bridge-mod-0.2.0.zip`、`SHA256SUMS.txt` 和 `build-manifest.json`。
+字节码分别为 Java 8（Forge 1.12.2 / 1.16.5）、Java 17（1.18–1.20）、Java 21（1.21.1）。
+本次修复 Forge 1.16.5 的编译参数和 MCP 方法名适配，以及 Forge 1.12.2 的 UTF-8 源码编码。
+旧 JAR 已备份至 `.tmp/bridge-build-logs/previous-jars-20261008-174355/`，防止自动发现选择
+历史上编号较高但源码较旧的产物。以后替换同一 MC/加载器产物时，也应移走过期版本，
+或统一递增版本号；不要只覆盖低版本文件。此次未运行测试或游戏内联调。
 
 **本机已验证的环境**(关键!):
 - JAVA_HOME = `E:\Agent_Minecraft_Launcher 0.0.1\.tmp\jdk\jdk-21.0.12.1+1`

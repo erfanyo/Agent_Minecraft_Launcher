@@ -40,11 +40,15 @@ class EntryLayoutTests(unittest.TestCase):
         self.assertEqual(home.details_btn.text(), '实例详情')
         # 布局顺序:详情按钮必须排在启动按钮之前(即视觉上在它上方)
         order = []
-        for i in range(home._left_panel.layout().count()):
-            item = home._left_panel.layout().itemAt(i)
-            w = item.widget()
-            if w in (home.details_btn, home.launch_btn):
-                order.append(w)
+        def visit(layout):
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                w = item.widget()
+                if w in (home.details_btn, home.launch_btn):
+                    order.append(w)
+                if item.layout() is not None:
+                    visit(item.layout())
+        visit(home._left_panel.layout())
         self.assertEqual(order, [home.details_btn, home.launch_btn])
 
     def test_details_button_emits_signal(self):
@@ -71,7 +75,7 @@ class EntryLayoutTests(unittest.TestCase):
         home = self._home()
         home._set_client_mode()
         self.assertEqual(t('VERSION_HOME_IMPORT_MODPACK'), home.import_btn.text())
-        self.assertEqual(t('VERSION_HOME_ONE_CLICK'), home.config_btn.text())
+        self.assertEqual(t('VERSION_HOME_ONE_CLICK').replace(' ▾', ''), home.config_btn.text())
         self.assertEqual(home.launch_btn.text(), t('启动游戏', 'Launch Game'))
 
     def test_server_mode_labels(self):

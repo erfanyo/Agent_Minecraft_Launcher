@@ -483,6 +483,16 @@ def hint_style() -> str:
     return f"color: {muted_color()};"
 
 
+def progress_bar_style() -> str:
+    """Explicit track colors avoid a cached native dark progress-bar palette."""
+    return (
+        f"QProgressBar {{ background: {current_color('bg1')}; color: {text_color()};"
+        f" border: 1px solid {current_color('btn_border')}; border-radius: 5px;"
+        " min-height: 16px; text-align: center; }"
+        f"QProgressBar::chunk {{ background: {accent_color()}; border-radius: 4px; }}"
+    )
+
+
 def inner_style() -> str:
     """卡片内部的标签(透明底,跟卡片背景一致)"""
     return "background: transparent;"

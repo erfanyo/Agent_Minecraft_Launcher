@@ -77,8 +77,13 @@ def detect_running_clients(instance_dirs: dict[str, str], inspect_ports=False) -
             external = instance_id is None
             instance_id = instance_id or os.path.basename(normalized(game_dir)) or version
             row = {'id': instance_id, 'pid': process.pid,
+                            'parent_pids': [parent.pid for parent in process.parents()],
+                            'create_time': process.create_time(),
                             'game_dir': normalized(game_dir), 'external': external,
                             'name': instance_id + ('（外部启动）' if external else '')}
+            if os.name == 'nt':
+                from memory_relief import visible_game_window
+                row['window_visible'] = visible_game_window(process.pid)
             if inspect_ports:
                 row['lan_ports'] = []
                 try:
@@ -96,7 +101,11 @@ def detect_running_clients(instance_dirs: dict[str, str], inspect_ports=False) -
             running.append(row)
         except (psutil.Error, OSError, IndexError, ValueError):
             continue
-    return running
+    # Some Java launch wrappers retain the full client arguments while a child
+    # owns the game window. Keep independent launches, but remove their wrappers.
+    return [row for row in running if not any(
+        row['pid'] in child['parent_pids'] and row['game_dir'] == child['game_dir']
+        for child in running if child['pid'] != row['pid'])]
 
 
 def _minecraft_status_available(host, port):

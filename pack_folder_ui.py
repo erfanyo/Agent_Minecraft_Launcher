@@ -7,6 +7,8 @@
 
 放在核心的原因:插件之间不能互相 import,共享控件只能留在核心(见 docs/PLUGIN_IDEAS.md)。
 """
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QFileDialog, QHBoxLayout, QLabel, QListWidget,
@@ -210,9 +212,9 @@ class PackFolderPanel(QWidget):
         errors = outcome.get('errors') or []
         if errors:
             detail = '\n'.join(f'{name}:{why}' for name, why in errors[:8])
-            QMessageBox.warning(self, '部分文件没导入成功', f'{text}\n\n{detail}')
+            task_warning(self, '部分文件没导入成功', f'{text}\n\n{detail}')
         elif not outcome.get('added'):
-            QMessageBox.information(
+            task_notice(
                 self, '没有导入任何东西',
                 f'{text}\n\n常见原因:同名文件已经存在(不会覆盖),'
                 f'或者选的文件不是这个目录该放的类型。')
@@ -220,13 +222,13 @@ class PackFolderPanel(QWidget):
     def delete_selected(self):
         paths = self.selected_paths()
         if not paths:
-            QMessageBox.information(self, '没有选中', '先在列表里选中要删除的内容包。')
+            inline_notice(self, '没有选中', '先在列表里选中要删除的内容包。')
             return
         import os
         names = '、'.join(sorted(os.path.basename(p) for p in paths)[:5])
-        if QMessageBox.question(
+        if action_question(
                 self, '确认删除',
-                f'确定删除这 {len(paths)} 项吗?\n\n{names}\n\n删除后无法恢复。'
+                f'确定删除这 {len(paths)} 项吗?\n\n{names}\n\n删除后无法恢复。', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes
         ) != QMessageBox.StandardButton.Yes:
             return
         outcome = pack_folder.remove_paths(paths)
@@ -239,4 +241,4 @@ class PackFolderPanel(QWidget):
             self._on_status(text)
         if errors:
             detail = '\n'.join(f'{name}:{why}' for name, why in errors[:8])
-            QMessageBox.warning(self, '部分内容没删掉', f'{text}\n\n{detail}')
+            inline_warning(self, '部分内容没删掉', f'{text}\n\n{detail}')

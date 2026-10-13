@@ -1,4 +1,6 @@
 """Instance maintenance UI; all writes run through the same service as AI tools."""
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QComboBox, QMessageBox
 from background_tasks import BackgroundTask
 
@@ -13,7 +15,7 @@ DESCRIPTIONS = {
 def run(owner, action, **kwargs):
     from instance_maintenance import perform, imported
     if getattr(owner, '_maintenance_task', None) and owner._maintenance_task.is_running:
-        QMessageBox.information(owner, '实例维护', '已有维护任务正在执行。')
+        inline_notice(owner, '实例维护', '已有维护任务正在执行。')
         return
     instance, root = owner.inst_id, owner.game_dir
     note = DESCRIPTIONS[action]
@@ -22,15 +24,15 @@ def run(owner, action, **kwargs):
         note += '\n如果这是导入的整合包，请三思：版本、加载器、脚本和 Mod 往往是配套的，改动后可能无法启动。'
         if imported(owner.inst_dir):
             note += '\n已检测到整合包来源标记，建议先导出备份。'
-    if QMessageBox.question(owner, '确认实例维护', f'实例：{instance}\n'+note,
+    if action_question(owner, '确认实例维护', f'实例：{instance}\n'+note,
                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                            QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                            QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
         return
     task = BackgroundTask(lambda current: perform(root, instance, action, status=current.report_status, **kwargs), owner)
     owner._maintenance_task = task
     task.status.connect(lambda text: owner.status_msg(text))
     def complete(result):
-        QMessageBox.information(owner, '实例维护完成', str(result))
+        inline_notice(owner, '实例维护完成', str(result))
         if owner.inst_id == instance:
             from instances import scan_instances
             info = next((item for item in scan_instances(root) if item['id'] == instance), None)
@@ -40,7 +42,7 @@ def run(owner, action, **kwargs):
         if hasattr(window, 'load_versions'):
             window.load_versions()
     task.succeeded.connect(complete)
-    task.failed.connect(lambda error: QMessageBox.warning(owner, '实例维护未完成', str(error)))
+    task.failed.connect(lambda error: inline_warning(owner, '实例维护未完成', str(error)))
     task.start()
 
 

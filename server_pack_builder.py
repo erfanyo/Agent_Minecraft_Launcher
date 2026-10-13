@@ -14,6 +14,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+from server_staging import server_staging_directory
 
 from archive_inspection import required_java
 from safe_paths import safe_child
@@ -23,8 +24,8 @@ from task_context import checkpoint
 
 
 def supported_conversion(loader, minecraft):
-    if loader not in ('forge', 'neoforge'):
-        return False, '第一版自动安装服务端运行库仅支持 Forge / NeoForge。'
+    if loader not in ('forge', 'neoforge', 'fabric'):
+        return False, '自动安装服务端运行库支持 Forge / NeoForge / Fabric。'
     try:
         minor = int(str(minecraft).split('.')[1])
     except (IndexError, ValueError):
@@ -64,11 +65,13 @@ def _copy_verified(source_root, stage, entries, status, progress):
     status('客户端内容复制并复核完成。')
 
 
-def _archive(stage, destination, manifest, report, status, progress):
+def _archive(stage, destination, manifest, report, status, progress, allowed_paths=None):
     files = []
     for disk in sorted(stage.rglob('*')):
-        if disk.is_file():
+        if disk.is_file() and not disk.is_symlink():
             relative = disk.relative_to(stage).as_posix()
+            if allowed_paths is not None and relative not in allowed_paths:
+                continue
             files.append((disk, 'server/' + relative))
     manifest_files = []
     total = sum(path.stat().st_size for path, _ in files) or 1
@@ -92,7 +95,9 @@ def _archive(stage, destination, manifest, report, status, progress):
         archive.writestr('amcl-server-pack.json',
                          json.dumps(manifest, ensure_ascii=False, indent=2))
         archive.writestr('amcl-build-report.json', report_json(report))
-        archive.writestr('AMCL-候选服务端审核报告.txt', report_text(report))
+        report_name = ('AMCL-服务端审核报告.txt' if report.get('testOutcome') in ('ready', 'untested')
+                       else 'AMCL-候选服务端审核报告.txt')
+        archive.writestr(report_name, report_text(report))
         # Pinned Mod naming: lets later tooling identify a Mod by id instead of
         # by filename, so no transliteration is ever needed on the pack side.
         archive.writestr('amcl-mod-manifest.json', json.dumps({
@@ -100,13 +105,13 @@ def _archive(stage, destination, manifest, report, status, progress):
             'note': 'Mod 文件保持原命名（含中文前缀），本清单用于按 id 反查。',
             'mods': report.get('modManifest') or [],
         }, ensure_ascii=False, indent=2))
-    status('候选服务端包已生成。')
+    status('服务端 ZIP 已生成。')
 
 
 def build_candidate_server_pack(instance_dir, destination, *, name, minecraft,
                                 loader, loader_version, java, selected_world=None,
                                 status_callback=None, progress_callback=None,
-                                runtime_installer=None):
+                                runtime_installer=None, prepare_only=False, game_dir=None):
     """Build a complete candidate ZIP without changing the client instance."""
     status = status_callback or (lambda _message: None)
     progress = progress_callback or (lambda _done, _total: None)
@@ -124,8 +129,8 @@ def build_candidate_server_pack(instance_dir, destination, *, name, minecraft,
     from server_install import install_server_runtime
     installer = runtime_installer or install_server_runtime
     created = False
-    with tempfile.TemporaryDirectory(prefix='.amcl-server-build-',
-                                     dir=destination.parent) as temporary:
+    with server_staging_directory(prefix='.amcl-server-build-',
+                                  dir=destination.parent, status=status) as temporary:
         stage = Path(temporary, 'server')
         stage.mkdir()
         status('正在安装对应的服务端运行库；不会启动服务器…')
@@ -165,7 +170,29 @@ def build_candidate_server_pack(instance_dir, destination, *, name, minecraft,
                     'serverRoot': 'server', 'contentProfile': 'runtime-and-mods',
                     'generatedBy': 'AMCL client-to-server candidate builder',
                     'eulaAccepted': False, 'files': []}
-        status('正在压缩候选服务端并生成审核报告…')
+        if prepare_only:
+            report['testOutcome'] = 'untested'
+            if not game_dir:
+                raise ValueError('准备测试服务端需要游戏目录。')
+            servers = Path(game_dir).absolute() / 'servers'
+            servers.mkdir(parents=True, exist_ok=True)
+            folder = Path(tempfile.mkdtemp(prefix='server-', dir=servers))
+            try:
+                allowed_paths = [p.relative_to(stage).as_posix() for p in stage.rglob('*') if p.is_file()]
+                shutil.move(str(stage), str(folder / 'server'))
+                (folder / 'amcl-build-report.json').write_text(report_json(report), encoding='utf-8')
+                metadata = {'name': report['name'], 'report': {
+                    'serverRoot': 'server', 'loader': loader, 'minecraftVersion': minecraft,
+                    'requiredJava': required_java(minecraft), 'contentProfile': 'runtime-and-mods'}}
+                (folder / '.amcl-server.json').write_text(
+                    json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
+            except BaseException:
+                shutil.rmtree(folder)
+                raise
+            status('服务端准备完成，尚未生成 ZIP。')
+            return {'path': str(destination), 'folder': str(folder), 'report': report,
+                    'manifest': manifest, 'allowedPaths': allowed_paths}
+        status('正在压缩服务端并生成审核报告…')
         try:
             _archive(stage, destination, manifest, report, status, progress)
             created = True
@@ -175,6 +202,49 @@ def build_candidate_server_pack(instance_dir, destination, *, name, minecraft,
     if not created:
         raise RuntimeError('候选服务端包没有生成。')
     return {'path': str(destination), 'report': report}
+
+
+def archive_prepared_server(result, disabled_mods=(), *, outcome='untested',
+                            status_callback=None, progress_callback=None):
+    """Package the prepared inputs only, excluding test logs/worlds/EULA/runtime state."""
+    import copy
+    report = copy.deepcopy(result['report'])
+    disabled = set(disabled_mods)
+    for row in report.get('mods', []):
+        if row.get('file') in disabled:
+            row.update(action='excluded', reason='隔离启动测试根据客户端类报错自动停用。')
+    report['modManifest'] = [r for r in report.get('modManifest', []) if r.get('file') not in disabled]
+    if outcome != 'untested':
+        report['verification'] = {'level': 'startup-tested' if outcome == 'ready' else 'startup-attempted',
+            'label': '启动测试通过，仍需进服验证玩法' if outcome == 'ready' else '测试未通过，候选服务端需继续修复',
+            'minecraftStarted': outcome == 'ready'}
+    report['testOutcome'] = outcome
+    destination = Path(result['path']).absolute()
+    if outcome not in ('ready', 'untested'):
+        destination = destination.with_name(destination.stem + '-candidate.zip')
+    allowed = set(result['allowedPaths']) - {'mods/' + name for name in disabled}
+    stage = Path(result['folder'], 'server')
+    for relative in allowed:
+        path = Path(safe_child(stage, relative))
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f'准备的服务端文件缺失或已变成链接：{relative}')
+    pending = destination.with_name('.' + destination.name + '.pending-' + os.urandom(6).hex())
+    try:
+        _archive(stage, pending, copy.deepcopy(result['manifest']), report,
+                 status_callback or (lambda _m: None), progress_callback or (lambda _d, _t: None), allowed)
+        # Exclusive creation protects a file created by another task while testing.
+        with pending.open('rb') as src:
+            with destination.open('xb') as dst:
+                try:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+                except BaseException:
+                    dst.close()
+                    destination.unlink(missing_ok=True)
+                    raise
+    finally:
+        pending.unlink(missing_ok=True)
+    Path(result['folder'], 'amcl-build-report.json').write_text(report_json(report), encoding='utf-8')
+    return str(destination)
 
 
 def apply_test_result_to_pack(destination, disabled_mods, *, started):
@@ -218,7 +288,7 @@ def apply_test_result_to_pack(destination, disabled_mods, *, started):
                         payload = json.dumps(manifest, ensure_ascii=False, indent=2).encode()
                     elif name == 'amcl-build-report.json':
                         payload = report_json(report).encode()
-                    elif name == 'AMCL-候选服务端审核报告.txt':
+                    elif name in ('AMCL-候选服务端审核报告.txt', 'AMCL-服务端审核报告.txt'):
                         payload = report_text(report).encode()
                     elif name == 'amcl-mod-manifest.json':
                         payload = json.dumps({'schemaVersion': 1,
@@ -248,7 +318,9 @@ import json
 
 def report_text(report):
     lines = [
-        'AMCL 客户端实例 → 候选服务端审核报告',
+        ('AMCL 客户端实例 → 候选服务端审核报告'
+         if report.get('testOutcome', 'unresolved') not in ('ready', 'untested') else
+         'AMCL 客户端实例 → 服务端审核报告'),
         '',
         f"名称：{report['name']}",
         f"Minecraft：{report['minecraftVersion']}",

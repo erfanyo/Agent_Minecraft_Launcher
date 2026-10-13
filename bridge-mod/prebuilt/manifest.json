@@ -1,0 +1,61 @@
+{
+  "version": "0.2.0",
+  "artifacts": [
+    {
+      "loader": "fabric",
+      "minecraft": "1.20.1",
+      "file": "agentmc-bridge-fabric-1.20.1-0.2.0.jar",
+      "sha256": "f71ab683b057f04810898d49617a24dd00e7b146aa3155b863c50d14b0fdcf43",
+      "bytes": 31724
+    },
+    {
+      "loader": "fabric",
+      "minecraft": "1.21.1",
+      "file": "agentmc-bridge-fabric-1.21.1-0.2.0.jar",
+      "sha256": "feecbe9400b0960870aee5ef3300229efe6ce27c69d7077e3bcc4a513a9d3697",
+      "bytes": 31593
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.12.2",
+      "file": "agentmc-bridge-forge-1.12.2-0.2.0.jar",
+      "sha256": "ed8f98b61a6621e382b2e5c5197c9fae7898961d62dc7bbfcaa0d461b58dd024",
+      "bytes": 11466
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.16.5",
+      "file": "agentmc-bridge-forge-1.16.5-0.2.0.jar",
+      "sha256": "a498e73c584f0de0166956d859be76c4f625bd5cf922a72614bc96c03ace32db",
+      "bytes": 12344
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.18.2",
+      "file": "agentmc-bridge-forge-1.18.2-0.2.0.jar",
+      "sha256": "81d5b16f506c30685fe8280fb001d32aa9da6029ba0551b1b2364a6627ce18f5",
+      "bytes": 26268
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.19.2",
+      "file": "agentmc-bridge-forge-1.19.2-0.2.0.jar",
+      "sha256": "3cae9840f1cadeda02a2f4a92d8826575bb48444e5ce7e79a9d590fb2afc4cab",
+      "bytes": 27372
+    },
+    {
+      "loader": "forge",
+      "minecraft": "1.20.1",
+      "file": "agentmc-bridge-forge-1.20.1-0.2.0.jar",
+      "sha256": "bdb8ec46ac333b80caa6385ecd5f8a884411836f8025003a7ab54c854569017b",
+      "bytes": 28413
+    },
+    {
+      "loader": "neoforge",
+      "minecraft": "1.21.1",
+      "file": "agentmc-bridge-neoforge-1.21.1-0.2.0.jar",
+      "sha256": "eb68574f5f6ff710097141d38f9c66f712206f66e9d07a1f56bce7d03fe6a05b",
+      "bytes": 28475
+    }
+  ]
+}

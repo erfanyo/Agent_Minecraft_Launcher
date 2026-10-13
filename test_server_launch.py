@@ -54,6 +54,31 @@ class ServerLaunchTests(unittest.TestCase):
             self.assertEqual(plan['loader'], 'neoforge')
             self.assertEqual(plan['requiredJava'], 21)
 
+    def test_neoforge_layer_lists_empty_or_local_and_fml_version(self):
+        for platform, filename in [('windows', 'win_args.txt'), ('linux', 'unix_args.txt')]:
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as root:
+                args = Path(root, 'libraries/net/neoforged/neoforge/21.1.252', filename)
+                args.parent.mkdir(parents=True)
+                library = Path(root, 'libraries/test.jar')
+                library.write_bytes(b'test')
+                args.write_text('-Dfml.pluginLayerLibraries= -Dfml.gameLayerLibraries=libraries/test.jar '
+                    'cpw.mods.bootstraplauncher.BootstrapLauncher --launchTarget forgeserver '
+                    '--fml.fmlVersion 4.0.44 --fml.mcVersion 1.21.1')
+                self.assertEqual(build_launch_plan(root, platform)['minecraftVersion'], '1.21.1')
+                args.write_text('-Dfml.pluginLayerLibraries=../outside.jar net.neoforged.fml.startup.Server')
+                with self.assertRaises(ValueError):
+                    build_launch_plan(root, platform)
+
+    def test_fabric_minecraft_identity_from_server_jar(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, 'fabric-server-launch.jar').write_bytes(b'launcher')
+            with zipfile.ZipFile(Path(root, 'server.jar'), 'w') as archive:
+                archive.writestr('version.json', json.dumps({'id': '1.21.1'}))
+            plan = build_launch_plan(root)
+            self.assertEqual(plan['loader'], 'fabric')
+            self.assertEqual(plan['minecraftVersion'], '1.21.1')
+            self.assertEqual(plan['requiredJava'], 21)
+
     def fixture(self, root, extra=''):
         root = Path(root)
         jar = root / 'libraries/test/lib.jar'

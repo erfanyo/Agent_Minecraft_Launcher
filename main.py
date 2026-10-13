@@ -7,6 +7,8 @@ Agent Minecraft Launcher — 阶段 1 · 启动核心
 - 安装所选版本:客户端 jar + 依赖库 + 资源文件(镜像加速 + sha1 校验)
 - 启动游戏:自动准备 Java → 拼启动命令 → 拉起进程 → 实时显示游戏日志
 """
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question, task_choice
 import base64
 import json
 import os
@@ -240,8 +242,18 @@ class MainWindow(QMainWindow):
         self._running_instances = set()
         self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
         self._running_label.setMaximumWidth(160)
+        self._server_running_label = QLabel('尚未启动服务端')
+        self._server_running_label.setMaximumWidth(160)
+        self._server_running_label.setToolTip('显示由 AMCL 托管的运行中服务端')
+        self._server_running_task = None
+        running_status = QWidget()
+        running_status_layout = QHBoxLayout(running_status)
+        running_status_layout.setContentsMargins(0, 0, 0, 0)
+        running_status_layout.setSpacing(14)
+        running_status_layout.addWidget(self._running_label)
+        running_status_layout.addWidget(self._server_running_label)
         self.title_bar = FramelessTitleBar(self, "AMCL",
-                                           trailing_widget=self._running_label)
+                                           trailing_widget=running_status)
         self._ai_focus_mode = False
         self._ai_transition = None
         self.ai_mode_button = QPushButton("AI 模式")
@@ -334,6 +346,7 @@ class MainWindow(QMainWindow):
         self.server_details = ServerDetailsView()
         self.server_details.setObjectName("server_details")
         tab_a.server_center.selection_changed.connect(self._on_server_selected)
+        tab_a.server_center.running_changed.connect(lambda _running: self._scan_running_servers())
         self.details_stack = QStackedWidget()
         self.details_placeholder = QLabel("请先在“我的实例”中选择一个实例或服务端。")
         self.details_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -497,6 +510,7 @@ class MainWindow(QMainWindow):
         self._game_controllers = [self.game_processes]
         self._owned_game_instances = {}
         self._detected_game_clients = []
+        self._seen_game_windows = set()
         self._running_scan_task = None
         self._running_scan_timer = QTimer(self)
         self._running_scan_timer.setInterval(2500)
@@ -531,6 +545,8 @@ class MainWindow(QMainWindow):
         self._dl_progress = (0, 1)
         # 下载球 = 悬浮球:置顶、可拖动,默认在内容区右下角(AI 子窗口左侧、主窗口侧外部)
         self.dl_indicator = DownloadIndicator(self._background)
+        from task_center import TaskCenter
+        self.task_center = TaskCenter(self.dl_indicator, self)
         self.dl_indicator.clicked.connect(self.open_download_detail)
         self.dl_indicator.shown.connect(self._place_download_ball)
         self.dl_indicator.show()
@@ -582,6 +598,7 @@ class MainWindow(QMainWindow):
         reveal(self.settings_page)
 
     def _close_settings(self):
+        self.settings_center.flush_autosave()
         if not self._settings_open:
             return
         saved = self._settings_restore
@@ -1066,8 +1083,9 @@ class MainWindow(QMainWindow):
         dock.show()
 
     def closeEvent(self, event):
+        self.settings_center.flush_autosave()
         if getattr(self.home_panel.server_center, '_busy', False):
-            QMessageBox.information(self, '服务端任务尚未结束', '请等待服务端扫描、导入或补全任务结束后再关闭启动器。')
+            inline_notice(self, '服务端任务尚未结束', '请等待服务端扫描、导入或补全任务结束后再关闭启动器。')
             event.ignore()
             return
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
@@ -1081,6 +1099,8 @@ class MainWindow(QMainWindow):
         self._running_scan_timer.stop()
         if self._running_scan_task is not None:
             self._running_scan_task.cancel()
+        if self._server_running_task is not None:
+            self._server_running_task.cancel()
         if hasattr(self, "ai_dock"):
             try:
                 self.ai_dock.shutdown()
@@ -1366,8 +1386,8 @@ class MainWindow(QMainWindow):
 
     def clear_instances(self):
         """清空所有实例(versions 目录),共用文件(依赖库/资源/Java)保留"""
-        if QMessageBox.question(
-                self, "确认", "确定要删除所有实例吗?\n(versions 目录会被清空,共用文件保留)") != QMessageBox.StandardButton.Yes:
+        if action_question(
+                self, "确认", "确定要删除所有实例吗?\n(versions 目录会被清空,共用文件保留)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         versions_dir = os.path.join(paths.GAME_DIR, "versions")
         if os.path.isdir(versions_dir):
@@ -1430,7 +1450,7 @@ class MainWindow(QMainWindow):
             if okl:
                 loader = None if loader == "(原版)" else loader
         elif fmt is None:
-            QMessageBox.warning(self, "导入整合包",
+            task_warning(self, "导入整合包",
                                 "无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)")
             dbg("fmt None -> warning, return")
             return
@@ -1501,6 +1521,9 @@ class MainWindow(QMainWindow):
         self._dl_progress = (0, 1)
         self.dl_indicator.set_progress(0, 1)
         self.dl_indicator.set_completed(False)
+        if hasattr(self, 'task_center'):
+            self._ensure_dl_overlay(create_download=True)
+            self.task_center.begin_task('下载', task_id='download', cancel=self._cancel_current_task)
         self.dl_indicator.setToolTip("下载中,点击查看详情")
         self.dl_indicator.show()
         try:
@@ -1517,14 +1540,20 @@ class MainWindow(QMainWindow):
         self.download_tab.set_status(message)
         self.statusBar().showMessage(message)
         self._dl_log.append(message)
+        if hasattr(self, 'task_center'):
+            self.task_center.update_task('download', message=message)
 
     def _on_download_progress(self, done: int, total: int):
         self.download_tab.set_progress(done, total)
         self.dl_indicator.set_progress(done, total)
         self._dl_progress = (done, total)
+        if hasattr(self, 'task_center'):
+            self.task_center.update_task('download', done=done, total=total)
 
     def _on_download_done(self, ok: bool, error: str):
         error = redact_text(error, self.settings)
+        if hasattr(self, 'task_center'):
+            self.task_center.finish_task('download', 'completed' if ok else 'failed', error or '下载完成')
         if ok:
             self.statusBar().showMessage("下载任务完成")
             self._dl_log.append("✅ 下载任务完成")
@@ -1546,6 +1575,8 @@ class MainWindow(QMainWindow):
         self._dl_finish(ok)
 
     def _on_download_cancelled(self):
+        if hasattr(self, 'task_center'):
+            self.task_center.finish_task('download', 'cancelled', '已取消')
         if self._launch_task is not None:
             self._stop_launch_button_animation()
         self._dl_log.append("已取消下载。已校验的文件会保留，重试时会尽量复用。")
@@ -1568,9 +1599,27 @@ class MainWindow(QMainWindow):
         if worker is not None:
             self._run_download(worker)
 
-    def _ensure_dl_overlay(self):
+    def _ensure_dl_overlay(self, *, create_download=False, task_title="下载"):
         """惰性创建下载详情覆盖层(ContentOverlay + DownloadDetailWidget,复用不重复建)。"""
         if getattr(self, "_dl_overlay", None) is not None:
+            return
+        if hasattr(self, 'task_center'):
+            if 'launcher-log' not in self.task_center.tasks:
+                self.task_center.begin_task('启动器日志', task_id='launcher-log', page=self.log_view)
+                self.task_center.update_task('launcher-log', state='idle')
+            elif self.task_center.tabs.count() == 0:
+                self.task_center.register_page('launcher-log', self.log_view)
+            if create_download and 'download' not in self.task_center.tasks:
+                def live():
+                    return (list(self._dl_log), self._dl_progress[0], self._dl_progress[1])
+                page = DownloadDetailWidget(self._dl_log, self._dl_progress[0], self._dl_progress[1],
+                    live=live, cancel=self._cancel_current_task, retry=self._retry_download,
+                    running=lambda: self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running),
+                    retryable=lambda: self.download_tasks.state in {'failed', 'cancelled'},
+                    flat=True)
+                self.task_center.begin_task(task_title, task_id='download', page=page,
+                                            cancel=self._cancel_current_task)
+                self.task_center.update_task('download', state='idle')
             return
         from ui_overlay import ContentOverlay
 
@@ -1599,6 +1648,9 @@ class MainWindow(QMainWindow):
     def open_download_detail(self):
         """点击下载球:隐藏主内容,在主窗显示半透明下载详情覆盖层(返回按钮回原页)。"""
         self._ensure_dl_overlay()
+        if hasattr(self, 'task_center'):
+            self.task_center.present()
+            return
         self.main_tabs.hide()   # 隐藏主内容,让半透明覆盖层直接压在壁纸上
         self.dl_indicator.hide()
         self._dl_overlay.show_overlay()
@@ -1791,7 +1843,7 @@ class MainWindow(QMainWindow):
             if ok2:
                 loader = None if loader == "(原版)" else loader
         elif fmt is None:
-            QMessageBox.information(self, "拖入文件",
+            task_notice(self, "拖入文件",
                                     "无法识别该文件为整合包(Modrinth/CurseForge/实例文件夹 zip)。")
             return
 
@@ -1914,7 +1966,46 @@ class MainWindow(QMainWindow):
             self._update_window_shape()
             self._position_resize_handles()
 
+    def _scan_running_servers(self):
+        if self._server_running_task is not None and self._server_running_task.is_running:
+            return
+        from server_packs import list_servers
+        from server_host_client import managed_status
+        game_root = paths.GAME_DIR
+        def scan(task):
+            from task_context import checkpoint
+            running = []
+            seen = set()
+            for server in list_servers(game_root):
+                checkpoint()
+                state = managed_status(server['path'])
+                if state and state.get('running') and state.get('pid') not in seen:
+                    seen.add(state.get('pid'))
+                    running.append((server['name'], state.get('pid')))
+            return running
+        task = BackgroundTask(scan, self)
+        self._server_running_task = task
+        task.succeeded.connect(self._apply_running_servers)
+        task.start()
+
+    def _apply_running_servers(self, running):
+        from ui_style import success_color, muted_color
+        label = self._server_running_label
+        if running:
+            text = ('已启动服务端:' + running[0][0] if len(running) == 1
+                    else f'已启动服务端:{len(running)}个')
+            label.setText(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, 160))
+            label.setToolTip('运行中的服务端:\n' + '\n'.join(
+                f'{name} · PID {pid}' for name, pid in running))
+            label.setStyleSheet(f'color: {success_color()}; font-weight: bold;')
+        else:
+            label.setText('尚未启动服务端')
+            label.setToolTip('显示由 AMCL 托管的运行中服务端')
+            label.setStyleSheet(f'color: {muted_color()};')
+
     def _scan_running_games(self):
+        self._update_running_label()
+        self._scan_running_servers()
         if self._running_scan_task is not None and self._running_scan_task.is_running:
             return
         from instances import scan_instances, detect_running_clients
@@ -1931,11 +2022,37 @@ class MainWindow(QMainWindow):
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
         from ui_style import muted_color, success_color
+        import psutil
+        def window_open(pid, owned=False):
+            if not psutil.pid_exists(pid):
+                return False
+            if os.name != 'nt':
+                return True
+            from memory_relief import visible_game_window
+            if visible_game_window(pid):
+                self._seen_game_windows.add(pid)
+                return True
+            # Own launches are counted while their first window is still loading.
+            return owned and pid not in self._seen_game_windows
+
+        for client in self._detected_game_clients:
+            if client.get('window_visible', True):
+                for parent_pid in client.get('parent_pids', []):
+                    if self._owned_game_instances.get(parent_pid) == client['id']:
+                        self._seen_game_windows.add(parent_pid)
         live = {controller.process.pid: self._owned_game_instances.get(controller.process.pid, '')
                 for controller in self._game_controllers
-                if controller.is_running}
+                if controller.is_running and window_open(controller.process.pid, owned=True)}
         for client in self._detected_game_clients:
+            try:
+                process = psutil.Process(client['pid'])
+                if process.create_time() != client.get('create_time', process.create_time()):
+                    continue
+            except psutil.Error:
+                continue
             if client['pid'] in self._owned_game_instances and client['pid'] not in live:
+                continue
+            if not window_open(client['pid']):
                 continue
             live.setdefault(client['pid'], client['id'])
         self._running_instances = set(live.values()) - {''}
@@ -2176,10 +2293,10 @@ class MainWindow(QMainWindow):
 
         self._update_running_label()
         if self._running_instances:
-            if QMessageBox.question(self, '启动另一个实例',
+            if action_question(self, '启动另一个实例',
                     f"已有游戏正在运行，是否继续启动「{v['id']}」？\n多开会增加内存占用，同一实例共用存档时请勿同时进入同一个世界。",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                    QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
                 return
 
         self.statusBar().showMessage(f"正在获取 {v['id']} 的启动信息...")
@@ -2205,6 +2322,9 @@ class MainWindow(QMainWindow):
         self._dl_progress = (0, 1)
         self.dl_indicator.set_progress(0, 1)
         self.dl_indicator.setToolTip("正在准备启动，点击查看详情")
+        if hasattr(self, 'task_center'):
+            self._ensure_dl_overlay(create_download=True, task_title='启动准备')
+            self.task_center.begin_task('启动准备', task_id='download', cancel=self._cancel_current_task)
         self.dl_indicator.show()
         task.status.connect(self._on_download_status)
         task.progress.connect(self._on_download_progress)
@@ -2215,12 +2335,14 @@ class MainWindow(QMainWindow):
         task.start()
 
     def _on_launch_prepare_failed(self, error):
+        if hasattr(self, 'task_center'):
+            self.task_center.finish_task('download', 'failed', redact_text(error, self.settings))
         self._stop_launch_button_animation()
         self.ai_focus_sidebar.set_launch_state("failed")
         self.launch_btn.setEnabled(True)
         self.dl_indicator.set_failed(True)
         self.dl_indicator.setToolTip("启动准备失败，点击查看状态与日志")
-        QMessageBox.warning(self, "启动准备没完成", redact_text(error, self.settings))
+        task_warning(self, "启动准备没完成", redact_text(error, self.settings))
 
     def _start_prepared_game(self, plan, v):
         # 准备阶段可能刷新了正版令牌；下次启动须读取刚保存的凭证。
@@ -2275,6 +2397,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"启动失败: {e}")
             self.dl_indicator.set_failed(True)
             self.dl_indicator.setToolTip("启动失败，点击查看状态与日志")
+            if hasattr(self, 'task_center'):
+                self.task_center.finish_task('download', 'failed', redact_text(str(e), self.settings))
             self.launch_btn.setEnabled(True)
             return
 
@@ -2282,6 +2406,8 @@ class MainWindow(QMainWindow):
         self.launch_btn.setEnabled(True)
         self.dl_indicator.set_completed(True)
         self.dl_indicator.setToolTip("游戏已启动，点击查看状态与日志")
+        if hasattr(self, 'task_center'):
+            self.task_center.finish_task('download', message='游戏已启动')
 
         from memory_policy import track_process
         track_process(self.game_process, os.path.join(paths.GAME_DIR, 'versions', v['id']))
@@ -2403,7 +2529,7 @@ class MainWindow(QMainWindow):
         preview = msg[:400] + ("…" if len(msg) > 400 else "")
         if QMessageBox.question(
                 self, "游戏异常退出",
-                f"{preview}\n\n要让 AI 助手分析原因并给出解决办法吗?") == QMessageBox.StandardButton.Yes:
+                f"{preview}\n\n要让 AI 助手分析原因并给出解决办法吗?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes:
             self.ai_dock.ask(f"我的游戏异常退出了(退出码 {code}),帮我分析原因和解决办法:\n{msg}")
 
     def create_instance(self, version: str, loader_key, modrinth_loader,
@@ -2603,20 +2729,15 @@ class MainWindow(QMainWindow):
                 if deps["incompatible"]:
                     lines.append("⚠ 冲突(不建议同装):\n" + "\n".join(f" · {d['title']}" for d in deps["incompatible"]))
                 if len(lines) > 1:
-                    dialog = QMessageBox(self)
-                    dialog.setWindowTitle('依赖提示')
-                    dialog.setText('\n'.join(lines))
-                    dialog.setInformativeText('跳过必需前置后，Mod 可能无法加载。' if missing else '是否继续下载该 Mod？')
-                    install = dialog.addButton('下载并安装前置' if missing else '继续下载',
-                                               QMessageBox.ButtonRole.AcceptRole)
-                    skip = dialog.addButton('跳过前置，继续下载', QMessageBox.ButtonRole.ActionRole) if missing else None
-                    dialog.addButton('取消', QMessageBox.ButtonRole.RejectRole)
-                    dialog.setDefaultButton(install)
-                    dialog.exec()
-                    selected = dialog.clickedButton()
-                    if selected is install:
+                    choices = [('下载并安装前置' if missing else '继续下载', 'install')]
+                    if missing:
+                        choices.append(('跳过前置，继续下载', 'skip'))
+                    choices.append(('取消', None))
+                    note = '跳过必需前置后，Mod 可能无法加载。' if missing else '是否继续下载该 Mod？'
+                    selected = task_choice(self, '依赖提示', '\n'.join(lines) + '\n\n' + note, choices)
+                    if selected == 'install':
                         extra_deps = missing
-                    elif skip is not None and selected is skip:
+                    elif selected == 'skip':
                         skipped_deps = True
                     else:
                         return
@@ -2811,7 +2932,7 @@ class MainWindow(QMainWindow):
         """「我的版本」首页「一键配置 ▾」按钮 → 按用户选择执行 bridge-mod / RCON / 自动。"""
         inst = self._current_instance()
         if inst is None:
-            QMessageBox.information(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
             return
         if kind == "bridge":
             self._one_click_bridge_for(inst)
@@ -2826,7 +2947,7 @@ class MainWindow(QMainWindow):
         """「我的版本」顶部:一键配置下拉菜单(未来扩展更多配置项)"""
         inst = self._current_instance()
         if inst is None:
-            QMessageBox.information(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
             return
         self._one_click_config_for(inst)
 
@@ -2834,7 +2955,7 @@ class MainWindow(QMainWindow):
     def _one_click_bridge_current(self):
         inst = self._current_instance()
         if inst is None:
-            QMessageBox.information(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
             return
         self._one_click_bridge_for(inst)
 
@@ -2848,7 +2969,7 @@ class MainWindow(QMainWindow):
         """
         loader = inst.get("loader")
         if loader not in ("fabric", "forge", "neoforge"):
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+            inline_notice(self, f"一键配置 · {inst['id']}",
                                     "该实例没有加载器(原版),bridge-mod 是 mod 需要加载器。\n"
                                     "先给这个实例装个 Fabric/Forge 等加载器再回来。")
             return
@@ -2873,7 +2994,7 @@ class MainWindow(QMainWindow):
 
         task = BackgroundTask(work, self)
         task.succeeded.connect(lambda payload: on_ready(inst, payload))
-        task.failed.connect(lambda err: QMessageBox.warning(
+        task.failed.connect(lambda err: inline_warning(
             self, f"一键配置 · {inst['id']}",
             f"检测 bridge-mod 状态失败:{err}\n"
             "(可能是无法访问 GitHub;也可以手动把 agentmc-bridge-*.jar 放进实例 mods 目录)"))
@@ -2885,39 +3006,39 @@ class MainWindow(QMainWindow):
         status = (payload or {}).get("status")
         info = (payload or {}).get("info")
         if status == "up_to_date":
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+            inline_notice(self, f"一键配置 · {inst['id']}",
                                     "✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n"
                                     "(无需'对局域网开放',指令结果可精确回传)。")
             return
         if status == "incompatible":
-            ret = QMessageBox.question(
+            ret = action_question(
                 self, f"一键配置 · {inst['id']}",
                 "检测到当前 mods 目录中有其他 MC 版本或加载器的 bridge-mod。\n\n"
-                f"将替换为适用于 {inst['base']}+{inst['loader']} 的版本吗？")
+                f"将替换为适用于 {inst['base']}+{inst['loader']} 的版本吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret == QMessageBox.StandardButton.Yes:
                 self._install_bridge_mod(inst)
             return
         if status == "outdated":
-            ret = QMessageBox.question(
+            ret = action_question(
                 self, f"一键配置 · {inst['id']}",
                 f"⚠️ 检测到已装 bridge-mod 但版本较旧({inst['base']}+{inst['loader']})。\n\n"
-                "自动更新到最新版吗?(会覆盖旧的 jar)")
+                "自动更新到最新版吗?(会覆盖旧的 jar)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret == QMessageBox.StandardButton.Yes:
                 self._install_bridge_mod(inst)
             return
         if info is None:
             # 不兼容:明确提示,并引导走 RCON 临时方案
-            QMessageBox.information(
+            inline_notice(
                 self, f"一键配置 · {inst['id']}",
                 f"💡 bridge-mod 暂不兼容 {inst['base']}+{inst['loader']}"
                 "(版本表/自动发现都没有这个组合)。\n\n"
                 "可以改用临时方案 RCON:功能略弱(指令结果不精确),但覆盖更多版本。\n"
                 "要换 RCON 的话,点菜单里的「一键配置 RCON」。")
             return
-        ret = QMessageBox.question(self, f"一键配置 · {inst['id']}",
+        ret = action_question(self, f"一键配置 · {inst['id']}",
                                    f"未安装 bridge-mod(本地指令口,推荐)。\n\n"
                                    f"检测到 {inst['base']}+{inst['loader']} 可用的 "
-                                   f"bridge-mod v{info['version']},自动下载安装吗?")
+                                   f"bridge-mod v{info['version']},自动下载安装吗?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
         if ret != QMessageBox.StandardButton.Yes:
             return
         self._install_bridge_mod(inst)
@@ -2926,7 +3047,7 @@ class MainWindow(QMainWindow):
     def _one_click_rcon_current(self):
         inst = self._current_instance()
         if inst is None:
-            QMessageBox.information(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
             return
         self._one_click_rcon_for(inst)
 
@@ -2936,29 +3057,29 @@ class MainWindow(QMainWindow):
         inst_dir = self.game_dir_for(inst["id"])
         loader = inst.get("loader")
         if read_rcon_config(inst_dir):
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+            inline_notice(self, f"一键配置 · {inst['id']}",
                                     "✅ RCON 已就绪。\n"
                                     "(临时方案:进世界后按 ESC → 对局域网开放,RCON 才监听端口)")
             return
         if not has_lan_server_properties(inst_dir):
             if loader not in ("fabric", "forge", "neoforge"):
-                QMessageBox.information(
+                inline_notice(
                     self, f"一键配置 · {inst['id']}",
                     "该实例没有加载器(原版),而 Lan Server Properties 需要加载器。\n"
                     "先给这个实例装个加载器再回来。")
                 return
-            ret = QMessageBox.question(
+            ret = action_question(
                 self, f"一键配置 · {inst['id']}",
                 "临时方案需要 Lan Server Properties mod\n"
                 "(自动开 RCON,但每次进世界需手动'对局域网开放')。\n\n"
-                "是否自动从 Modrinth 下载并安装?")
+                "是否自动从 Modrinth 下载并安装?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._install_lan_server_properties(inst)
             return
         msg = ensure_rcon_config(inst_dir)
         if "\n" in msg:
-            QMessageBox.information(self, f"一键配置 · {inst['id']}", msg)
+            inline_notice(self, f"一键配置 · {inst['id']}", msg)
         else:
             self.statusBar().showMessage(msg)
 
@@ -2990,12 +3111,12 @@ class MainWindow(QMainWindow):
         name = lan_tools.ONLINE_MODS.get(slug, slug)
         # 不支持 → 明确说明
         if loader not in ("fabric", "forge", "neoforge"):
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+            inline_notice(self, f"一键配置 · {inst['id']}",
                                     f"该实例没有加载器(原版),{name} 是 mod 需要加载器。\n"
                                     "先装个 Fabric/Forge 再回来。")
             return
         if not lan_tools.mod_supported(slug, gv, loader):
-            QMessageBox.information(self, f"一键配置 · {inst['id']}",
+            inline_notice(self, f"一键配置 · {inst['id']}",
                                     f"{name} 暂不支持 {gv}+{loader}。\n"
                                     "可以换个版本,或到「联机」看别的方案。")
             return
@@ -3003,11 +3124,11 @@ class MainWindow(QMainWindow):
         mods_dir = os.path.join(inst_dir, "mods")
         has = any(name and (slug in f.lower() or name.split("(")[0].strip().lower() in f.lower())
                   for f in os.listdir(mods_dir) if f.endswith(".jar")) if os.path.isdir(mods_dir) else False
-        ret = QMessageBox.question(
+        ret = action_question(
             self, f"一键配置 · {inst['id']}",
             (f"✅ {name} 支持 {gv}+{loader}。\n\n"
              f"{'已检测到,重装/更新吗?' if has else '自动从 Modrinth 下载并安装到该实例吗?'}"),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
         if ret != QMessageBox.StandardButton.Yes:
             return
         self.statusBar().showMessage(f"正在为 {inst['id']} 安装 {name}…")
@@ -3161,13 +3282,13 @@ class MainWindow(QMainWindow):
         if getattr(home, '_server_mode', False):
             server = home.server_center.selected()
             if server is None:
-                QMessageBox.information(self, '实例详情', '请先在右侧选中一个服务端。')
+                inline_notice(self, '实例详情', '请先在右侧选中一个服务端。')
                 return
             self._show_server_details(server)
             return
         inst = home.current_instance()
         if inst is None:
-            QMessageBox.information(self, '实例详情', '请先在右侧选中一个实例。')
+            inline_notice(self, '实例详情', '请先在右侧选中一个实例。')
             return
         self._show_instance_details(inst)
 
@@ -3196,7 +3317,7 @@ class MainWindow(QMainWindow):
 
         没选中实例就提示,避免打开一个空管理界面让人困惑。"""
         if inst is None:
-            QMessageBox.information(self, t("INSTANCE_SETTINGS"),
+            inline_notice(self, t("INSTANCE_SETTINGS"),
                                     t("SELECT_AN_INSTANCE_ON_THE_RIGHT_FIRST"))
             return
         self.open_instance_manager(inst)
@@ -3215,7 +3336,7 @@ class MainWindow(QMainWindow):
         try:
             out = backup_instance(inst["id"], paths.GAME_DIR)
         except Exception as e:
-            QMessageBox.warning(self, "备份失败", str(e))
+            task_warning(self, "备份失败", str(e))
             return
         self.statusBar().showMessage(f"已备份到:{out}")
 
@@ -3224,7 +3345,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QInputDialog
         from instance_metadata import rename_instance
         if self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
-            QMessageBox.information(self, "稍等一下", "游戏或安装任务还在运行，结束后再改名吧。")
+            inline_notice(self, "稍等一下", "游戏或安装任务还在运行，结束后再改名吧。")
             return
         name, accepted = QInputDialog.getText(
             self, "重命名实例",
@@ -3238,7 +3359,7 @@ class MainWindow(QMainWindow):
         try:
             rename_instance(paths.GAME_DIR, inst["id"], name.strip())
         except (OSError, ValueError, RuntimeError) as error:
-            QMessageBox.warning(self, "名称暂时没改成", str(error))
+            inline_warning(self, "名称暂时没改成", str(error))
             return
         new_id = name.strip()
         if self.settings.get('last_played_instance') == inst['id']:
@@ -3259,11 +3380,11 @@ class MainWindow(QMainWindow):
     def _delete_instance(self, inst):
         """删除一个实例的安装文件(只删 versions/<id>，共用 gameDir 保留)。"""
         if inst['id'] in self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
-            QMessageBox.information(self, "稍等一下", "游戏正在运行，或文件还在准备中，结束后再删除实例吧。")
+            inline_notice(self, "稍等一下", "游戏正在运行，或文件还在准备中，结束后再删除实例吧。")
             return
-        if QMessageBox.question(
+        if action_question(
                 self, "确认删除",
-                f"确定删除实例 {inst['id']} 吗?\n(只删该实例,共用文件保留)") != QMessageBox.StandardButton.Yes:
+                f"确定删除实例 {inst['id']} 吗?\n(只删该实例,共用文件保留)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         # ``game_dir_for`` 在关闭版本隔离时会返回整个 .minecraft；它只适合
         # 运行参数、存档和配置，绝不能作为删除目标。实例安装文件始终固定在
@@ -3328,13 +3449,13 @@ if __name__ == "__main__":
         _instance_lock.setStaleLockTime(0)
         if not _instance_lock.tryLock(0):
             if _instance_lock.error() == QLockFile.LockError.LockFailedError:
-                answer = QMessageBox.question(
+                answer = action_question(
                     None,
                     "启动器已在运行",
                     "检测到这个数据目录已有一个启动器进程。\n\n"
                     "仍要再启动一个吗？多个窗口可能同时修改配置、下载或操作同一实例。",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
                 )
                 if answer != QMessageBox.StandardButton.Yes:
                     raise SystemExit(0)
@@ -3389,7 +3510,7 @@ if __name__ == "__main__":
     if _rollback_notice:
         QTimer.singleShot(
             500,
-            lambda message=_rollback_notice: QMessageBox.information(
+            lambda message=_rollback_notice: inline_notice(
                 window, "已恢复旧版本", message),
         )
     _startup_smoke_status = 0

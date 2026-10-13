@@ -132,6 +132,32 @@ def run_host(request_path):
                     if action == 'status':
                         _reply(connection, {'ok': True, 'running': process.poll() is None,
                                             'pid': process.pid})
+                    elif action == 'force_stop':
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=2)
+                        _reply(connection, {'ok': True})
+                    elif action == 'abort_failed_startup':
+                        # Only abort our own Java after explicit startup failure.
+                        with log_path.open('rb') as log_input:
+                            log_input.seek(max(0, log_path.stat().st_size - 1024 * 1024))
+                            tail = log_input.read().decode('utf-8', errors='replace')
+                        failed = ('Failed to start the minecraft server' in tail
+                                  or 'Failed to start server' in tail)
+                        ready = 'Done (' in tail and 'For help, type' in tail
+                        if not failed or ready:
+                            _reply(connection, {'ok': False, 'error': 'no confirmed startup failure'})
+                            continue
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait(timeout=5)
+                        _reply(connection, {'ok': True})
                     elif action == 'command':
                         command = message.get('command')
                         if (not isinstance(command, str) or not command.strip()

@@ -168,8 +168,34 @@ def install_runtime(root: str, loader: str, mc: str, version: str,
 
 def diagnose_server_log(log_text: str, mods_dir: str = ''):
     """Parse a server log / crash report and suggest fixes (pure function)."""
-    from server_log_diagnosis import build_diagnosis, suggestions_to_markdown
-    diagnosis = build_diagnosis(log_text, mods_dir)
+    from pathlib import Path
+    import zipfile
+    from mod_deps import read_mod_metadata
+    from log_privacy import redact_text
+    from server_log_diagnosis import build_diagnosis, parse_log_evidence, suggestions_to_markdown
+    log_text = redact_text(log_text)
+    mods = []
+    if mods_dir:
+        directory = Path(mods_dir).resolve(strict=True)
+        for path in sorted(directory.iterdir()):
+            if not path.is_file() or path.is_symlink() or not path.name.endswith(('.jar', '.jar.disabled')):
+                continue
+            metadata = read_mod_metadata(path) or {}
+            configs = []
+            try:
+                with zipfile.ZipFile(path) as archive:
+                    configs = [name.casefold() for name in archive.namelist()
+                               if name.casefold().endswith('.mixins.json')]
+            except (OSError, ValueError, zipfile.BadZipFile):
+                pass
+            mods.append({'file': path.name, 'modId': metadata.get('id') or '',
+                         'name': metadata.get('name') or path.name,
+                         'environment': metadata.get('environment', 'unknown'),
+                         'disabled': path.name.endswith('.disabled'), 'mixinConfigs': configs})
+    else:
+        mods = [{'file': name, 'modId': name, 'name': name}
+                for name in parse_log_evidence(log_text)['mods']]
+    diagnosis = build_diagnosis(mods, log_text)
     return suggestions_to_markdown(diagnosis)
 
 

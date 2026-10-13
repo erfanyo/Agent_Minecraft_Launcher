@@ -36,8 +36,33 @@ class DiagnosticTests(unittest.TestCase):
         self.assertFalse((self.folder / 'extra').exists())
         self.assertIn('保留', result)
         self.assertEqual(len(list((self.root / 'diagnostic_snapshots' / 'demo').glob('before-restore-*'))), 1)
+        d.check_constraint('demo', '1.20.1', 'forge')
+        self.assertIsNone(snap['locked_environment'])
+        self.assertFalse((self.root / 'diagnostic_snapshots' / 'demo' / 'constraint.json').exists())
+
+    def test_legacy_constraint_does_not_lock_normal_use(self):
+        root = Path(d._store('demo'))
+        root.mkdir(parents=True, exist_ok=True)
+        (root / 'constraint.json').write_text(json.dumps({'minecraft': '26.1.2', 'loader': 'fabric'}))
+        d.check_constraint('demo')
+        d.check_constraint('demo', '1.20.1', 'forge')
+        snap = json.loads(d.snapshot_instance('demo', lock_environment=True))
+        self.assertIsNone(snap['locked_environment'])
+
+    def test_repair_constraint_is_scoped_and_reset_on_error(self):
+        expected = d.environment('demo')
         with self.assertRaises(ValueError):
-            d.check_constraint('demo', '1.20.1', 'forge')
+            with d.repair_environment_scope({'demo': expected}):
+                d.check_constraint('demo')
+                d.check_constraint('demo', '1.20.1', 'forge')
+        d.check_constraint('demo', '1.20.1', 'forge')
+
+    def test_restore_reports_environment_change(self):
+        snap = json.loads(d.snapshot_instance('demo'))
+        (self.folder / 'amcl_instance.json').write_text(json.dumps({'minecraft_version': '26.1.2', 'loader': 'fabric'}))
+        result = d.restore_instance_snapshot('demo', snap['snapshot_id'])
+        self.assertIn('环境已随快照恢复', result)
+        self.assertEqual(d.environment('demo'), snap['environment'])
 
     def test_corrupt_snapshot_refused(self):
         snap = json.loads(d.snapshot_instance('demo'))

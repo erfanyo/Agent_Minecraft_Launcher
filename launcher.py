@@ -13,6 +13,7 @@ Minecraft 的启动原理:游戏本体是个 jar,"启动"就是用 Java 运行�
 import json
 import os
 import re
+import shlex
 import sys
 import uuid
 import zipfile
@@ -316,6 +317,9 @@ def build_launch_command(d: dict, game_dir: str, java_exe: str,
     if "arguments" in d:
         game_args = resolve_args(d["arguments"].get("game", []), tokens)
     else:
-        game_args = replace_tokens(d.get("minecraftArguments", ""), tokens).split()
+        # Split the profile template before substitution: paths/usernames may
+        # contain spaces and must remain a single process argument.
+        game_args = [replace_tokens(argument, tokens)
+                     for argument in shlex.split(d.get("minecraftArguments", ""))]
 
     return [java_exe] + jvm + [d["mainClass"]] + game_args

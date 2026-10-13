@@ -22,13 +22,16 @@ class DownloadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             def request(*args, **kwargs):
                 return io.BytesIO(json.dumps({'assets': [asset]}).encode()) if args[0].full_url.endswith('/latest') else io.BytesIO(payload)
-            with patch('urllib.request.urlopen', side_effect=request), patch('platform.system', return_value='Windows'), patch('platform.machine', return_value='AMD64'):
+            with patch('urllib.request.urlopen', side_effect=request), patch('platform.system', return_value='Windows'), patch('platform.machine', return_value='AMD64'), patch('plugins.lan_bridge._configured_core', ''):
                 path = download_core(folder)
                 self.assertTrue(os.path.isfile(path))
                 before = os.listdir(folder)
                 asset['digest'] = 'sha256:' + '0' * 64
-                with self.assertRaisesRegex(ValueError, 'SHA-256'):
-                    download_core(folder)
+                # Cached valid installs skip downloads. Clear only the in-memory
+                # selection to exercise a fresh corrupt download, preserving files.
+                with patch('plugins.lan_bridge._configured_core', ''):
+                    with self.assertRaisesRegex(ValueError, 'SHA-256'):
+                        download_core(folder)
                 self.assertEqual(before, os.listdir(folder))
                 self.assertTrue(os.path.isfile(path))
 

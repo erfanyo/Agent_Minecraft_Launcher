@@ -12,6 +12,7 @@ import subprocess
 import threading
 import time
 import base64
+from ui_feedback import copy_with_feedback
 
 PLUGIN_ID = "lan_bridge"
 PLUGIN_NAME = "联机"
@@ -32,6 +33,12 @@ _terracotta_process = None
 _terracotta_lock = threading.RLock()
 _terracotta_download_lock = threading.Lock()
 _install_state = {'terracotta': '', 'easytier': ''}
+
+# Additional nodes are passed to Terracotta's embedded EasyTier via its IPC.
+TERRACOTTA_PUBLIC_NODES = (
+    'tcp://us01.225284.xyz:11010',
+    'tcp://dreamlife.indevs.in:11010',
+)
 
 
 def _save_join_address_to_selected_instance(page, address):
@@ -55,6 +62,7 @@ def _save_join_address_to_selected_instance(page, address):
 
 
 def _terracotta_request(route, params=None):
+    global _terracotta_port
     import json
     import urllib.parse
     import urllib.request
@@ -62,13 +70,24 @@ def _terracotta_request(route, params=None):
         port = _terracotta_port
     if not isinstance(port, int) or not 1 <= port <= 65535:
         raise RuntimeError('Terracotta 尚未连接')
-    query = '?' + urllib.parse.urlencode(params) if params else ''
+    query = '?' + urllib.parse.urlencode(params, doseq=True) if params else ''
     url = f'http://127.0.0.1:{port}/state/{route}{query}'
-    with urllib.request.urlopen(url, timeout=4) as response:
-        body = response.read(256 * 1024 + 1)
-        if len(body) > 256 * 1024:
-            raise ValueError('Terracotta 状态数据过大')
-        return json.loads(body) if route == '' else None
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            body = response.read(256 * 1024 + 1)
+            if len(body) > 256 * 1024:
+                raise ValueError('Terracotta 状态数据过大')
+            return json.loads(body) if route == '' else None
+    except urllib.error.URLError as error:
+        reason = error.reason
+        if isinstance(reason, ConnectionRefusedError) or getattr(reason, 'winerror', None) == 10061:
+            with _terracotta_lock:
+                if _terracotta_port == port:
+                    _terracotta_port = None
+            code = _terracotta_process.poll() if _terracotta_process is not None else None
+            suffix = f'（进程退出码 {code}）' if code is not None else ''
+            raise RuntimeError(f'本机陶瓦接口已关闭{suffix}。请查看陶瓦启动日志；这不是房主游戏端口拒绝连接。') from error
+        raise
 
 
 def terracotta_connect(path):
@@ -89,9 +108,15 @@ def terracotta_connect(path):
         with tempfile.TemporaryDirectory(prefix='amcl-terracotta-') as temporary:
             port_file = os.path.join(temporary, 'port.json')
             flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-            process = subprocess.Popen([path, '--hmcl', port_file],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       creationflags=flags)
+            startup_log = os.path.join(os.path.dirname(path), 'amcl-terracotta-startup.log')
+            with open(startup_log, 'ab') as output:
+                # Official Windows 0.4.2 delegates --hmcl to --hmcl2 and exits.
+                # Start that documented-in-source server entry directly so its
+                # actual lifetime and exit code remain observable by AMCL.
+                mode = '--hmcl2' if os.name == 'nt' else '--hmcl'
+                process = subprocess.Popen([path, mode, port_file],
+                                           stdout=output, stderr=subprocess.STDOUT,
+                                           cwd=os.path.dirname(path), creationflags=flags)
             deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
                 if os.path.isfile(port_file):
@@ -106,22 +131,25 @@ def terracotta_connect(path):
                 if process.poll() is not None and os.name != 'nt':
                     break
                 time.sleep(0.1)
-        raise RuntimeError('Terracotta 未能启动；请检查程序版本与系统权限')
+        raise RuntimeError(f'Terracotta 未能启动（退出码 {process.poll()}）；启动日志：{startup_log}')
 
 
 def terracotta_state():
     return _terracotta_request('')
 
 
-def terracotta_host(player=''):
-    _terracotta_request('scanning', {'player': player} if player else None)
+def terracotta_host(player='', public_nodes=None):
+    params = {'public_nodes': list(TERRACOTTA_PUBLIC_NODES if public_nodes is None else public_nodes)}
+    if player:
+        params['player'] = player
+    _terracotta_request('scanning', params)
 
 
-def terracotta_join(room, player=''):
+def terracotta_join(room, player='', public_nodes=None):
     room = str(room or '').strip()
     if not room or len(room) > 256:
         raise ValueError('请输入有效的 Terracotta 大厅编号')
-    _terracotta_request('guesting', {'room': room, **({'player': player} if player else {})})
+    _terracotta_request('guesting', {'room': room, 'public_nodes': list(TERRACOTTA_PUBLIC_NODES if public_nodes is None else public_nodes), **({'player': player} if player else {})})
 
 
 def terracotta_leave():
@@ -259,6 +287,30 @@ def _add_terracotta_ui(layout, page, api):
     credit.setOpenExternalLinks(True)
     credit.setWordWrap(True)
     layout.addWidget(credit)
+
+    node_row = QHBoxLayout()
+    node_row.addWidget(QLabel('公共节点：'))
+    node_choice = QComboBox()
+    node_presets = [
+        ('美国 + 上海（备用节点）', list(TERRACOTTA_PUBLIC_NODES)),
+        ('美国', [TERRACOTTA_PUBLIC_NODES[0]]),
+        ('上海', [TERRACOTTA_PUBLIC_NODES[1]]),
+        ('仅陶瓦原有节点', []),
+    ]
+    for label, nodes in node_presets:
+        node_choice.addItem(label, nodes)
+    saved_nodes = api.get_config('terracotta_public_nodes', list(TERRACOTTA_PUBLIC_NODES))
+    if isinstance(saved_nodes, list):
+        for index, (_, nodes) in enumerate(node_presets):
+            if nodes == saved_nodes:
+                node_choice.setCurrentIndex(index)
+                break
+    node_choice.currentIndexChanged.connect(lambda: api.set_config('terracotta_public_nodes', node_choice.currentData()))
+    node_row.addWidget(node_choice, 1)
+    layout.addLayout(node_row)
+    node_hint = QLabel('房主与访客请选同一组节点；备用节点会补充到陶瓦原有节点中。连接中更改需退出大厅后重新连接。')
+    node_hint.setWordWrap(True)
+    layout.addWidget(node_hint)
 
     top = QHBoxLayout()
     top.setSpacing(12)
@@ -442,8 +494,8 @@ def _add_terracotta_ui(layout, page, api):
     footer.addWidget(log_button)
     layout.addLayout(footer)
 
-    copy_room.clicked.connect(lambda: QApplication.clipboard().setText(hall_code.text().strip()))
-    copy_address.clicked.connect(lambda: QApplication.clipboard().setText(address.text().strip()))
+    copy_room.clicked.connect(lambda: copy_with_feedback(copy_room, hall_code.text().strip()))
+    copy_address.clicked.connect(lambda: copy_with_feedback(copy_address, address.text().strip()))
     address.textChanged.connect(lambda value: copy_address.setEnabled(bool(value.strip())))
 
     busy = {'value': False}
@@ -472,6 +524,7 @@ def _add_terracotta_ui(layout, page, api):
 
     def running_detected(clients):
         detected_running['busy'] = False
+        clients = [client for client in clients if client.get('window_visible', True)]
         detected_running['ids'] = {client['id'] for client in clients}
         for client in clients:
             instance_metadata[client['id']] = dict(instance_metadata.get(client['id'], {}), **client)
@@ -563,7 +616,7 @@ def _add_terracotta_ui(layout, page, api):
             'host-starting': '已找到游戏，正在建立大厅…',
             'host-ok': '大厅已就绪，请分享大厅编号。',
             'guest-connecting': '正在查找并连接大厅…',
-            'guest-starting': '已识别大厅，正在通过陶瓦内置 EasyTier 建立网络连接…',
+            'guest-starting': '大厅码有效，正在通过陶瓦内置 EasyTier 连接房主…',
             'guest-ok': '已连接；在 Minecraft 多人游戏中连接大厅管理区的地址。',
         }
         message = 'Terracotta：' + messages.get(stage, str(state.get('message') or stage or '未知状态'))
@@ -682,7 +735,7 @@ def _add_terracotta_ui(layout, page, api):
                 reminder = QMessageBox(page)
                 reminder.setWindowTitle('创建大厅')
                 reminder.setText('暂未检测到目标实例的局域网端口；这不代表游戏未启动。')
-                reminder.setInformativeText('请先进入世界，按 Esc → 对局域网开放。已经开放时可继续，由陶瓦扫描动态端口。多开时建议只对目标实例开放。')
+                reminder.setInformativeText('请先进入世界。Minecraft 26：世界选项 → 局域网 → 开；旧版：Esc → 对局域网开放。已经开放时可继续，由陶瓦扫描动态端口。多开时建议只对目标实例开放。')
                 proceed = reminder.addButton('继续创建大厅', QMessageBox.ButtonRole.AcceptRole)
                 reminder.addButton('返回', QMessageBox.ButtonRole.RejectRole)
                 reminder.exec()
@@ -696,6 +749,7 @@ def _add_terracotta_ui(layout, page, api):
             status.setText('Terracotta：正在处理…')
         selected_path, code = path.text().strip(), room.text().strip()
         player = nickname.text().strip()
+        public_nodes = list(node_choice.currentData() or [])
         if action in ('host', 'join'):
             selected_instance = instance_choice.currentData()
             page._terracotta_instance = dict(selected_instance) if selected_instance else None
@@ -710,9 +764,9 @@ def _add_terracotta_ui(layout, page, api):
                     signals.auto_installed.emit(binary_path)
                 terracotta_connect(binary_path)
                 if action == 'host':
-                    terracotta_host(player)
+                    terracotta_host(player, public_nodes)
                 elif action == 'join':
-                    terracotta_join(code, player)
+                    terracotta_join(code, player, public_nodes)
                 elif action == 'leave':
                     terracotta_leave()
                 result = fetch_state()
@@ -730,6 +784,8 @@ def _add_terracotta_ui(layout, page, api):
         if busy['value']:
             return
         if isinstance(result, Exception):
+            if _terracotta_port is None:
+                show_state({'state': 'waiting'})
             connection.setText('无法读取陶瓦状态：' + str(result))
             members_title.setText('大厅成员 · 状态读取失败')
         else:
@@ -1367,7 +1423,7 @@ def register(api):
                 except ValueError:
                     return False
             control.textChanged.connect(lambda value, button=copy, validate=can_copy: button.setEnabled(validate(value)))
-            copy.clicked.connect(lambda checked=False, field=control: QApplication.clipboard().setText(field.text()))
+            copy.clicked.connect(lambda checked=False, field=control, button=copy: copy_with_feedback(button, field.text()))
             field_layout.addWidget(control, 1)
             field_layout.addWidget(copy)
             room_fields.addRow(title, field_row)
@@ -1452,7 +1508,7 @@ def register(api):
             copy_room.setEnabled(bool(room_name.text() and room_secret.text()))
         room_name.textChanged.connect(update_copy_room)
         room_secret.textChanged.connect(update_copy_room)
-        copy_room.clicked.connect(lambda: QApplication.clipboard().setText(
+        copy_room.clicked.connect(lambda: copy_with_feedback(copy_room,
             f"房间名：{room_name.text()}\n密钥：{room_secret.text()}"))
         layout.addWidget(copy_room)
 

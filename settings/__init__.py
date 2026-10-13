@@ -68,6 +68,7 @@ DEFAULTS = {
     "ai_strategy": "local_first",                 # AI 策略三档:local_first(本地优先,省)/ cloud_first(云端优先,强)/ hybrid(混合平衡)
     "ai_mod_translate": True,                     # Mod 描述本地 AI 翻译(英→中):True=详情显示中文+机翻标注 / False=原文
     "ai_mod_translate_source": "local",          # Mod 描述翻译来源:local(默认) / cloud(使用已配置云端模型)
+    "ui_task_notifications": True,               # 任务提示进状态球；可在系统设置恢复传统窗口
     "ai_cloud_tool_log": True,                     # 云端工具调用训练日志:仅本机 JSONL，可在设置关闭
     # ---- 云端 / 本地 两组独立设置(设置 UI 分开,ai_source 决定当前用哪边)----
     "ai_source": "cloud",          # 当前模型来源:cloud(云端)/ local(本地)

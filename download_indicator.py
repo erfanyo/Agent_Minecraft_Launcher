@@ -4,7 +4,7 @@
 - 下载中:显示并实时画进度弧
 - 点击:弹出下载详情对话框(本次下载的状态消息流 + 进度)
 """
-from PySide6.QtCore import QPointF, Qt, Signal, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import QPointF, Qt, Signal, QVariantAnimation, QEasingCurve, QTimer
 from ui_style import current_color, accent_color, danger_color, success_color
 from ui_anim import is_animations_enabled, track_animation
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
@@ -50,6 +50,11 @@ class DownloadIndicator(QWidget):
         self._relative_position = None
         self._dragging = None      # 悬浮球拖动偏移
         self._hover = 0.0
+        self._task_summary = None
+        self._spin_angle = 0
+        self._spin_timer = QTimer(self)
+        self._spin_timer.setInterval(40)
+        self._spin_timer.timeout.connect(self._spin)
         self._hover_anim = QVariantAnimation(self)
         track_animation(self._hover_anim)
         self._hover_anim.setDuration(120)
@@ -58,6 +63,19 @@ class DownloadIndicator(QWidget):
         self.setFixedSize(46, 46)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip("等待任务，点击查看状态与日志")
+
+    def _spin(self):
+        self._spin_angle = (self._spin_angle + 8) % 360
+        self.update()
+
+    def set_task_summary(self, active, waiting, failed=False):
+        self._task_summary = (active, waiting, failed)
+        if active and not waiting and is_animations_enabled():
+            self._spin_timer.start()
+        else:
+            self._spin_timer.stop()
+        self.setToolTip(f'{active} 项进行中 · {waiting} 项等待确认；点击查看任务与日志')
+        self.update()
 
     def make_floating(self):
         """变成悬浮球:无边框、置顶、可拖动的顶层窗(带半透明背景,圆球外观)。"""
@@ -141,6 +159,21 @@ class DownloadIndicator(QWidget):
         p.setPen(QPen(QColor(current_color('btn_border')), 2))
         p.drawEllipse(rect)
         # 进度弧(从 12 点方向顺时针)
+        if self._task_summary is not None:
+            active, waiting, failed = self._task_summary
+            if waiting or active:
+                color = accent_color()
+                p.setPen(QPen(QColor(color), 3))
+                if active and not waiting:
+                    p.drawArc(rect, self._spin_angle * 16, -110 * 16)
+                p.setPen(QColor(color))
+                font = p.font()
+                font.setBold(True)
+                font.setPixelSize(17)
+                p.setFont(font)
+                p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, '?' if waiting else str(active))
+                p.end()
+                return
         if not self._waiting and self._maximum > 0:
             ratio = max(0.0, min(1.0, self._value / self._maximum))
             span = max(int(360 * ratio), 2)
@@ -243,7 +276,7 @@ class DownloadDetailWidget(QWidget):
 
     def __init__(self, log_lines: list, done: int = 0, total: int = 1, parent=None,
                  live=None, cancel=None, retry=None, running=None, retryable=None,
-                 launcher_log_view=None):
+                 launcher_log_view=None, flat=False):
         super().__init__(parent)
         self._live = live
         self._running = running
@@ -266,8 +299,8 @@ class DownloadDetailWidget(QWidget):
         row.addWidget(self.progress_label)
 
         layout = QVBoxLayout(self)
-        self.tabs = QTabWidget(self)
-        task_page = QWidget(self.tabs)
+        self.tabs = None if flat else QTabWidget(self)
+        task_page = QWidget(self if flat else self.tabs)
         task_layout = QVBoxLayout(task_page)
         task_layout.addWidget(self.log_view, 1)
         task_layout.addLayout(row)
@@ -282,10 +315,11 @@ class DownloadDetailWidget(QWidget):
             actions.addWidget(button)
         actions.addStretch()
         task_layout.addLayout(actions)
-        self.tabs.addTab(task_page, "下载任务")
-        if launcher_log_view is not None:
+        if not flat:
+            self.tabs.addTab(task_page, "下载任务")
+        if launcher_log_view is not None and not flat:
             self.tabs.addTab(launcher_log_view, "启动器日志")
-        layout.addWidget(self.tabs, 1)
+        layout.addWidget(task_page if flat else self.tabs, 1)
 
         if self._live is not None:
             from PySide6.QtCore import QTimer

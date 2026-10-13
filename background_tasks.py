@@ -15,7 +15,8 @@ from task_context import cancel_event, checkpoint, TaskCancelled
 
 class BackgroundTask(QObject):
     status = Signal(str)
-    progress = Signal(int, int)
+    # Byte counters may exceed signed 32-bit Qt ints for large pack exports.
+    progress = Signal(object, object)
     succeeded = Signal(object)
     failed = Signal(str)
     finished = Signal()

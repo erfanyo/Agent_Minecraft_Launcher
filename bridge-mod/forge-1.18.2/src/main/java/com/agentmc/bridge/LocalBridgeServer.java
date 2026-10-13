@@ -89,7 +89,7 @@ public class LocalBridgeServer {
                             sink.fail("as_player specified player is offline: " + asPlayer);
                             return;
                         }
-                        source = source.withEntity(player).withSource(player);
+                        source = player.createCommandSourceStack();
                     }
                     source = source.withSource(sink);
                     // 1.18.2 没有 performPrefixedCommand(1.19 才加入),这里自己剥掉前导 "/";

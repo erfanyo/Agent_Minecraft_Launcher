@@ -1,4 +1,6 @@
 """Copy a launcher-style instance directory without changing its source."""
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 import json
 import os
 import shutil
@@ -95,12 +97,12 @@ def start_import(window, folders):
     from background_tasks import BackgroundTask
     import paths
     if getattr(window, '_folder_import_task', None) and window._folder_import_task.is_running:
-        QMessageBox.information(window, '导入实例', '已有文件夹正在导入，请稍等。')
+        task_notice(window, '导入实例', '已有文件夹正在导入，请稍等。')
         return
-    if QMessageBox.question(window, '导入已有实例',
+    if task_question(window, '导入已有实例',
             '将复制以下实例，保留原文件夹，不覆盖同名实例。请先退出源游戏。\n共享资源也可能占用较多空间。\n' + '\n'.join(folders),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
         return
     root = paths.GAME_DIR
     def work(task):
@@ -117,7 +119,7 @@ def start_import(window, folders):
     task.status.connect(window.statusBar().showMessage)
     def done(result):
         window.refresh_instances()
-        QMessageBox.information(window, '导入结果', result)
+        task_notice(window, '导入结果', result)
     task.succeeded.connect(done)
-    task.failed.connect(lambda error: QMessageBox.warning(window, '导入失败', error))
+    task.failed.connect(lambda error: task_warning(window, '导入失败', error))
     task.start()

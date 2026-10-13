@@ -25,9 +25,15 @@ minecraft {
 
 sourceSets.main.java.srcDirs = ['src/main/java']
 
-// Gradle 跑在 JDK 17 上,产出 Java 8 字节码(1.16.5 的运行时是 Java 8)
+// Gradle 本身使用 JDK 17；ForgeGradle 的编译任务按游戏版本使用 JDK 8。
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(8)
+}
+
+// Java 8 编译器不支持 --release，使用 source/target 输出 Java 8 字节码。
 tasks.withType(JavaCompile).configureEach {
-    options.release = 8
+    sourceCompatibility = '1.8'
+    targetCompatibility = '1.8'
     options.encoding = 'UTF-8'
 }
 

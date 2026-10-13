@@ -6,7 +6,7 @@ import zipfile
 
 from archive_inspection import inspect_archive
 from server_pack_builder import (apply_test_result_to_pack,
-                                 build_candidate_server_pack, supported_conversion)
+                                 archive_prepared_server, build_candidate_server_pack, supported_conversion)
 from server_pack_rules import inspect_client_instance, sha256_file
 from server_packs import import_server_pack, list_servers, read_candidate_report
 from agent_tools import (list_server_instances, list_server_mods,
@@ -38,6 +38,37 @@ def _fake_forge_runtime(root, loader, mc, version, java, status=lambda _: None):
 
 
 class ServerPackBuilderTests(unittest.TestCase):
+    def test_prepare_then_failed_test_packages_once_at_end(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp, 'instance')
+            root.joinpath('mods').mkdir(parents=True)
+            _jar(root / 'mods' / 'client.jar')
+            _jar(root / 'mods' / 'keep.jar')
+            output = Path(temp, 'server.zip')
+            game = Path(temp, 'game')
+            prepared = build_candidate_server_pack(root, output, name='Test',
+                minecraft='1.20.1', loader='forge', loader_version='47.2.0', java='unused',
+                runtime_installer=_fake_forge_runtime, prepare_only=True, game_dir=game)
+            self.assertFalse(output.exists())
+            self.assertFalse(list(Path(temp).glob('*.zip')))
+            self.assertFalse(list_servers(game)[0]['candidate'])
+            stage = Path(prepared['folder'], 'server')
+            (stage / 'mods' / 'client.jar').rename(stage / 'mods' / 'client.jar.disabled')
+            (stage / 'eula.txt').write_text('eula=true')
+            (stage / 'logs').mkdir()
+            (stage / 'logs' / 'latest.log').write_text('test log')
+            result = archive_prepared_server(prepared, ['client.jar'], outcome='unresolved')
+            self.assertEqual(Path(result).name, 'server-candidate.zip')
+            self.assertFalse(output.exists())
+            self.assertTrue(list_servers(game)[0]['candidate'])
+            with zipfile.ZipFile(result) as archive:
+                self.assertIn('server/mods/keep.jar', archive.namelist())
+                self.assertNotIn('server/mods/client.jar', archive.namelist())
+                self.assertNotIn('server/mods/client.jar.disabled', archive.namelist())
+                self.assertNotIn('server/eula.txt', archive.namelist())
+                self.assertNotIn('server/logs/latest.log', archive.namelist())
+            self.assertEqual(inspect_archive(result)['kind'], 'server')
+
     def test_rules_exclude_only_proven_client_mod_and_flag_secret(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp, 'instance')
@@ -182,9 +213,12 @@ class ServerPackBuilderTests(unittest.TestCase):
             self.assertEqual(inspect_archive(output)['kind'], 'server')
 
     def test_unsupported_loader_stops_before_build(self):
-        ok, reason = supported_conversion('fabric', '1.20.1')
+        ok, reason = supported_conversion('quilt', '1.20.1')
         self.assertFalse(ok)
         self.assertIn('Forge', reason)
+
+    def test_fabric_export_supported(self):
+        self.assertEqual(supported_conversion('fabric', '1.21.1'), (True, ''))
 
     def test_server_repair_prompt_mounts_server_tools(self):
         from assistant import mount_tools_for

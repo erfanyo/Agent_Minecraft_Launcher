@@ -9,6 +9,8 @@
 **两层压缩包**:顶层开关「是否带上启动器」——开 = 打包一个外层 zip,里面含启动器 exe +
 本整合包;关 = 只打包整合包内容(不含启动器)。
 """
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 import json
 import os
 import shutil
@@ -23,7 +25,7 @@ from PySide6.QtWidgets import (
     QProgressDialog, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
 )
 
-from ui_style import card_btn_style, hint_style, set_style, text_color, current_color
+from ui_style import card_btn_style, hint_style, set_style, text_color, current_color, progress_bar_style
 
 
 def _export_check_style() -> str:
@@ -308,40 +310,113 @@ class PackExportDialog(QDialog):
     def _do_export(self):
         out = self.out_edit.text().strip()
         if not out:
-            QMessageBox.warning(self, "导出", "请先选择导出位置。")
+            task_warning(self, "导出", "请先选择导出位置。")
             return
         files = self._selected_files()
         if not files:
-            QMessageBox.warning(self, "导出", "没有勾选任何文件。")
+            task_warning(self, "导出", "没有勾选任何文件。")
             return
         fmt = self.fmt_combo.currentData()
         if fmt == 'server':
-            if QMessageBox.question(self, '确认导出服务端内容包',
+            from task_center import task_center_for
+            hub = task_center_for(self)
+            if hub:
+                key = hashlib.sha256((str(self.inst_dir) + ':server').encode()).hexdigest()[:20]
+                self._status_task_id = hub.begin_task('导出服务端内容', task_id='export-' + key)
+            if task_question(self, '确认导出服务端内容包',
                     '会打包勾选的 Mod 和配置并生成服务端清单，不包含服务端运行库。\n'
                     '仅客户端 Mod 默认不选；适用端未知的 Mod 不会自动删除，请自行核对依赖。\n'
                     '配置和脚本可能包含密钥或私人信息，请展开文件树审核；不能保证自动脱敏。\n'
                     '导入后可用“补全运行库”安装受支持的 Forge/NeoForge，其他加载器需手工安装。继续？',
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                    QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+                if hub:
+                    hub.finish_task(self._status_task_id, 'cancelled')
                 return
         # 目标扩展名按格式对齐
         want_ext = ".mrpack" if fmt == "mrpack" else ".zip"
         if not out.lower().endswith(want_ext):
             out += want_ext
             self.out_edit.setText(out)
+        from task_center import task_center_for
+        from ui_notifications import notifications_enabled
+        hub = task_center_for(self)
+        if hub and notifications_enabled():
+            if os.path.exists(out):
+                inline_notice(self, '文件已存在', '请选择一个尚不存在的新文件名。', anchor=self.out_edit)
+                if fmt == 'server':
+                    hub.finish_task(self._status_task_id, 'cancelled')
+                return
+            from background_tasks import BackgroundTask
+            from server_staging import server_staging_directory
+            from task_context import checkpoint
+            key = hashlib.sha256((str(self.inst_dir) + ':' + str(fmt)).encode()).hexdigest()[:20]
+            task_id = hub.begin_task('导出整合包 · ' + self.inst_id, task_id='export-' + key)
+            self._status_task_id = task_id
+            self._export_include_launcher = self.include_launcher.isChecked()
+            self.setEnabled(False)
+            class Progress:
+                def __init__(self, task):
+                    self.task = task
+                def setValue(self, value):
+                    self.task.report_progress(value, len(files))
+                def setLabelText(self, text):
+                    self.task.report_status(text)
+            def work(task):
+                if fmt == 'server':
+                    from server_export import export_server_template
+                    return export_server_template(self.inst_dir, out, files, self.base, self.loader, self.loader_version)
+                task.report_status('正在匹配来源并准备打包…' if fmt == 'mrpack' else '正在打包…')
+                with server_staging_directory(prefix='.amcl-modpack-export-', dir=os.path.dirname(os.path.abspath(out)),
+                                              status=task.report_status) as temporary:
+                    staged = os.path.join(temporary, 'pack.zip')
+                    writer = self._write_mrpack if fmt == 'mrpack' else self._write_cfzip if fmt == 'curseforge' else self._write_flat_zip
+                    writer(staged, files, Progress(task))
+                    checkpoint()
+                    task.report_status('正在保存压缩包…')
+                    total = os.path.getsize(staged)
+                    with open(staged, 'rb') as src, open(out, 'xb') as dst:
+                        try:
+                            done = 0
+                            while chunk := src.read(1024 * 1024):
+                                checkpoint()
+                                dst.write(chunk)
+                                done += len(chunk)
+                                task.report_progress(done, total)
+                        except BaseException:
+                            dst.close()
+                            os.unlink(out)
+                            raise
+                return out
+            task = BackgroundTask(work, hub)
+            self._export_task = task
+            hub.tasks[task_id].cancel = task.cancel
+            hub.attach_background(task, task_id, finish=False)
+            task.succeeded.connect(lambda path: hub.finish_task(task_id, message=f'导出完成：{path}'))
+            def enable_controls():
+                try:
+                    self.setEnabled(True)
+                except RuntimeError:
+                    pass
+            task.finished.connect(enable_controls)
+            task.start()
+            return
         if fmt == 'server':
             from background_tasks import BackgroundTask
             from server_export import export_server_template
             self.setEnabled(False)
             self._server_task = BackgroundTask(lambda _: export_server_template(
                 self.inst_dir, out, files, self.base, self.loader, self.loader_version), self)
-            self._server_task.succeeded.connect(lambda path: QMessageBox.information(
+            self._server_task.succeeded.connect(lambda path: task_notice(
                 self, '服务端内容包导出完成', f'已导出到：\n{path}\n导入后还需补全服务端运行库。'))
-            self._server_task.failed.connect(lambda error: QMessageBox.warning(self, '导出失败', error))
+            self._server_task.failed.connect(lambda error: task_warning(self, '导出失败', error))
             self._server_task.finished.connect(lambda: self.setEnabled(True))
             self._server_task.start()
             return
         progress = QProgressDialog("正在打包...", "", 0, len(files), self)
+        set_style(progress, lambda:
+            f"QProgressDialog {{ background: {current_color('bg0')}; color: {text_color()}; }}"
+            f"QLabel {{ color: {text_color()}; background: transparent; }}" + progress_bar_style())
         progress.setWindowTitle("导出整合包")
         progress.setMinimumDuration(0)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -354,10 +429,10 @@ class PackExportDialog(QDialog):
                 self._write_flat_zip(out, files, progress)
         except Exception as e:
             progress.close()
-            QMessageBox.warning(self, "导出失败", f"{type(e).__name__}: {e}")
+            task_warning(self, "导出失败", f"{type(e).__name__}: {e}")
             return
         progress.close()
-        QMessageBox.information(self, "导出完成", f"已导出到:\n{out}\n(共 {len(files)} 个文件)")
+        task_notice(self, "导出完成", f"已导出到:\n{out}\n(共 {len(files)} 个文件)")
 
     def _write_flat_zip(self, out, files, progress):
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -367,7 +442,7 @@ class PackExportDialog(QDialog):
                 if os.path.isfile(disk):
                     zf.write(disk, "instance/" + rel.replace(os.sep, "/"))
                 progress.setValue(idx + 1)
-            if self.include_launcher.isChecked():
+            if self._export_include_launcher if hasattr(self, '_export_include_launcher') else self.include_launcher.isChecked():
                 exe = self._find_launcher_exe()
                 if exe:
                     zf.write(exe, "AgentMinecraftLauncher.exe")
@@ -400,7 +475,7 @@ class PackExportDialog(QDialog):
                 if os.path.isfile(disk):
                     zf.write(disk, "overrides/" + rel.replace(os.sep, "/"))
                 progress.setValue(idx + 1)
-            if self.include_launcher.isChecked():
+            if self._export_include_launcher if hasattr(self, '_export_include_launcher') else self.include_launcher.isChecked():
                 exe = self._find_launcher_exe()
                 if exe:
                     zf.write(exe, "AgentMinecraftLauncher.exe")
@@ -460,7 +535,7 @@ class PackExportDialog(QDialog):
                 if os.path.isfile(disk):
                     zf.write(disk, "overrides/" + rel_posix)
                 progress.setValue(idx + 1)
-            if self.include_launcher.isChecked():
+            if self._export_include_launcher if hasattr(self, '_export_include_launcher') else self.include_launcher.isChecked():
                 exe = self._find_launcher_exe()
                 if exe:
                     zf.write(exe, "AgentMinecraftLauncher.exe")

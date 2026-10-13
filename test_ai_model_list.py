@@ -7,7 +7,7 @@ class ModelListTests(unittest.TestCase):
     def test_models_and_auth(self):
         response = Mock(status_code=200)
         response.json.return_value = {'data': [{'id': 'glm-4.7-flash'}, {'id': 'glm-4.7-flash'}, {'id': 'another'}]}
-        with patch('ai_model_list.requests.get', return_value=response) as get:
+        with patch('model_registry.requests.get', return_value=response) as get:
             self.assertEqual(fetch_models('https://example.com/v4/', 'fake'), ['another', 'glm-4.7-flash'])
         self.assertEqual(get.call_args.args[0], 'https://example.com/v4/models')
         self.assertFalse(get.call_args.kwargs['allow_redirects'])
@@ -15,7 +15,7 @@ class ModelListTests(unittest.TestCase):
 
     def test_unsupported_and_errors(self):
         for status in (401, 403, 404, 405, 429, 302, 500):
-            with patch('ai_model_list.requests.get', return_value=Mock(status_code=status)):
+            with patch('model_registry.requests.get', return_value=Mock(status_code=status)):
                 with self.assertRaises(ValueError):
                     fetch_models('https://example.com/v1')
 
@@ -26,6 +26,6 @@ class ModelListTests(unittest.TestCase):
     def test_empty_list(self):
         response = Mock(status_code=200)
         response.json.return_value = {'data': []}
-        with patch('ai_model_list.requests.get', return_value=response):
+        with patch('model_registry.requests.get', return_value=response):
             with self.assertRaises(ValueError):
                 fetch_models('https://example.com/v1')

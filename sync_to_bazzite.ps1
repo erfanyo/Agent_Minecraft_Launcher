@@ -34,14 +34,14 @@ if ($Files.Count -gt 0) {
     Push-Location $LOCAL
     $gitFiles = git diff --name-only HEAD 2>$null
     # Do not upload unrelated untracked workspaces or credentials.
-    $gitUntracked = @()
+    $gitUntracked = git ls-files --others --exclude-standard 2>$null
     Pop-Location
     $allGit = @()
     if ($gitFiles) { $allGit += $gitFiles }
     if ($gitUntracked) { $allGit += $gitUntracked }
     # Deduplicate and filter
     $changed = $allGit | Sort-Object -Unique | Where-Object {
-        $_ -match '\.(py|json|md|txt|spec)$' -and
+        $_ -match '\.(py|json|md|txt|spec|ini|toml|ps1|sh|java|gradle|kts)$' -and
         $_ -notmatch '^\.' -and
         $_ -notmatch '^dist' -and
         $_ -notmatch '^build' -and

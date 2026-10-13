@@ -89,6 +89,8 @@ class InstanceTests(unittest.TestCase):
         window.selected_version = {'id': 'test'}
         window.settings = {}
         window.game_process = None
+        window._running_instances = set()
+        window._update_running_label = lambda: None
         window._launch_task = None
         window.download_tasks = SimpleNamespace(is_running=False)
         window.launch_btn = SimpleNamespace(setEnabled=lambda value: None)
@@ -109,7 +111,7 @@ class InstanceTests(unittest.TestCase):
         timer.start(10)
         with patch('main.GameLaunchService') as service:
             service.return_value.prepare.side_effect = prepare
-            MainWindow.launch_selected(window)
+            MainWindow.launch_selected(window, _processes_checked=True)
             deadline = time.monotonic() + 2
             while not delivered and time.monotonic() < deadline:
                 app.processEvents()

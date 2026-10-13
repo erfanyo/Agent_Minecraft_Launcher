@@ -15,6 +15,8 @@
 - 「游戏版本 / 加载器 / 版本」三个组合框由项目数据填充,版本真正驱动下载。
 """
 from __future__ import annotations
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 import os
 import time
 import urllib.parse
@@ -34,6 +36,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QListView,
     QMenu,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSplitter,
@@ -393,7 +396,7 @@ class ResourceBrowser(QWidget):
         self._inst_cards = []          # [(inst, card)]
         self._none_card = None
         self.custom_label = QLabel("")
-        self.custom_label.setStyleSheet(hint_style())
+        set_style(self.custom_label, hint_style)
         self.custom_label.setWordWrap(True)
         # 实例可能很多:卡片区放进可滚动容器,展开时也不把筛选/搜索挤出界面
         self.cards_scroll = QScrollArea()
@@ -438,9 +441,9 @@ class ResourceBrowser(QWidget):
         self.icon_label = None   # 详情面板顶部不再放大图;Mod 图标改在左侧列表卡片显示
         self.title_label = QLabel("")
         self.title_label.setWordWrap(True)
-        self.title_label.setStyleSheet(f"font-weight: bold; font-size: 15px; color: {text_color()};")
+        set_style(self.title_label, lambda: f"font-weight: bold; font-size: 15px; color: {text_color()};")
         self.meta_label = QLabel("")
-        self.meta_label.setStyleSheet(hint_style())
+        set_style(self.meta_label, hint_style)
         self.meta_label.setWordWrap(True)
         self.compat_range_label = QLabel("")
         self.compat_range_label.setWordWrap(True)
@@ -448,14 +451,32 @@ class ResourceBrowser(QWidget):
         set_style(self.compat_range_label, lambda: f"color: {muted_color()}; font-size: 12px;")
         self.compat_range_label.setVisible(False)
         self.desc_label = QLabel("")
-        self.desc_label.setStyleSheet(hint_style())
+        set_style(self.desc_label, hint_style)
         self.desc_label.setWordWrap(True)
+        self.desc_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.desc_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.desc_original_heading = QLabel('原文')
+        self.desc_translation_heading = QLabel('译文')
+        self.desc_translation_label = QLabel('')
+        self.desc_translation_label.setWordWrap(True)
+        self.desc_translation_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.desc_translation_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        set_style(self.desc_translation_label, hint_style)
+        for heading in (self.desc_original_heading, self.desc_translation_heading):
+            set_style(heading, lambda: f'color:{text_color()}; font-weight:bold; font-size:12px;')
+            heading.hide()
+        self.desc_translation_label.hide()
         self.desc_note_label = QLabel("")
         self.desc_note_label.setWordWrap(True)
-        self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+        set_style(self.desc_note_label, lambda: f"color: {muted_color()}; font-size: 11px;")
         self.desc_note_label.setVisible(False)
+        self.desc_translate_btn = QPushButton("生成翻译")
+        set_style(self.desc_translate_btn, card_btn_style)
+        self.desc_translate_btn.setVisible(False)
+        self.desc_translate_btn.clicked.connect(
+            lambda: self._start_desc_translation(self._current or {}, manual=True))
         self.compat_box = QGroupBox("兼容与依赖")
-        self.compat_box.setStyleSheet(
+        set_style(self.compat_box, lambda:
             f"QGroupBox {{ color: {text_color()}; border: 1px solid {current_color('panel_border')};"
             " border-radius: 7px; margin-top: 6px; padding: 7px; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }")
@@ -464,15 +485,15 @@ class ResourceBrowser(QWidget):
         compat_layout.setSpacing(4)
         self.compat_summary = QLabel("")
         self.compat_summary.setWordWrap(True)
-        self.compat_summary.setStyleSheet(f"color: {muted_color()}; font-size: 12px;")
+        set_style(self.compat_summary, lambda: f"color: {muted_color()}; font-size: 12px;")
         self.compat_detail = QLabel("")
         self.compat_detail.setWordWrap(True)
-        self.compat_detail.setStyleSheet(f"color: {muted_color()}; font-size: 12px;")
+        set_style(self.compat_detail, lambda: f"color: {muted_color()}; font-size: 12px;")
         self.compat_detail.setVisible(False)
         self.compat_toggle = QPushButton("查看依赖详情")
         self.compat_toggle.setFlat(True)
         self.compat_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.compat_toggle.setStyleSheet(f"color: {accent_color()}; text-align: left; padding: 2px;")
+        set_style(self.compat_toggle, lambda: f"color: {accent_color()}; text-align: left; padding: 2px;")
         self.compat_toggle.clicked.connect(self._toggle_compat_detail)
         compat_layout.addWidget(self.compat_summary)
         compat_layout.addWidget(self.compat_detail)
@@ -483,7 +504,7 @@ class ResourceBrowser(QWidget):
         self.mcmod_link.setTextFormat(Qt.TextFormat.RichText)
         self.mcmod_link.setOpenExternalLinks(False)   # 点击走 QDesktopServices,统一 URL 构造
         self.mcmod_link.linkActivated.connect(self._open_mcmod_link)
-        self.mcmod_link.setStyleSheet(f"color: {accent_color()}; font-size: 12px;")
+        set_style(self.mcmod_link, lambda: f"color: {accent_color()}; font-size: 12px;")
         self.mcmod_link.setVisible(False)
         # ---- 全局版本/加载器(方案一:搜索筛选 + 下载默认合一,底部卡显示) ----
         # 游戏版本用版本树(按大版本分组,点大版本自动选推荐版),不再是可编辑下拉。
@@ -531,11 +552,15 @@ class ResourceBrowser(QWidget):
         p.addWidget(self.meta_label)
         p.addWidget(self.compat_range_label)
         p.addWidget(self.desc_label)
+        p.insertWidget(p.indexOf(self.desc_label), self.desc_original_heading)
+        p.addWidget(self.desc_translation_heading)
+        p.addWidget(self.desc_translation_label)
         p.addWidget(self.desc_note_label)
+        p.addWidget(self.desc_translate_btn, 0, Qt.AlignLeft)
         p.addWidget(self.compat_box)
         p.addWidget(self.mcmod_link)
         self.empty_label = QLabel(t("SELECT_A_PROJECT_ON_THE_LEFT"))
-        self.empty_label.setStyleSheet(hint_style())
+        set_style(self.empty_label, hint_style)
         self.empty_label.setWordWrap(True)
         p.addWidget(self.empty_label)
         p.addStretch()
@@ -561,7 +586,7 @@ class ResourceBrowser(QWidget):
             # 整合包=一键全集:下载后作为「新实例」导入,无需选目标实例/目录
             self.modpack_hint = QLabel(
                 t("MODPACK_MODS_CONFIG_OPTIONAL_SAVES_IN_ONE_PICK_A_VERSION_AND_DOWNLOAD_IT_AUTO_DOWNLOADS_THE_MRPACK_AND_IMPORTS_AS_A_NEW_INSTANCE"))
-            self.modpack_hint.setStyleSheet(hint_style())
+            set_style(self.modpack_hint, hint_style)
             self.modpack_hint.setWordWrap(True)
             layout.addWidget(self.modpack_hint)
             # 目标实例卡放到底部;整合包不需要,进 _build_bottom_bar 里隐藏
@@ -624,7 +649,7 @@ class ResourceBrowser(QWidget):
             self.loader_combo.hide()
         else:
             filter_hint = QLabel(t("可用的筛选条件只作用于下方资源版本", "Available filters only affect the files below"))
-            filter_hint.setStyleSheet(hint_style())
+            set_style(filter_hint, hint_style)
             filter_hint.setWordWrap(True)
             mp.addWidget(filter_hint)
             mp.addWidget(QLabel(t("GAME_VERSION_CLICK_A_MAJOR_TO_AUTO_PICK")))
@@ -711,7 +736,7 @@ class ResourceBrowser(QWidget):
         db.addLayout(buttons)
         self.download_warning = QLabel()
         self.download_warning.setWordWrap(True)
-        self.download_warning.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
+        set_style(self.download_warning, lambda: f"color: {warning_color()}; font-size: 11px;")
         self.download_warning.hide()
         db.addWidget(self.download_warning)
         self.dl_card = dl_card
@@ -1417,8 +1442,8 @@ class ResourceBrowser(QWidget):
         saved_versions = favs.versions(data, favs.DEFAULT_FOLDER, slug) if slug else []
         self.fav_version_action.setText("✓ 已收藏该版本" if version and version in saved_versions else "＋ 收藏当前版本")
 
-    def _start_desc_translation(self, h):
-        """后台线程翻译当前 Mod 描述(英→中),不卡 UI。
+    def _start_desc_translation(self, h, *, manual=False):
+        """自动显示缓存；用户点击后才后台生成当前资源的翻译。
 
         遵守 mod_translate 规则:
         - `ai_mod_translate` 关 → 直接显示原文(无翻译调用);
@@ -1426,6 +1451,16 @@ class ResourceBrowser(QWidget):
         - 命中缓存 → 秒回(二次打开不再触发推理);
         - 引擎不可用 → 优雅显示原文 + 失败标注,不报错。
         结果只在当前选中的项目没变时才应用(避免快速切换时旧结果覆盖新选择)。"""
+        self._desc_translation_generation = getattr(self, "_desc_translation_generation", 0) + 1
+        self.desc_label.setText(h.get('description') or '')
+        self.desc_original_heading.hide()
+        self.desc_translation_heading.hide()
+        self.desc_translation_label.clear()
+        self.desc_translation_label.hide()
+        generation = self._desc_translation_generation
+        self.desc_translate_btn.setVisible(False)
+        self.desc_translate_btn.setEnabled(True)
+        self.desc_translate_btn.setText("生成翻译")
         desc = (h.get("description") or "").strip()
         requested_slug = h.get("slug", "")
         if not desc:
@@ -1449,22 +1484,29 @@ class ResourceBrowser(QWidget):
             self.desc_note_label.setVisible(False)
             return
 
-        # 翻译中提示(占位文案,完成后替换)
-        self.desc_note_label.setText(t("TRANSLATING"))
-        self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
-        self.desc_note_label.setVisible(True)
-
         # 先查描述缓存(按 slug 键,跨版本复用;命中直接显示,不再推理)
         import image_cache
-        cached = image_cache.get_cached_desc(requested_slug)
+        self._desc_translation_cache_key = mod_translate.description_cache_key(requested_slug, desc)
+        cached = image_cache.get_cached_desc(self._desc_translation_cache_key)
         if cached:
             cur0 = getattr(self, "_current", None)
             if cur0 and cur0.get("slug") == requested_slug:
-                self.desc_label.setText(cached)
+                self._show_description_translation(cached)
                 self.desc_note_label.setText(t("CACHED_TRANSLATION"))
-                self.desc_note_label.setStyleSheet(f"color: {muted_color()}; font-size: 11px;")
+                set_style(self.desc_note_label, lambda: f"color: {muted_color()}; font-size: 11px;")
                 self.desc_note_label.setVisible(True)
             return
+
+        # 未缓存的描述由用户主动生成，避免浏览资源时自动加载本地模型。
+        self.desc_translate_btn.setVisible(True)
+        if not manual:
+            self.desc_note_label.setVisible(False)
+            return
+        self.desc_translate_btn.setEnabled(False)
+        self.desc_translate_btn.setText("正在生成…")
+        self.desc_note_label.setText("正在准备模型并生成翻译，首次加载可能需要一些时间。")
+        set_style(self.desc_note_label, lambda: f"color: {muted_color()}; font-size: 11px;")
+        self.desc_note_label.setVisible(True)
 
         def fetch():
             try:
@@ -1476,13 +1518,31 @@ class ResourceBrowser(QWidget):
         def on_done(result):
             # 结果只在当前选中的项目仍等于本次请求时应用
             cur = getattr(self, "_current", None)
-            if not cur or cur.get("slug") != requested_slug:
+            if (not cur or cur.get("slug") != requested_slug
+                    or generation != self._desc_translation_generation):
                 return
+            self.desc_translate_btn.setEnabled(True)
+            self.desc_translate_btn.setText("重试翻译")
             self._apply_translation(result)
+            if isinstance(result, dict) and (result.get("translated") or result.get("source") in ("already_cn", "original")):
+                self.desc_translate_btn.setVisible(False)
+            if not result:
+                self.desc_note_label.setText("翻译未完成，可以点击重试。")
+                self.desc_note_label.setVisible(True)
 
         # cache=False:让 mod_translate 每次重新读 enabled()/缓存,避免把"关闭时"的
         # 结果长期缓存到 _async_cache(否则用户之后打开开关也不生效)。
         self._async(("tr", requested_slug), fetch, on_done, cache=False)
+
+    def _show_description_translation(self, text):
+        original = (getattr(self, '_current', None) or {}).get('description') or ''
+        self.desc_label.setText(original)
+        if not text or text.strip() == original.strip():
+            return
+        self.desc_translation_label.setText(text)
+        self.desc_original_heading.show()
+        self.desc_translation_heading.show()
+        self.desc_translation_label.show()
 
     def _apply_translation(self, result):
         """把翻译结果应用到详情面板:中文 + 机翻标注 / 失败/关闭 → 原文。"""
@@ -1495,10 +1555,10 @@ class ResourceBrowser(QWidget):
         cur = getattr(self, "_current", None)
         slug = (cur or {}).get("slug", "") if cur else ""
         # 成功拿到文本(机翻或译文)→ 写回描述缓存(按 slug 键,跨版本复用)
-        if source in ("translated", "already_cn", "original") and text and slug:
+        if result.get("translated") and text and slug:
             try:
                 import image_cache
-                image_cache.set_cached_desc(slug, text)
+                image_cache.set_cached_desc(getattr(self, '_desc_translation_cache_key', slug), text)
             except Exception:
                 pass
         if source == "disabled":
@@ -1511,19 +1571,20 @@ class ResourceBrowser(QWidget):
             return
         if source == "failed":
             self.desc_label.setText(text)
-            reason = str(result.get("error") or "").strip()
+            from mod_translate import translation_error_message
+            reason = translation_error_message(result.get("error"))
             self.desc_note_label.setText(
                 t("TRANSLATION_FAILED_SHOWING_ORIGINAL") + (f"\n原因：{reason}" if reason else ""))
-            self.desc_note_label.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
+            set_style(self.desc_note_label, lambda: f"color: {warning_color()}; font-size: 11px;")
             self.desc_note_label.setVisible(True)
             return
         if result.get("machine"):
-            self.desc_label.setText(text)
+            self._show_description_translation(text)
             note = t("MACHINE_TRANSLATION_SEE_ORIGINAL_FOR_ACCURACY")
             if result.get("confidence") == "low":
                 note = t("MACHINE_TRANSLATION_LOW_CONFIDENCE_SEE_ORIGINAL")
             self.desc_note_label.setText(note)
-            self.desc_note_label.setStyleSheet(f"color: {warning_color()}; font-size: 11px;")
+            set_style(self.desc_note_label, lambda: f"color: {warning_color()}; font-size: 11px;")
             self.desc_note_label.setVisible(True)
             return
         # 兜底:显示原文
@@ -2141,7 +2202,6 @@ class ResourceCenter(QWidget):
         layout.addWidget(self.home_latest)
         layout.addWidget(self.home_hint)
         layout.addSpacing(14)
-        layout.addWidget(QLabel(t("BROWSE_RESOURCES")))
         cards = FlowLayout(hspacing=12, vspacing=12)
         from theme_icon import theme_icon
         from PySide6.QtCore import QSize
@@ -2189,7 +2249,7 @@ class ResourceCenter(QWidget):
         brow.addWidget(add_btn); brow.addWidget(del_btn)
         ll.addLayout(brow)
         hint = QLabel("把卡片拖到左侧文件夹 → 复制到该夹")
-        hint.setWordWrap(True); hint.setStyleSheet(hint_style())
+        hint.setWordWrap(True); set_style(hint, hint_style)
         ll.addWidget(hint)
         outer.addWidget(left)
 
@@ -2329,9 +2389,9 @@ class ResourceCenter(QWidget):
             return
         folder = cur.text()
         if folder == favs.DEFAULT_FOLDER:
-            QMessageBox.information(self, "删除收藏夹", "默认收藏夹不能删除")
+            inline_notice(self, "删除收藏夹", "默认收藏夹不能删除")
             return
-        if QMessageBox.question(self, "删除收藏夹", f"删除收藏夹「{folder}」?") == QMessageBox.StandardButton.Yes:
+        if action_question(self, "删除收藏夹", f"删除收藏夹「{folder}」?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes:
             self._fav_data.pop(folder, None)
             favs.save(self._fav_data)
             self._refresh_fav_folders()
@@ -2347,20 +2407,31 @@ class ResourceCenter(QWidget):
         outer.setSpacing(8)
 
         title = QLabel("🧩 启动器插件商店")
-        title.setStyleSheet(f"font-weight: bold; font-size: 16px; color: {text_color()};")
+        set_style(title, lambda: f"font-weight: bold; font-size: 16px; color: {text_color()};")
         outer.addWidget(title)
-        note = QLabel("插件仓库 = 一个 plugins.json 清单(列出 名/版本/下载地址)。\n"
-                      "手动添加你的「官方」仓库(或任何第三方仓库)URL,即可浏览并一键安装;"
-                      "装的插件可到 设置→插件 启停。")
-        note.setWordWrap(True); note.setStyleSheet(hint_style())
+        note = QLabel('浏览官方插件，或粘贴分享码查找插件。安装后到设置 → 插件启用。')
+        note.setWordWrap(True); set_style(note, hint_style)
         outer.addWidget(note)
+        share_row = QHBoxLayout()
+        self._plugin_share_edit = QLineEdit()
+        self._plugin_share_edit.setPlaceholderText('粘贴 AMCL 插件分享码')
+        share_row.addWidget(self._plugin_share_edit, 1)
+        share_import = QPushButton('解析分享码')
+        set_style(share_import, card_btn_style)
+        share_import.clicked.connect(self._import_plugin_share)
+        share_row.addWidget(share_import)
+        outer.addLayout(share_row)
+        advanced = QWidget()
+        registry_layout = QVBoxLayout(advanced)
+        registry_layout.setContentsMargins(0, 0, 0, 0)
+        advanced.hide()
 
         # ---- 仓库源管理 ----
         reg_title = QLabel("仓库源:")
-        reg_title.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
-        outer.addWidget(reg_title)
+        set_style(reg_title, lambda: f"font-weight: bold; color: {muted_color()};")
+        registry_layout.addWidget(reg_title)
         self._registry_list = QListWidget(); self._registry_list.setMaximumHeight(80)
-        outer.addWidget(self._registry_list)
+        registry_layout.addWidget(self._registry_list)
         reg_row = QHBoxLayout()
         self._registry_edit = QLineEdit()
         self._registry_edit.setPlaceholderText("仓库 plugins.json 地址,如 https://raw.githubusercontent.com/…/plugins.json")
@@ -2370,11 +2441,12 @@ class ResourceCenter(QWidget):
         del_reg = QPushButton("删除选中"); set_style(del_reg, card_btn_style); del_reg.setMinimumHeight(30)
         del_reg.clicked.connect(self._del_registry)
         reg_row.addWidget(add_reg); reg_row.addWidget(del_reg)
-        outer.addLayout(reg_row)
+        registry_layout.addLayout(reg_row)
+        outer.addWidget(advanced)
 
         # ---- 仓库里的插件(汇总) ----
         remote_title = QLabel("仓库里的插件:")
-        remote_title.setStyleSheet(f"font-weight: bold; color: {muted_color()};")
+        set_style(remote_title, lambda: f"font-weight: bold; color: {muted_color()};")
         outer.addWidget(remote_title)
         self._plugin_store_list = QListWidget()
         self._plugin_store_list.setWordWrap(True)
@@ -2385,15 +2457,81 @@ class ResourceCenter(QWidget):
         refresh_btn.clicked.connect(self._refresh_store)
         install_btn = QPushButton("安装选中插件"); set_style(install_btn, card_btn_style); install_btn.setMinimumHeight(32)
         install_btn.clicked.connect(self._install_store_plugin)
+        self._plugin_install_button = install_btn
         btn_row.addWidget(refresh_btn); btn_row.addWidget(install_btn)
+        copy_share = QPushButton('复制分享码')
+        self._plugin_copy_share_button = copy_share
+        set_style(copy_share, card_btn_style)
+        copy_share.clicked.connect(self._copy_plugin_share)
+        btn_row.addWidget(copy_share)
         outer.addLayout(btn_row)
 
         open_btn = QPushButton(t("OPEN_PLUGIN_MANAGER"))
         set_style(open_btn, card_btn_style); open_btn.setMinimumHeight(34)
         open_btn.clicked.connect(self._open_plugin_settings)
         outer.addWidget(open_btn)
+        advanced_row = QHBoxLayout()
+        advanced_row.addStretch()
+        advanced_toggle = QPushButton('高级：仓库源')
+        advanced_toggle.setCheckable(True)
+        set_style(advanced_toggle, card_btn_style)
+        advanced_toggle.toggled.connect(advanced.setVisible)
+        advanced_row.addWidget(advanced_toggle)
+        outer.addLayout(advanced_row)
         self._refresh_store()
         return page
+
+    def _copy_plugin_share(self):
+        import plugin_manager
+        selected = self._plugin_store_list.currentItem()
+        entry = selected.data(Qt.ItemDataRole.UserRole) if selected else None
+        if not entry:
+            inline_notice(self, '分享插件', '请先选择一个插件。')
+            return
+        registry = entry.get('_registry_url')
+        if not registry:
+            inline_warning(self, '分享插件', '没有找到该插件的清单来源，请刷新列表。')
+            return
+        from ui_feedback import copy_with_feedback
+        copy_with_feedback(self._plugin_copy_share_button, plugin_manager.make_plugin_share_code(
+            registry, entry['name'], entry.get('category')))
+        self._plugin_share_edit.setPlaceholderText('分享码已复制')
+
+    def _import_plugin_share(self):
+        import plugin_manager
+        try:
+            locator = plugin_manager.parse_plugin_share_code(self._plugin_share_edit.text())
+        except ValueError as error:
+            task_warning(self, '插件分享码', str(error))
+            return
+        previous = getattr(self, '_plugin_share_task', None)
+        if previous is not None and previous.is_running:
+            return
+        self._plugin_share_edit.setEnabled(False)
+        task = BackgroundTask(lambda current: plugin_manager.load_registry(locator['registry']), self)
+        self._plugin_share_task = task
+
+        def loaded(rows):
+            self._plugin_share_edit.setEnabled(True)
+            entry = next((row for row in rows if row['name'] == locator['plugin']), None)
+            if entry is None:
+                task_warning(self, '插件分享码', '清单不可访问，或没有找到这个插件。')
+                return
+            entry = dict(entry, _registry_url=locator['registry'])
+            category = plugin_manager.plugin_category(entry['name'], entry.get('category') or locator['category'])
+            self._plugin_store_list.clear()
+            item = QListWidgetItem(f"{entry.get('title') or entry['name']} · {category}\n来源：{locator['registry']}\n{entry.get('description', '')}")
+            item.setData(Qt.ItemDataRole.UserRole, entry)
+            self._plugin_store_list.addItem(item)
+            self._plugin_store_list.setCurrentItem(item)
+
+        def failed(error):
+            self._plugin_share_edit.setEnabled(True)
+            task_warning(self, '插件分享码', str(error))
+
+        task.succeeded.connect(loaded)
+        task.failed.connect(failed)
+        task.start()
 
     def _registries(self) -> list:
         """读当前插件仓库源设置。"""
@@ -2445,7 +2583,8 @@ class ResourceCenter(QWidget):
             ver = e.get("version") or ""
             desc = (e.get("description") or "")[:60]
             repo = (e.get("repo") or "").split("/")[-1]
-            item = QListWidgetItem(f"{title}  <small>({ver})</small>   [{repo}]\n{desc}")
+            category = plugin_manager.plugin_category(name, e.get('category'))
+            item = QListWidgetItem(f"{title} ({ver}) · {category}   [{repo}]\n{desc}")
             item.setData(Qt.ItemDataRole.UserRole, e)
             self._plugin_store_list.addItem(item)
         if not merged:
@@ -2456,23 +2595,57 @@ class ResourceCenter(QWidget):
         import plugin_manager
         cur = self._plugin_store_list.currentItem()
         if cur is None:
+            task_notice(self, '安装插件', '请先选择一个插件。')
             return
         entry = cur.data(Qt.ItemDataRole.UserRole) or {}
-        r = plugin_manager.install_remote_plugin(entry)
-        if r.get("ok"):
-            QMessageBox.information(self, "安装插件",
-                                    f"✅ 已安装插件 {r.get('name', '')}:{r.get('path', '')}\n【重启启动器】后生效,可到 设置→插件 启用。")
-        else:
-            QMessageBox.warning(self, "安装插件", f"❌ 安装失败:{r.get('error', '未知')}")
+        if not entry.get('name'):
+            task_notice(self, '安装插件', '当前条目不是可安装的插件，请刷新列表后选择插件。')
+            return
+        current_task = getattr(self, '_plugin_install_task', None)
+        if current_task is not None and current_task.is_running:
+            return
+        from background_tasks import BackgroundTask
+        button = self._plugin_install_button
+        button.setEnabled(False)
+        button.setText('正在下载安装…')
+        owner = self.window()
+        while owner is not None and not hasattr(owner, 'report_download_done'):
+            owner = owner.parentWidget()
+        title = '插件：' + str(entry.get('title') or entry['name'])
+        if owner is not None:
+            owner.report_download_progress(title, f"正在下载插件 {entry.get('title') or entry['name']}…", 0, 1)
+        task = BackgroundTask(lambda current: plugin_manager.install_remote_plugin(dict(entry)), self)
+        self._plugin_install_task = task
+
+        def finish(result):
+            button.setEnabled(True)
+            button.setText('安装选中插件')
+            if result.get('ok'):
+                message = f"已安装插件 {result.get('name', '')}：{result.get('path', '')}\n重启启动器后生效，可到设置 → 插件启用。"
+            else:
+                message = f"插件安装失败：{result.get('error', '未知')}"
+            if owner is not None:
+                owner.report_download_done(title, bool(result.get('ok')), message)
+                owner.statusBar().showMessage('插件安装完成，重启后生效' if result.get('ok') else '插件安装失败，点击下载指示器查看日志', 8000)
+            elif result.get('ok'):
+                task_notice(self, '安装插件', message)
+            else:
+                task_warning(self, '安装插件', message)
+
+        task.succeeded.connect(finish)
+        task.failed.connect(lambda error: finish({'ok': False, 'error': error}))
+        task.start()
 
     def _open_plugin_settings(self):
         """打开 设置(切到插件页)。"""
-        try:
-            win = self.window()
-            if win is not None and hasattr(win, "settings_center"):
-                win.settings_center.shell.switch_by_label(t("PLUGINS"))
-        except Exception:
-            pass
+        win = self.window()
+        while win is not None and not callable(getattr(win, 'open_settings', None)):
+            win = win.parentWidget()
+        if win is not None:
+            win.open_settings()
+            win.settings_center.shell.switch_by_label(t('PLUGINS'))
+        else:
+            inline_warning(self, '插件管理', '无法打开设置，请从标题栏进入设置 → 插件。')
 
     def set_ui_mode(self, mode: str):
         """界面模式(对外叫「全面 / 摘要」,内部 beginner/expert 兼容旧配置):

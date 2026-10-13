@@ -53,6 +53,28 @@ class ServerRepairLoopTests(unittest.TestCase):
         self.assertIsNone(panel._repair)
         panel.close()
 
+    def test_old_failed_session_is_not_diagnosed_while_next_launch_prepares(self):
+        panel = ServerCenter()
+        panel._repair = {'id': 'server-test', 'session': 'old',
+                         'processing': True, 'attempted': set(), 'disabled': [],
+                         'auto_exclude': True, 'ready': False, 'startup_failed': True}
+        server = {'id': 'server-test'}
+        diagnosis = {'suggestions': [{'file': 'client.jar', 'name': 'Client',
+            'level': 'high', 'reason': '日志显示它在服务端引用了客户端类'}]}
+        with patch('agent_tools.set_server_mod_enabled', return_value='已停用 client.jar'), \
+                patch('server_center.QTimer.singleShot'), patch.object(panel, '_run') as run:
+            panel._offer_repair(server, diagnosis)
+            panel._poll_repair(server, {'sessionId': 'old', 'running': False, 'exitCode': 1})
+            run.assert_not_called()
+            self.assertIsNotNone(panel._repair)
+            self.assertTrue(panel._repair['processing'])
+        with patch.object(panel, '_attach_selected'):
+            panel._host_started(server, {'sessionId': 'new', 'pid': 123})
+        self.assertFalse(panel._repair['processing'])
+        self.assertEqual(panel._repair['session'], 'new')
+        self.assertFalse(panel._repair['startup_failed'])
+        panel.close()
+
     def test_failed_session_starts_diagnosis_once(self):
         panel = ServerCenter()
         panel._repair = {'id': 'server-test', 'session': 'one',

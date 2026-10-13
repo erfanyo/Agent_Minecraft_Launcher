@@ -16,7 +16,7 @@ val prepareSharedSources by tasks.registering(Sync::class) {
         exclude("com/agentmc/bridge/CommandBridgeSource.java")
         exclude("com/agentmc/bridge/LocalBridgeServer.java")
     }
-    from("../common-1.20.1/src/main/java") { exclude("com/agentmc/bridge/ItemExporter.java", "com/agentmc/bridge/RecipeExporter.java") }
+    from("../common-1.20.1/src/main/java") { exclude("com/agentmc/bridge/ItemExporter.java", "com/agentmc/bridge/RecipeExporter.java", "com/agentmc/bridge/CommandExecutor.java") }
     from("../forge-1.19.2/src/main/java") {
         include("com/agentmc/bridge/ItemExporter.java", "com/agentmc/bridge/RecipeExporter.java")
     }

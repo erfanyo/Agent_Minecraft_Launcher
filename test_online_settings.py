@@ -9,12 +9,12 @@ class OnlineSettingsTests(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_loaded_plugin_has_lazy_settings(self):
+    def test_loaded_plugin_is_shown_first_and_built_once(self):
         builder = Mock(side_effect=QWidget)
         with patch('plugin_manager.CENTER_PAGES', {'online': [('lan_bridge', 'settings', 'EasyTier 设置', builder)]}):
             center = OnlineCenter()
         self.assertIn('EasyTier 设置', center.shell.menu.items())
-        builder.assert_not_called()
+        builder.assert_called_once()
         center.shell.switch_by_label('EasyTier 设置')
         builder.assert_called_once()
         center.shell.switch_by_label('EasyTier 设置')

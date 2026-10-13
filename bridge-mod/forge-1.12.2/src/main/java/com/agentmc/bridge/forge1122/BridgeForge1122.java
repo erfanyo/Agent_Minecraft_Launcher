@@ -11,7 +11,7 @@ import net.minecraftforge.fml.common.event.FMLServerStartingEvent;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 
-@Mod(modid = "agentmc_bridge", name = "AgentMC Bridge", version = "@VERSION@", acceptableRemoteVersions = "*")
+@Mod(modid = "agentmc_bridge", name = "AgentMC Bridge", version = "0.2.0", acceptableRemoteVersions = "*")
 public final class BridgeForge1122 {
     public BridgeForge1122() { MinecraftForge.EVENT_BUS.register(this); }
 

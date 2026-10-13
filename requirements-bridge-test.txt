@@ -1,0 +1,2 @@
+# Only required by the real-game weather harness (NBT test-world preparation).
+nbtlib>=2.0,<3

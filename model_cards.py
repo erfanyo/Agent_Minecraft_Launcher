@@ -452,11 +452,16 @@ class ModelCardsPanel(QWidget):
         s = self._settings
         models_map = dict(s.get("ai_cloud_models") or {})
         keys = dict(s.get("ai_cloud_api_keys") or {})
+        saved = s.get('ai_model_providers') or {}
         # 内置卡片(固定一张)
         builtin = ProviderCard("builtin", "builtin", {
             "gpu": s.get("ai_local_gpu", "auto"),
         })
         self._insert_card(builtin)
+        if saved:
+            for pid, data in saved.items():
+                self._insert_card(ProviderCard('api', pid, dict(data)))
+            return
         # 当前生效的云端服务商卡
         pid = s.get("ai_cloud_provider", "deepseek")
         data = {
@@ -514,6 +519,7 @@ class ModelCardsPanel(QWidget):
             keys[c.pid] = d["api_key"]
         out["ai_cloud_models"] = models_map
         out["ai_cloud_api_keys"] = keys
+        out['ai_model_providers'] = {c.pid: c.collect() for c in api_cards}
         active = api_cards[0] if api_cards else None
         if active:
             d = active.collect()

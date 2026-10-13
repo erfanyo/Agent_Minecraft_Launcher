@@ -8,6 +8,8 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -19,6 +21,17 @@ from instance_maintenance import target, assert_stopped, _lock
 
 _runs = {}
 _compatible_replacement_cache = {}
+_repair_constraints = ContextVar('amcl_repair_constraints', default=None)
+
+
+@contextmanager
+def repair_environment_scope(constraints):
+    """Apply environment constraints only inside this AI tool invocation."""
+    token = _repair_constraints.set(constraints)
+    try:
+        yield
+    finally:
+        _repair_constraints.reset(token)
 
 
 def list_instance_snapshots(instance: str):
@@ -358,16 +371,16 @@ def inspect_instance_core(instance: str):
 
 
 def check_constraint(instance, version=None, loader=None):
-    path = os.path.join(_store(instance), 'constraint.json')
-    if os.path.isfile(path):
-        with open(path, encoding='utf-8') as file:
-            constraint = json.load(file)
+    # Legacy constraint.json files no longer restrict normal instance use.
+    constraints = _repair_constraints.get() or {}
+    constraint = constraints.get(instance)
+    if constraint is not None:
         actual = environment(instance) if version is None else {'minecraft': version, 'loader': loader or None}
         if actual != constraint:
-            raise ValueError('测试环境已锁定：' + json.dumps(constraint, ensure_ascii=False) + '；不能更换 MC 或加载器。')
+            raise ValueError('当前 AI 修复任务的环境已变化：' + json.dumps(constraint, ensure_ascii=False) + '；请结束本轮修复，按新环境重新诊断。手动操作不受此限制。')
 
 
-def snapshot_instance(instance: str, lock_environment: bool = True):
+def snapshot_instance(instance: str, lock_environment: bool = False):
     """Full isolated instance, excluding shared libraries/assets; immutable id."""
     with _lock:
         folder = _folder(instance)
@@ -382,10 +395,9 @@ def snapshot_instance(instance: str, lock_environment: bool = True):
             raise RuntimeError('复制期间实例发生变化，快照未完成，请退出其他编辑程序重试。')
         env = environment(instance)
         atomic_json(os.path.join(dest, 'manifest.json'), {'instance': instance, 'files': before, 'environment': env})
-        if lock_environment:
-            atomic_json(os.path.join(_store(instance), 'constraint.json'), env)
+        # Keep the old argument for callers, but never persist an instance lock.
         return json.dumps({'snapshot_id': token, 'directory': dest, 'files': len(before),
-                           'locked_environment': env if lock_environment else None}, ensure_ascii=False)
+                           'environment': env, 'locked_environment': None}, ensure_ascii=False)
 
 
 def restore_instance_snapshot(instance: str, snapshot_id: str):
@@ -399,6 +411,7 @@ def restore_instance_snapshot(instance: str, snapshot_id: str):
         if manifest['instance'] != instance:
             raise ValueError('快照不属于这个实例')
         env = manifest['environment']
+        previous_environment = environment(instance)
         check_constraint(instance, env['minecraft'], env['loader'])
         if _inventory(os.path.join(source, 'files')) != manifest['files']:
             raise ValueError('快照校验失败，未恢复')
@@ -411,7 +424,9 @@ def restore_instance_snapshot(instance: str, snapshot_id: str):
         except Exception:
             os.rename(rollback, folder)
             raise
-        return '已恢复测试现场；恢复前实例完整保留在：' + rollback
+        note = ('；MC/加载器环境已随快照恢复：' + json.dumps(env, ensure_ascii=False)
+                if previous_environment != env else '')
+        return '已恢复实例快照；恢复前实例完整保留在：' + rollback + note
 
 
 def _metadata_summary(metadata):

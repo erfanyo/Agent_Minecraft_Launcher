@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 public final class BridgeIO {
     private BridgeIO() { }
     public static File bridgeDir(MinecraftServer server) {
-        File dir = new File(server.getServerDirectory(), ".bridge");
+        File dir = new File(server.getDataDirectory(), ".bridge");
         dir.mkdirs();
         return dir;
     }

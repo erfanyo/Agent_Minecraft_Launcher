@@ -5,14 +5,18 @@
 
 保存:颜色/壁纸/动画与 Java 管理自动保存；其余设置由底部按钮统一应用。
 """
+from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from task_center import task_question
 import threading
 import uuid
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox, QPlainTextEdit,
     QComboBox, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox,
-    QToolButton, QVBoxLayout, QWidget,
+    QToolButton, QVBoxLayout, QWidget, QMenu,
 )
 
 from assistant import AISettingsForm
@@ -26,7 +30,7 @@ from os_platform.openpath import open_path
 from settings import update_settings
 from ui_style import (card_btn_style, muted_color, set_style,
                       COLOR_BLIND_PRESETS, check_readability, panel_style, text_color,
-                      accent_color, danger_color, success_color, current_color)
+                      accent_color, danger_color, success_color, current_color, popup_menu_style)
 from ui_switch import ToggleSwitch, setting_switch_row
 
 
@@ -129,24 +133,51 @@ class SettingsCenter(QWidget):
         if initial_tab:
             self.shell.switch_by_label(initial_tab)
 
-        save_btn = QPushButton("保存并应用其他设置")
-        save_btn.setToolTip("应用游戏目录、内存、语言、AI、镜像源和插件等设置")
-        set_style(save_btn, card_btn_style)
-        save_btn.setMinimumHeight(38)
-        save_btn.clicked.connect(self.apply)
-        self._save_btn = save_btn
-
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
         lay.addWidget(self.shell, 1)
         bottom = QHBoxLayout()
-        self._autosave_hint = QLabel("主题、颜色、壁纸和动画会自动保存")
+        self._autosave_hint = QLabel("设置自动保存；插件启停需重启后生效")
         self._autosave_hint.setStyleSheet(f"color:{muted_color()};")
         bottom.addWidget(self._autosave_hint)
         bottom.addStretch()
-        bottom.addWidget(save_btn)
         lay.addLayout(bottom)
+        self._settings_save_timer = QTimer(self)
+        self._settings_save_timer.setSingleShot(True)
+        self._settings_save_timer.setInterval(650)
+        self._settings_save_timer.timeout.connect(lambda: self.apply(automatic=True))
+        visual_controls = {self.theme_combo, self.wallpaper_source_combo,
+                           self.wallpaper_preset_combo, self.wallpaper_blur_slider,
+                           self.wallpaper_mask_slider, self.animations_check}
+        # Bind after page construction, so defaults do not overwrite saved settings.
+        for control in self.findChildren(QWidget):
+            if control in visual_controls:
+                continue
+            if isinstance(control, QLineEdit):
+                if control is self.game_dir_edit:
+                    control.editingFinished.connect(self._queue_settings_save)
+                else:
+                    control.textEdited.connect(self._queue_settings_save)
+                control.editingFinished.connect(self.flush_autosave)
+            elif isinstance(control, QComboBox):
+                control.currentIndexChanged.connect(self._queue_settings_save)
+            elif isinstance(control, (QSpinBox, QSlider)):
+                control.valueChanged.connect(self._queue_settings_save)
+            elif isinstance(control, (ToggleSwitch, QCheckBox)):
+                control.toggled.connect(self._queue_settings_save)
+            elif isinstance(control, QPlainTextEdit):
+                control.textChanged.connect(self._queue_settings_save)
+        if hasattr(self, 'model_cards'):
+            self.model_cards.changed.connect(self._queue_settings_save)
+
+    def _queue_settings_save(self, *_):
+        self._settings_save_timer.start()
+
+    def flush_autosave(self):
+        if self._settings_save_timer.isActive():
+            self._settings_save_timer.stop()
+            self.apply(automatic=True)
 
     def _should_show_ai_settings(self) -> bool:
         if (bool(self.settings.get("ai_configured", False))
@@ -465,9 +496,9 @@ class SettingsCenter(QWidget):
             else:
                 n = image_cache.clear_desc()
                 msg = f"已清除 {n} 条描述翻译缓存。"
-            QMessageBox.information(self, "清除缓存", msg)
+            inline_notice(self, "清除缓存", msg)
         except Exception as e:
-            QMessageBox.warning(self, "清除缓存", f"清除失败:{type(e).__name__}: {e}")
+            inline_warning(self, "清除缓存", f"清除失败:{type(e).__name__}: {e}")
 
     def _on_wallpaper_source_changed(self, save: bool = True):
         """切换壁纸源 → 只启用对应控件。"""
@@ -572,10 +603,10 @@ class SettingsCenter(QWidget):
         reader = QImageReader(path)
         size = reader.size()
         if not size.isValid() or size.width() * size.height() > 40_000_000:
-            QMessageBox.warning(self, '选择壁纸', '图片无法读取或太大，请选择不超过 4000 万像素的图片。')
+            task_warning(self, '选择壁纸', '图片无法读取或太大，请选择不超过 4000 万像素的图片。')
             return
         if reader.read().isNull():
-            QMessageBox.warning(self, '选择壁纸', '这张图片没能打开，换一张试试？')
+            task_warning(self, '选择壁纸', '这张图片没能打开，换一张试试？')
             return
         try:
             wall_dir = cache_dir("wallpapers")
@@ -589,7 +620,7 @@ class SettingsCenter(QWidget):
                 self.wallpaper_source_combo.setCurrentIndex(index)
             self._queue_visual_autosave()
         except Exception as e:
-            QMessageBox.warning(self, "选择壁纸", f"复制图片失败:{type(e).__name__}: {e}")
+            task_warning(self, "选择壁纸", f"复制图片失败:{type(e).__name__}: {e}")
 
     def _gen_mcp_files(self):
         """生成 MCP 连接/客户端配置文件,写到启动器创建的 AMCL 文件夹。"""
@@ -728,6 +759,9 @@ class SettingsCenter(QWidget):
         hint = QLabel("更新、教程和缓存都放在这里；不会影响你的游戏存档或已安装的 Mod。")
         hint.setWordWrap(True); hint.setStyleSheet(f"color:{muted_color()};")
         l.addWidget(head); l.addWidget(hint)
+        self.task_notifications_check = ToggleSwitch(bool(self.settings.get('ui_task_notifications', True)))
+        l.addWidget(setting_switch_row('任务提示集中到状态球', self.task_notifications_check,
+            '关闭可恢复传统提示窗口；文件选择、授权、EULA 和 AI 交互保留专用界面。'))
 
         update_btn = QPushButton(t("CHECK_FOR_UPDATES"))
         tutorial_btn = QPushButton(t("REPLAY_GUIDED_TUTORIAL"))
@@ -921,28 +955,27 @@ class SettingsCenter(QWidget):
 
         refresh_btn = QPushButton("重新扫描")
         add_btn = QPushButton("添加已有 Java…")
-        prefer_btn = QPushButton("设为该大版本首选")
-        forget_btn = QPushButton("取消首选")
         open_btn = QPushButton("打开运行时目录")
-        install_buttons = []
+        prepare_btn = QPushButton("准备 Java…")
+        from PySide6.QtWidgets import QMenu
+        from ui_style import popup_menu_style
+        prepare_menu = QMenu(prepare_btn)
+        set_style(prepare_menu, popup_menu_style)
         for major in (8, 17, 21, 25):
-            button = QPushButton(f"准备 Java {major}")
-            button.clicked.connect(lambda _checked=False, m=major: self._install_java(m))
-            install_buttons.append(button)
-        self._java_buttons = [refresh_btn, add_btn, prefer_btn, forget_btn, open_btn, *install_buttons]
+            prepare_menu.addAction(f"Java {major}", lambda _checked=False, m=major: self._install_java(m))
+        prepare_btn.clicked.connect(lambda: prepare_menu.popup(
+            prepare_btn.mapToGlobal(prepare_btn.rect().bottomLeft())))
+        self._java_buttons = [refresh_btn, add_btn, open_btn, prepare_btn]
         for button in self._java_buttons:
             button.setMinimumHeight(32); set_style(button, card_btn_style)
         refresh_btn.clicked.connect(self._refresh_java_list)
         add_btn.clicked.connect(self._add_existing_java)
-        prefer_btn.clicked.connect(self._prefer_selected_java)
-        forget_btn.clicked.connect(self._forget_selected_java)
         open_btn.clicked.connect(self._open_java_runtime_dir)
 
         row = QHBoxLayout()
-        for button in install_buttons:
-            row.addWidget(button)
+        row.addWidget(prepare_btn)
         row.addWidget(add_btn); row.addWidget(refresh_btn); row.addStretch()
-        row2 = QHBoxLayout(); row2.addWidget(prefer_btn); row2.addWidget(forget_btn)
+        row2 = QHBoxLayout()
         row2.addWidget(open_btn); row2.addStretch()
         layout.addWidget(title); layout.addWidget(hint); layout.addWidget(self.java_list)
         layout.addLayout(row); layout.addLayout(row2); layout.addWidget(self.java_status)
@@ -983,13 +1016,12 @@ class SettingsCenter(QWidget):
         preferred = dict(self.settings.get("java_paths") or {})
         for info in installations or []:
             path = info["path"]
-            selected = preferred.get(str(info["major"])) == path
             item = QListWidgetItem(
-                f"{'★ ' if selected else ''}Java {info['major']} · {info['source']}\n{path}")
+                f"Java {info['major']} · {info['source']}\n{path}")
             item.setData(Qt.ItemDataRole.UserRole, info)
             self.java_list.addItem(item)
         self.java_status.setText(
-            f"找到 {self.java_list.count()} 个 Java；★ 表示该大版本的全局首选。"
+            f"找到 {self.java_list.count()} 个 Java，启动时会按游戏版本自动选择。"
             if self.java_list.count() else "没有找到 Java；可让启动器准备 Java 8/17/21/25。")
 
     def _add_existing_java(self):
@@ -1027,7 +1059,7 @@ class SettingsCenter(QWidget):
         self.settings["java_paths"] = preferred
         self._save_preserving_accounts()
         self.runtime_changed.emit()
-        self.java_status.setText(f"已把 Java {major} 设为该大版本首选。")
+        self.java_status.setText(f"Java {major} 已准备好。")
         QTimer.singleShot(0, self._refresh_java_list)
 
     def _selected_java(self):
@@ -1082,13 +1114,15 @@ class SettingsCenter(QWidget):
     def _build_ai(self) -> QWidget:
         self.ai_form = AISettingsForm(self.settings)
         self.mod_translate_check = ToggleSwitch(bool(self.settings.get("ai_mod_translate", True)))
-        self.mod_translate_source = QComboBox()
-        self.mod_translate_source.addItem("本地模型", "local")
-        self.mod_translate_source.addItem("已配置的云端模型", "cloud")
-        source_idx = self.mod_translate_source.findData(self.settings.get("ai_mod_translate_source", "local"))
-        self.mod_translate_source.setCurrentIndex(source_idx if source_idx >= 0 else 0)
+        self.mod_translate_selection = dict(self.settings.get('ai_mod_translate_selection') or {})
+        self.mod_translate_source = QPushButton()
         self.mod_translate_source.setEnabled(self.mod_translate_check.isChecked())
         self.mod_translate_check.toggled.connect(self.mod_translate_source.setEnabled)
+        self.mod_translate_menu = QMenu(self.mod_translate_source)
+        set_style(self.mod_translate_menu, popup_menu_style)
+        self.mod_translate_menu.aboutToShow.connect(self._fill_translation_menu)
+        self.mod_translate_source.setMenu(self.mod_translate_menu)
+        self._translation_button_text()
         self.cloud_tool_log_check = ToggleSwitch(bool(self.settings.get("ai_cloud_tool_log", True)))
         self.cloud_tool_log_check.setToolTip("记录用户请求、工具参数、工具结果和最终回复；API 密钥会自动脱敏。")
 
@@ -1108,11 +1142,75 @@ class SettingsCenter(QWidget):
         l.addWidget(self.ai_form)
         l.addWidget(setting_switch_row("Mod 描述 AI 翻译", self.mod_translate_check, "将英文描述翻译成中文"))
         l.addLayout(source_row)
+        translation_hint = QLabel('内置模型下载后置顶显示；其他模型按已配置的 API 供应商选择。')
+        translation_hint.setWordWrap(True)
+        translation_hint.setStyleSheet(f'color:{muted_color()};')
+        l.addWidget(translation_hint)
         l.addWidget(setting_switch_row("记录云端 AI 工具调用", self.cloud_tool_log_check,
                                        "仅保存在本机，API 密钥会脱敏"))
         l.addWidget(hint)
         l.addStretch()
         return self._wrap_scroll(w)
+
+    def _translation_button_text(self):
+        selected = self.mod_translate_selection
+        if selected.get('kind') == 'builtin':
+            from model_registry import RESOURCES
+            name = RESOURCES.get(selected.get('model'), {}).get('name', selected.get('model', ''))
+            text = '内置 · ' + name
+        elif selected.get('kind') == 'api':
+            from model_cards import _provider_label
+            text = _provider_label(selected.get('provider', '')) + ' · ' + selected.get('model', '')
+        else:
+            text = '选择翻译模型'
+        self.mod_translate_source.setText(text)
+
+    def _choose_translation_model(self, kind, provider, model):
+        self.mod_translate_selection = {'kind': kind, 'provider': provider, 'model': model}
+        self._translation_button_text()
+        self._queue_settings_save()
+
+    def _fill_translation_menu(self):
+        menu = self.mod_translate_menu
+        menu.clear()
+        from model_registry import RESOURCES, is_downloaded
+        from model_cards import _provider_label
+        for model, resource in RESOURCES.items():
+            if is_downloaded(model):
+                action = menu.addAction('内置 · ' + resource.get('name', model))
+                action.triggered.connect(lambda checked=False, m=model: self._choose_translation_model('builtin', '', m))
+        settings = dict(self.settings)
+        settings.update(self.ai_form.values())
+        if hasattr(self, 'model_cards'):
+            settings.update(self.model_cards.values())
+        providers = dict(settings.get('ai_model_providers') or {})
+        pid = settings.get('ai_cloud_provider', '')
+        if pid and pid not in providers:
+            providers[pid] = {'base_url': settings.get('ai_cloud_base_url', ''),
+                              'models': (settings.get('ai_cloud_models') or {}).get(pid) or
+                              [{'id': settings.get('ai_cloud_model', '')}]}
+        if settings.get('ai_local_mode') in ('ollama', 'lmstudio'):
+            pid = settings['ai_local_mode']
+            providers.setdefault(pid, {'base_url': settings.get('ai_local_endpoint') or
+                ('http://127.0.0.1:11434/v1' if pid == 'ollama' else 'http://127.0.0.1:1234/v1'),
+                'models': [{'id': settings.get('ai_external_model', '')}]})
+        if menu.actions() and providers:
+            menu.addSeparator()
+        for pid, data in providers.items():
+            if not data.get('base_url'):
+                continue
+            rows = data.get('models') or []
+            models = [row for row in rows if isinstance(row, dict) and row.get('id')]
+            if not models:
+                continue
+            submenu = menu.addMenu(_provider_label(pid))
+            set_style(submenu, popup_menu_style)
+            for row in models:
+                model = row['id']
+                action = submenu.addAction(row.get('name') or model)
+                action.triggered.connect(lambda checked=False, p=pid, m=model: self._choose_translation_model('api', p, m))
+        if not menu.actions():
+            menu.addAction('请先下载内置模型或配置 API 模型').setEnabled(False)
 
     def _is_model_downloaded(self) -> bool:
         try:
@@ -1274,6 +1372,19 @@ class SettingsCenter(QWidget):
         disabled = set(self.settings.get("plugins_disabled", []) or [])
         enabled_override = set(self.settings.get("plugins_enabled", []) or [])
         metas = plugin_manager.discover_plugins_meta()
+        category_layouts = {}
+        for category in ('Mod 管理', '功能'):
+            toggle = QPushButton(category)
+            toggle.setCheckable(True)
+            toggle.setChecked(True)
+            set_style(toggle, card_btn_style)
+            l.addWidget(toggle)
+            container = QWidget()
+            group = QVBoxLayout(container)
+            group.setContentsMargins(0, 0, 0, 0)
+            toggle.toggled.connect(container.setVisible)
+            l.addWidget(container)
+            category_layouts[category] = group
         for name, path in plugin_manager.discover_plugins():
             meta = metas.get(name, {})
             pname = meta.get("name") or name
@@ -1317,7 +1428,7 @@ class SettingsCenter(QWidget):
                 compatibility.setWordWrap(True)
                 compatibility.setStyleSheet("color: #d68a3b; font-size: 11px;")
                 cl.addWidget(compatibility)
-            l.addWidget(card)
+            category_layouts[plugin_manager.plugin_category(name)].addWidget(card)
 
         if not plugin_manager.discover_plugins():
             empty = QLabel("还没有插件。把 .py 插件放进启动器的 plugins/ 目录即可;"
@@ -1364,6 +1475,7 @@ class SettingsCenter(QWidget):
     def _restart_launcher(self):
         """重启启动器(插件新增/启停后生效)。"""
         try:
+            self.flush_autosave()
             import os, sys
             if getattr(sys, "frozen", False):   # PyInstaller exe
                 import shutil
@@ -1371,12 +1483,12 @@ class SettingsCenter(QWidget):
                 os.spawnv(os.P_NOWAIT, exe, [exe])
             else:
                 import subprocess
-                subprocess.Popen([sys.executable, os.path.abspath(os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "main.py"))],
-                                 cwd=os.path.dirname(os.path.abspath(__file__)))
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                subprocess.Popen([sys.executable, os.path.join(project_root, 'main.py')],
+                                 cwd=project_root)
             QApplication.closeAllWindows()
         except Exception as e:
-            QMessageBox.warning(self, "重启", f"重启失败:{type(e).__name__}: {e}")
+            inline_warning(self, "重启", f"重启失败:{type(e).__name__}: {e}")
 
     def _goto_plugin_setting(self, name: str):
         """跳到某插件的独立设置页(在设置左菜单单开一行,标签为 插件:<显示名>)。
@@ -1387,7 +1499,7 @@ class SettingsCenter(QWidget):
             display = meta.get("name") or name
             if self.shell.switch_by_label(f"插件:{display}"):
                 return
-            QMessageBox.information(self, "插件设置",
+            inline_notice(self, "插件设置",
                                     f"「{display}」目前未启用(默认关闭)。\n"
                                     "请先把它的开关打开,再点⚙进入设置。")
         except Exception:
@@ -1418,6 +1530,12 @@ class SettingsCenter(QWidget):
             enabled_over.discard(name)
         self.settings["plugins_disabled"] = sorted(disabled)
         self.settings["plugins_enabled"] = sorted(enabled_over)
+        disabled_value, enabled_value = sorted(disabled), sorted(enabled_over)
+        def persist(live):
+            live['plugins_disabled'] = disabled_value
+            live['plugins_enabled'] = enabled_value
+        update_settings(persist)
+        self._autosave_hint.setText('插件设置已保存，重启启动器后生效')
 
     def _on_strategy_changed(self):
         self._update_strategy_hint()
@@ -1457,9 +1575,9 @@ class SettingsCenter(QWidget):
         name = self.custom_name_edit.text().strip()
         url = self.custom_url_edit.text().strip()
         if not name or not url:
-            QMessageBox.warning(self, "镜像源", "请填写名称和地址"); return
+            inline_warning(self, "镜像源", "请填写名称和地址"); return
         if not url.startswith(("http://", "https://")):
-            QMessageBox.warning(self, "镜像源", "地址必须以 http:// 或 https:// 开头"); return
+            inline_warning(self, "镜像源", "地址必须以 http:// 或 https:// 开头"); return
         self._custom_mirrors.append({"id": uuid.uuid4().hex[:8], "name": name, "url": url.rstrip("/")})
         self.custom_name_edit.clear(); self.custom_url_edit.clear()
         self._refresh_custom_list(); self._refresh_mirror_combo()
@@ -1474,15 +1592,20 @@ class SettingsCenter(QWidget):
     def _remove_custom_mirror(self):
         row = self.custom_list.currentRow()
         if row < 0:
-            QMessageBox.information(self, "镜像源", "先在列表里选中要删除的自定义镜像"); return
+            inline_notice(self, "镜像源", "先在列表里选中要删除的自定义镜像"); return
         self._custom_mirrors.pop(row); self._refresh_custom_list(); self._refresh_mirror_combo()
 
     # ================= 保存 =================
-    def apply(self):
+    def apply(self, automatic=False):
+        if hasattr(self, 'task_notifications_check'):
+            self.settings['ui_task_notifications'] = self.task_notifications_check.isChecked()
         try:
             self.settings['jvm_args'] = self.jvm_editor.values()
         except ValueError as error:
-            QMessageBox.warning(self, 'JVM 参数', str(error))
+            if automatic:
+                self._autosave_hint.setText('尚未保存：' + str(error))
+            else:
+                inline_warning(self, 'JVM 参数', str(error))
             return
         self.settings["memory_gb"] = 0 if self.memory_auto_check.isChecked() else self.memory_spin.value()
         self.settings["version_isolation"] = self.isolation_check.isChecked()
@@ -1498,7 +1621,7 @@ class SettingsCenter(QWidget):
             if hasattr(self, "model_cards"):
                 self.settings.update(self.model_cards.values())
             self.settings["ai_mod_translate"] = self.mod_translate_check.isChecked()
-            self.settings["ai_mod_translate_source"] = self.mod_translate_source.currentData()
+            self.settings['ai_mod_translate_selection'] = dict(self.mod_translate_selection)
             self.settings["ai_cloud_tool_log"] = self.cloud_tool_log_check.isChecked()
         self.settings["mirror_strategy"] = self.strategy_combo.currentData()
         self.settings["mirror_source"] = self.mirror_combo.currentData()
@@ -1538,3 +1661,4 @@ class SettingsCenter(QWidget):
         except Exception:
             pass
         self.applied.emit()
+        self._autosave_hint.setText('设置已自动保存；插件启停需重启后生效')
