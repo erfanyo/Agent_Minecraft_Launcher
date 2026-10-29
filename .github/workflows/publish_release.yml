@@ -54,6 +54,8 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          grep -Fxq "VERSION = \"${VERSION#v}\"" launcher_app/core/updater.py
           NOTES_FILE="RELEASE_NOTES_${VERSION#v}.md"
           test -f "$NOTES_FILE"
           grep -Fq "## [$VERSION]" CHANGELOG.md
@@ -70,6 +72,7 @@ jobs:
           cp "$LINUX_DIR/AgentMinecraftLauncher-linux-x86_64.tar.gz" release/assets/
           cp "$LINUX_DIR/SHA256SUMS-linux.txt" release/assets/
           cp erfanyo.asc release/assets/
+          cp LICENSE THIRD_PARTY.md THIRD_PARTY_NOTICES.md release/assets/
           {
             cat "$NOTES_FILE"
             printf '\n<details>\n<summary>技术版更新日志</summary>\n\n'

@@ -1,24 +1,25 @@
 # Agent Minecraft Launcher · AMCL
 
-[下载 v1.1.0](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.1.0) · [简明更新说明](RELEASE_NOTES_1.1.0.md) · [技术更新日志](CHANGELOG.md) · [构建说明](BUILDING.md)
+[下载 v1.2.0](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.2.0) · [简明更新说明](RELEASE_NOTES_1.2.0.md) · [技术更新日志](CHANGELOG.md) · [构建说明](BUILDING.md)
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
 **能启动 Minecraft，也能帮你处理 Mod、实例和报错的 AI 启动器。** 常规模式保留完整的启动器操作；AI 模式把会话放在主窗口，两个模式共享实例、下载和设置。
 
-## 1.1.0 测试候选
+## 1.2.0 正式版
 
-1.1.0 新增统一任务中心、浮动确认卡片、Fabric 服务端导出和对照翻译；详见 [1.1.0 更新说明](RELEASE_NOTES_1.1.0.md)。
+补上身为 MC 启动器的最大短板：CurseForge 正式接入。新增整合包补齐接续、持久缺文件提醒、原包保留和语言包预览；详见 [1.2.0 更新说明](RELEASE_NOTES_1.2.0.md)。
 
 ## 下载
 
 | 平台与版本 | 文件 | 使用方法 |
 | --- | --- | --- |
 | Windows 标准版 | `AgentMinecraftLauncher.exe` | 双击运行；启动器会在旁边按需创建 `AMCL` 数据文件夹。 |
-| Windows 预装本地 AI 版 | `AgentMinecraftLauncher-Windows-LocalAI.zip` | 解压后运行 exe；模型已放在 `AMCL/models`，需要桌面快捷方式时运行包内的 `CreateDesktopShortcut.bat`。移动文件夹后需重新运行该脚本。 |
 | Linux x86_64 | `AgentMinecraftLauncher-linux-x86_64.tar.gz` | 解压后运行包内的 `AgentMinecraftLauncher`。 |
 
-安装包与 `SHA256SUMS` 校验文件见 [v1.1.0 Release](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.1.0)。macOS 已运行源码 CI 测试，当前没有 macOS 安装包。
+本轮暂不提供预装本地 AI 模型 ZIP，本地模型功能保留。
+
+安装包与 `SHA256SUMS` 校验文件见 [v1.2.0 Release](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.2.0)。macOS 已运行源码 CI 测试，当前没有 macOS 安装包。
 
 > 本项目采用 [GNU GPL-3.0-only](LICENSE) 许可。Windows 包没有商业代码签名证书；GPG 签名用于验证来源，不能消除 SmartScreen 提示。
 
@@ -82,7 +83,7 @@
 
 ## 🚀 快速开始
 
-1. 在上方表格选择与你的系统对应的包，从 [v1.1.0 Release](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.1.0) 下载。
+1. 在上方表格选择与你的系统对应的包，从 [v1.2.0 Release](https://github.com/erfanyo/Agent_Minecraft_Launcher/releases/tag/v1.2.0) 下载。
 2. Windows 标准版直接运行 exe；本地 AI 版先解压 ZIP；Linux 版解压 tar.gz 后运行包内程序。
 3. 在首次引导中选好游戏目录和登录方式。AI 可选填 API Key，或使用预装本地 AI 版。
 
@@ -248,7 +249,7 @@ python main.py
 
 ## 📋 更新日志
 
-玩家版见 [v1.1.0 更新说明](RELEASE_NOTES_1.1.0.md)；完整技术版见 [CHANGELOG.md](CHANGELOG.md)。
+玩家版见 [v1.2.0 更新说明](RELEASE_NOTES_1.2.0.md)；完整技术版见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 🔄 自动更新
 
