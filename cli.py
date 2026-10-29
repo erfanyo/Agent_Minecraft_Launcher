@@ -169,7 +169,7 @@ def main(argv=None):
 
 
 def _dispatch(args) -> int:
-    import agent_tools
+    import launcher_app.ai.agent_tools as agent_tools
 
     if args.command == "instances":
         print(agent_tools.list_instances())
@@ -204,7 +204,7 @@ def _dispatch(args) -> int:
 
 # ================= 服务端 CLI =================
 def _dispatch_server(args) -> int:
-    import server_service
+    import launcher_app.servers.server_service as server_service
     from settings import load_settings
 
     action = args.srv_action
@@ -325,8 +325,8 @@ def _dispatch_server(args) -> int:
 
 
 def _cmd_server_export(args):
-    import server_service
-    from server_launch import build_launch_plan
+    import launcher_app.servers.server_service as server_service
+    from launcher_app.servers.server_launch import build_launch_plan
     try:
         plan = build_launch_plan(args.root)
     except Exception as e:
@@ -356,9 +356,9 @@ def _cmd_server_export(args):
 
 def _cmd_server_setup_start(args):
     """在服务端目录生成 start.bat/start.sh,使目录自包含(可直接导入 MCSManager 等面板)。"""
-    import server_service
+    import launcher_app.servers.server_service as server_service
     import os
-    from server_launch import build_launch_plan
+    from launcher_app.servers.server_launch import build_launch_plan
     root = args.root
     try:
         plan = build_launch_plan(root)
@@ -395,9 +395,9 @@ def _cmd_server_setup_start(args):
 
 
 def _cmd_server_launch(args):
-    import server_service
-    from server_launch import build_launch_plan, eula_accepted
-    from server_eula import fetch_minecraft_eula, accept_minecraft_eula
+    import launcher_app.servers.server_service as server_service
+    from launcher_app.servers.server_launch import build_launch_plan, eula_accepted
+    from launcher_app.servers.server_eula import fetch_minecraft_eula, accept_minecraft_eula
     root = args.root
     try:
         plan = build_launch_plan(root)
@@ -443,7 +443,7 @@ def _cmd_server_launch(args):
 
 
 def _cmd_ai(args):
-    from assistant import build_executor, chat_with_tools
+    from launcher_app.ai.assistant import build_executor, chat_with_tools
     from settings import load_settings
 
     settings = load_settings()
@@ -457,14 +457,14 @@ def _cmd_ai(args):
 
 # 工具 schema 与 assistant 里的一致(避免循环导入,这里延迟引用)
 def _tools():
-    from assistant import TOOLS
+    from launcher_app.ai.assistant import TOOLS
     return TOOLS
 
 
 # ================= MCSManager CLI =================
 def _get_mcsm_client(args) -> "MCSManagerClient":
     """从 args(--url/--apikey)或 settings 构建 MCSManagerClient。"""
-    from mcsmanager_adapter import MCSManagerClient
+    from launcher_app.servers.mcsmanager_adapter import MCSManagerClient
     url = args.url
     apikey = args.apikey
     if not url or not apikey:

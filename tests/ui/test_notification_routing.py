@@ -1,14 +1,14 @@
 import pytest
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QLineEdit, QPushButton, QMessageBox
-from ui_notifications import task_notice, task_warning, inline_notice, action_question
+from launcher_app.ui.ui_notifications import task_notice, task_warning, inline_notice, action_question
 
 pytestmark = pytest.mark.ui
 
 
 @pytest.fixture(autouse=True)
 def enable_policy(monkeypatch):
-    monkeypatch.setattr('ui_notifications.notifications_enabled', lambda: True)
+    monkeypatch.setattr('launcher_app.ui.ui_notifications.notifications_enabled', lambda: True)
 
 
 def test_task_result_is_nonblocking_and_goes_to_hub(hub):
@@ -56,7 +56,7 @@ def test_immediate_confirmation_does_not_enter_task_queue(hub):
 
 
 def test_classic_policy_uses_native_popup(hub, monkeypatch):
-    monkeypatch.setattr('ui_notifications.notifications_enabled', lambda: False)
+    monkeypatch.setattr('launcher_app.ui.ui_notifications.notifications_enabled', lambda: False)
     calls = []
     monkeypatch.setattr(QMessageBox, 'information', lambda *args: calls.append(args))
     task_notice(hub.parent(), '完成', '消息')

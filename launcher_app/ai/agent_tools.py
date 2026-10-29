@@ -1,0 +1,979 @@
+# -*- coding: utf-8 -*-
+"""
+Agent 工具层:CLI 命令与 AI 工具调用共用的函数实现。
+
+设计:每个函数"文本进 → 文本出",既被 `cli.py` 的命令调用,
+也被 `assistant.py` 的工具调用(tool calling)当作工具执行体。
+权限不在这一层——由调用方(assistant 的执行器)按只读/工作区可写拦截。
+"""
+from typing import Callable
+
+import json
+import os
+
+import paths
+from launcher_app.core.backup import backup_instance as _backup_impl
+from launcher_app.instances.instances import scan_instances
+from launcher_app.instances.loaders import install_loader
+from launcher_app.resources.modpack import _ensure_base as ensure_base
+from launcher_app.resources.modrinth import download_mod, get_mod_version, get_project, search_mods_cn
+from launcher_app.resources.resource_tools import (
+    install_resource_pack,
+    install_shader,
+    list_resource_packs,
+    list_shaders,
+    search_resource_packs,
+    search_shaders,
+)
+from settings import load_settings, save_settings
+
+# 可选 Mod 清单(与 GUI 共用;定义在这里避免 CLI 依赖 Qt)
+SHADER_MODS = {"fabric": "iris", "forge": "oculus", "neoforge": "iris"}
+OPTIMIZE_MODS = {
+    "fabric": ["sodium", "lithium", "ferrite-core"],
+    "forge": ["embeddium", "ferrite-core"],
+    "neoforge": ["sodium", "lithium", "ferrite-core"],
+}
+# Sodium 的 Modrinth 项目 id:Iris 把它列为 required 依赖,且两者必须精确配对
+# (Iris 的 compat mixin 直接引用 Sodium 内部类,版本不符会在进世界时崩)。
+SODIUM_PROJECT_ID = "AANobbMI"
+_SODIUM_JAR_MARKERS = ("sodium-neoforge-", "sodium-fabric-", "sodium-forge-")
+_SHADER_SLUGS = set(SHADER_MODS.values())          # {"iris", "oculus"}
+
+
+# ---------------- 读取类(只读) ----------------
+def _gd(game_dir: str | None) -> str:
+    """game_dir 缺省时用当前生效的游戏目录(设置里可改)"""
+    return game_dir if game_dir is not None else paths.GAME_DIR
+
+
+def list_instances(game_dir: str | None = None) -> str:
+    insts = scan_instances(_gd(game_dir))
+    if not insts:
+        return "(还没有实例)"
+    return "\n".join(f"{i['id']}  ({i['loader'] or '原版'} ← {i['base']})" for i in insts)
+
+
+def list_mods(instance: str, game_dir: str | None = None) -> str:
+    mods_dir = os.path.join(paths.instance_dir(instance, _gd(game_dir)), "mods")
+    if not os.path.isdir(mods_dir):
+        return f"({instance} 没有 mods 目录)"
+    files = sorted(f for f in os.listdir(mods_dir) if f.endswith(".jar"))
+    return "\n".join(files) if files else "(mods 目录为空)"
+
+
+def search_mods(query: str, game_version: str = "", loader: str = "") -> str:
+    """搜 Mod(支持中文名)。game_version/loader 为空时不按它们过滤"""
+    hits = search_mods_cn(query, game_version or None, loader or None)
+    if not hits:
+        return "(没有找到结果)"
+    return "\n".join(f"{h['title']}  slug={h['slug']}  ⬇{h['downloads']:,}"
+                     for h in hits[:15])
+
+
+def resolve_mod_concept(requirement: str, candidates: list[str] | None = None,
+                        game_version: str = "", loader: str = "",
+                        top_n: int = 8) -> str:
+    """按"功能/模糊描述"解析出候选 Mod,给用户挑选(核心:猜名→校验→过滤→排序)。
+
+    **为什么**:用户常说不清 mod 名,只说"我要个能加速熔炉/自动合成/能量很大的东西"。
+    这类抽象描述直接搜 Modrinth(项目级)命中率极低,因为承载它的往往是综合型大 mod
+    里的一个**物品**,title/description 不会写"熔炉加速"这种功能词。
+
+    **做法**:
+    - `candidates` = 云端模型根据 `requirement` 联想出的一组**候选名**(mod 名 / item 名 /
+      宿主 mod 名,混合真伪);
+    - 每个名字逐个去 Modrinth 检索,取真实命中(搜不到的候选=模型幻觉,天然被过滤);
+    - 同名去重(不同词命中同一 slug 合并),按"候选词在结果里的位次(契合度)+ 下载量"排序;
+    - 返回候选清单(中文名/描述/下载量/适配加载器),由用户挑选,选定后走 install_mod。
+
+    只返回检索校验过的真实结果,绝不让模型凭空给出的名字直接当作可装 mod。
+    """
+    from launcher_app.resources.modrinth import search_mods as _raw_search
+    req = (requirement or "").strip()
+    cands = [c.strip() for c in (candidates or []) if str(c).strip()]
+    if not req and not cands:
+        return "(缺少描述或候选名,无法解析)"
+
+    # ---- 逐个候选词检索,收集真实命中 ----
+    # rec: slug -> {title, slug, downloads, description, loader_cn, hit_rank(最小位次)}
+    rec: dict = {}
+    for ci, c in enumerate(cands):
+        try:
+            hits = _raw_search(c, game_version or None, loader or None, limit=5,
+                               project_type="mod", order_by="downloads")
+        except Exception:
+            continue
+        for hi, h in enumerate(hits or []):
+            slug = h.get("slug", "")
+            if not slug:
+                continue
+            # 契合度:候选词排第 ci 位(越靠前说明模型越确定),结果内位次 hi 也越低越好
+            rank = ci * 10 + hi
+            if slug not in rec or rank < rec[slug]["rank"]:
+                rec[slug] = {
+                    "slug": slug,
+                    "title": h.get("title", slug),
+                    "downloads": h.get("downloads", 0),
+                    "description": (h.get("description") or "").strip(),
+                    "author": h.get("author", ""),
+                    "categories": h.get("categories", []),
+                    "rank": rank,
+                }
+    if not rec:
+        return ("(没有搜到符合『%s』的 Mod;可能是该功能只存在于整合包/自制包,或描述太抽象。" % req
+                + "可换个说法,或告诉我你的游戏版本/加载器再试)")
+
+    # ---- 排序:契合度优先,下载量只在相近时微调 ----
+    # 契合度主信号 = 候选词是否"精确"命中该 mod(候选词 == title 或 slug 或 title 含候选词):
+    #   强命中(如候选词 "draconic" 精确落在 title/slug 里)远优先于搜索顺带命中的无关 mod。
+    # 下载量只做 +分(同契合度下热门的靠前),但权重压不过契合度,避免热门无关 mod 淹没。
+    import math
+    def _fit_score(it: dict) -> float:
+        title = (it.get("title") or "").lower()
+        slug = (it.get("slug") or "").lower()
+        # 该 slug 是被哪些候选词命中的?取命中里最"像"的候选词做契合信号
+        best = 0.0
+        for c in cands:
+            cl = c.lower()
+            if not cl:
+                continue
+            # 强命中:候选词精确等于 slug/title,或 title 以候选词开头/含候选词作独立词
+            if cl == slug or cl == title:
+                best = max(best, 1.0)
+            elif cl in slug or cl in title:
+                best = max(best, 0.75)
+        dl = math.log10(1 + it["downloads"]) * 0.35   # 下载量微量权重(0~约2.8)
+        return best * 10.0 + dl
+    items = sorted(rec.values(), key=_fit_score, reverse=True)
+
+    # ---- 中文名标注(能查到的补一下) ----
+    try:
+        from launcher_app.resources.mod_cn import merged_names
+        _cn = merged_names()
+    except Exception:
+        _cn = {}
+    for it in items:
+        cn = _cn.get(it["slug"])
+        if cn:
+            it["title"] = cn
+
+    # ---- 组装返回文本 ----
+    lines = [f"按『{req}』找到以下候选(已校验为真实 Mod,可安装):", ""]
+    for i, it in enumerate(items[:top_n], 1):
+        dl = f"⬇{it['downloads']:,}"
+        cats = ",".join((it["categories"] or [])[:3])
+        desc = (it["description"] or "")[:72]
+        lines.append(f"{i}. {it['title']}  slug={it['slug']}  {dl}  [{cats}]")
+        if desc:
+            lines.append(f"   {desc}")
+    lines.append("")
+    lines.append("告诉我要装哪个(序号或 slug);不确定可以让我逐个看描述。")
+    return "\n".join(lines)
+
+
+def search_modpacks(query: str, game_version: str = "", loader: str = "") -> str:
+    """搜整合包(Modrinth 项目类型 modpack,即 .mrpack),支持中文名。
+    用户想"装一个整合包/整合包推荐"时用;结果里的 slug 可交给 install_modpack 直接下载导入。"""
+    hits = search_mods_cn(query, game_version or None, loader or None,
+                          project_type="modpack")
+    if not hits:
+        return "(没有找到整合包;可换关键词,或该整合包不在 Modrinth,需要用网盘/手动下载)"
+    return "\n".join(f"{h['title']}  slug={h['slug']}  ⬇{h['downloads']:,}"
+                     for h in hits[:12])
+
+
+def read_instance_log(instance: str, tail: int = 80, game_dir: str | None = None) -> str:
+    log = os.path.join(_gd(game_dir), "versions", instance, "logs", "latest.log")
+    if not os.path.isfile(log):
+        return f"({instance} 还没有日志文件)"
+    try:
+        lines = open(log, encoding="utf-8", errors="replace").read().splitlines()
+    except Exception as e:
+        return f"(读取日志失败:{e})"
+    return "\n".join(lines[-tail:])
+
+
+def read_crash_report(instance: str, game_dir: str | None = None) -> str:
+    cr_dir = os.path.join(_gd(game_dir), "versions", instance, "crash-reports")
+    if not os.path.isdir(cr_dir):
+        return f"({instance} 没有崩溃报告目录)"
+    files = sorted(os.listdir(cr_dir), reverse=True)
+    if not files:
+        return f"({instance} 没有崩溃报告)"
+    try:
+        text = open(os.path.join(cr_dir, files[0]), encoding="utf-8",
+                    errors="replace").read()
+    except Exception as e:
+        return f"(读取崩溃报告失败:{e})"
+    return text[:4000]  # 截断,避免塞爆上下文
+
+
+def get_settings() -> str:
+    s = load_settings()
+    from launcher_app.core.log_privacy import redact
+    return "\n".join(f"{k}: {v}" for k, v in redact(s, s).items())
+
+
+def browse_cloud_share(url: str = '', password: str = '', session_id: str = '', folder_id: str = '0', page: int = 1) -> str:
+    from launcher_app.resources.cloud_drives import browse, tool_result
+    return tool_result(lambda: browse(url, password, session_id, folder_id, page))
+
+
+def download_cloud_archive(session_id: str, file_id: str, game_dir: str | None = None, progress_callback=None, status_callback=None) -> str:
+    from launcher_app.resources.cloud_drives import receive, tool_result
+    return tool_result(lambda: receive(session_id, file_id, _gd(game_dir), progress_callback, status_callback))
+
+
+def read_public_webpage(url: str) -> str:
+    from launcher_app.browser.public_web import read_public_webpage as read
+    return read(url, load_settings())
+
+
+def _resolve_server(server: str, game_dir: str | None = None) -> dict:
+    from launcher_app.servers.server_packs import list_servers as _list_servers
+    value = str(server or '').strip()
+    matches = [item for item in _list_servers(_gd(game_dir))
+               if item['id'] == value or item['name'] == value]
+    if len(matches) != 1:
+        available = '、'.join(item['name'] for item in _list_servers(_gd(game_dir))) or '无'
+        raise ValueError(f'无法唯一找到服务端“{value}”；当前服务端：{available}')
+    return matches[0]
+
+
+def list_server_instances(game_dir: str | None = None) -> str:
+    from launcher_app.servers.server_packs import list_servers as _list_servers
+    servers = _list_servers(_gd(game_dir))
+    if not servers:
+        return '(还没有服务端)'
+    return '\n'.join(
+        f"{item['name']}  id={item['id']}  "
+        f"({'候选' if item.get('candidate') else '普通'} · "
+        f"{item['report'].get('loader', 'unknown')} · "
+        f"MC {item['report'].get('minecraftVersion') or '未知'})"
+        for item in servers)
+
+
+def read_server_candidate_report(server: str, game_dir: str | None = None) -> str:
+    from launcher_app.servers.server_packs import read_candidate_report
+    from launcher_app.servers.server_pack_report import report_text
+    item = _resolve_server(server, game_dir)
+    report = read_candidate_report(item)
+    return report_text(report) if report else '(这个服务端没有候选转换报告)'
+
+
+def list_server_mods(server: str, game_dir: str | None = None) -> str:
+    from launcher_app.resources.mod_deps import read_mod_metadata
+    item = _resolve_server(server, game_dir)
+    directory = os.path.join(item['path'], 'mods')
+    if not os.path.isdir(directory):
+        return '(这个服务端没有 mods 目录)'
+    rows = []
+    for filename in sorted(os.listdir(directory)):
+        if not filename.lower().endswith(('.jar', '.jar.disabled')):
+            continue
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path) or os.path.islink(path):
+            continue
+        info = read_mod_metadata(path) or {}
+        state = '已停用' if filename.lower().endswith('.disabled') else '启用'
+        rows.append(f"{filename}  [{state} · {info.get('environment', 'unknown')}]"
+                    f"  modId={info.get('id') or '未知'}")
+    return '\n'.join(rows) if rows else '(mods 目录为空)'
+
+
+def read_server_log(server: str, tail: int = 240, game_dir: str | None = None) -> str:
+    from launcher_app.servers.server_host_client import managed_status
+    from launcher_app.core.log_privacy import redact_text
+    item = _resolve_server(server, game_dir)
+    state = managed_status(item['path'], probe=False)
+    path = (state or {}).get('logFile')
+    if not path or not os.path.isfile(path):
+        return '(这个服务端还没有由 AMCL 托管的启动日志)'
+    root = os.path.realpath(item['path'])
+    actual = os.path.realpath(path)
+    if actual != root and not actual.startswith(root + os.sep):
+        return '(日志路径不安全，已拒绝读取)'
+    try:
+        size = os.path.getsize(actual)
+        with open(actual, 'rb') as stream:
+            offset = max(0, size - 4 * 1024 * 1024)
+            stream.seek(offset)
+            data = stream.read(4 * 1024 * 1024)
+        text = data.decode('utf-8', errors='replace')
+        lines = text.splitlines()
+        if offset and lines:
+            lines = lines[1:]  # first line may start in the middle of a character/record
+    except OSError as exc:
+        return f'(读取服务端日志失败：{exc})'
+    limit = max(20, min(int(tail or 240), 1200))
+    return redact_text('\n'.join(lines[-limit:]))
+
+
+def set_server_mod_enabled(server: str, filename: str, enabled: bool,
+                           reason: str = 'diagnostic_only', game_dir: str | None = None) -> str:
+    """Reversibly rename one server Mod. Never delete or touch a running server."""
+    from launcher_app.servers.server_host_client import managed_status
+    item = _resolve_server(server, game_dir)
+    state = managed_status(item['path'])
+    if state and state.get('running'):
+        return '错误：服务端正在运行，请先正常停止后再调整 Mod。'
+    name = str(filename or '').strip()
+    allowed_reasons = {'client_only', 'dependency_conflict', 'wrong_version', 'diagnostic_only'}
+    if reason not in allowed_reasons:
+        return '错误：停用原因无效。'
+    if not name or os.path.basename(name) != name or name in ('.', '..'):
+        return '错误：Mod 文件名无效。'
+    directory = os.path.realpath(os.path.join(item['path'], 'mods'))
+    os.makedirs(directory, exist_ok=True)
+    if enabled:
+        disabled_name = name if name.lower().endswith('.jar.disabled') else name + '.disabled'
+        enabled_name = disabled_name[:-len('.disabled')]
+        source, target = os.path.join(directory, disabled_name), os.path.join(directory, enabled_name)
+    else:
+        enabled_name = name[:-len('.disabled')] if name.lower().endswith('.jar.disabled') else name
+        if not enabled_name.lower().endswith('.jar'):
+            return '错误：只能调整 .jar Mod。'
+        source, target = os.path.join(directory, enabled_name), os.path.join(directory, enabled_name + '.disabled')
+    if os.path.islink(source) or os.path.islink(target):
+        return '错误：拒绝调整链接文件。'
+    if not os.path.isfile(source):
+        if os.path.isfile(target):
+            return '无需修改：这个 Mod 已经是目标状态。'
+        return f'错误：没有找到 {os.path.basename(source)}。'
+    if os.path.exists(target):
+        return f'错误：目标文件 {os.path.basename(target)} 已存在，未覆盖。'
+    if not enabled and reason != 'diagnostic_only':
+        from launcher_app.resources.mod_deps import read_mod_metadata
+        info = read_mod_metadata(source) or {}
+        if reason == 'client_only':
+            if info.get('environment') != 'client':
+                return '没有执行：Mod 内部元数据没有明确声明仅客户端。'
+        else:
+            log = read_server_log(server, tail=1200, game_dir=game_dir).lower()
+            evidence = [enabled_name.lower(), str(info.get('id') or '').lower()]
+            if not any(value and value in log for value in evidence):
+                return '没有执行：本次服务端日志没有指向这个 Mod，证据不足。'
+    os.replace(source, target)
+    action = '启用' if enabled else '停用'
+    return (f'已{action} {os.path.basename(target)}；原文件没有删除。'
+            f'原因：{reason}。若结果变差，可用相反状态恢复。')
+
+
+# ---------------- 写操作类(需要工作区写权限) ----------------
+def suggest_server_removals(server: str, include_descriptions: bool = True,
+                            game_dir: str | None = None) -> str:
+    """只读诊断:哪几个服务端 Mod 建议停用,以及它们各自的说明。
+
+    证据分级(确定 / 很可能 / 待复核)。本工具**不改动任何文件**;确认后仍需用
+    set_server_mod_enabled 逐个停用,并由用户确认。
+    """
+    from launcher_app.servers.server_log_diagnosis import suggestions_to_markdown
+
+    result = diagnose_server_mods(server, game_dir=game_dir)
+    if include_descriptions and result.get('suggestions'):
+        from launcher_app.resources.mod_description import annotate_mods
+        item = _resolve_server(server, game_dir)
+        rows = [{**row, 'path': os.path.join(item['path'], 'mods', row['file'])}
+                for row in result['suggestions']]
+        rows = annotate_mods(rows)
+        for row in rows:
+            row.pop('path', None)
+        result['suggestions'] = rows
+    return suggestions_to_markdown(result)
+
+
+def diagnose_server_mods(server: str, game_dir: str | None = None) -> dict:
+    """Return structured, local-only evidence for a single server test run."""
+    import zipfile
+    from launcher_app.resources.mod_deps import read_mod_metadata
+    from launcher_app.servers.server_log_diagnosis import build_diagnosis
+    from launcher_app.core.log_privacy import redact_text
+
+    item = _resolve_server(server, game_dir)
+    directory = os.path.join(item['path'], 'mods')
+    if not os.path.isdir(directory):
+        return {'suggestions': [], 'notes': ['这个服务端没有 mods 目录。']}
+
+    mods = []
+    for filename in sorted(os.listdir(directory)):
+        lowered = filename.lower()
+        if not lowered.endswith(('.jar', '.jar.disabled')):
+            continue
+        path = os.path.join(directory, filename)
+        if not os.path.isfile(path) or os.path.islink(path):
+            continue
+        info = read_mod_metadata(path) or {}
+        mixin_configs = []
+        try:
+            with zipfile.ZipFile(path) as archive:
+                mixin_configs = [name.casefold() for name in archive.namelist()
+                                 if name.casefold().endswith('.mixins.json')]
+        except (OSError, ValueError, zipfile.BadZipFile):
+            pass
+        mods.append({
+            'file': filename,
+            'modId': str(info.get('id') or ''),
+            'name': str(info.get('name') or filename),
+            'environment': info.get('environment', 'unknown'),
+            'description': str(info.get('description') or '').strip(),
+            'disabled': lowered.endswith('.disabled'),
+            'path': path,
+            'mixinConfigs': mixin_configs,
+        })
+
+    # 日志是主要证据来源:优先本次启动日志,失败再退回 crash-reports 里的最新一份。
+    log_text = ''
+    try:
+        raw = read_server_log(server, tail=1200, game_dir=game_dir)
+        if not str(raw).startswith('('):
+            log_text = str(raw)
+    except Exception:
+        pass
+    # A failed JVM can be terminated before its console log has fully drained.
+    # Forge writes the crash report first: include that report when it belongs
+    # to this exact launch, rather than falling back only for an empty log.
+    try:
+        from launcher_app.servers.server_host_client import managed_status
+        from datetime import datetime
+        state = managed_status(item['path'], probe=False) or {}
+        started_at = state.get('startedAt')
+        started = datetime.fromisoformat(started_at).timestamp() if started_at else None
+        crashes = os.path.join(item['path'], 'crash-reports')
+        if os.path.isdir(crashes):
+            reports = sorted(f for f in os.listdir(crashes) if f.endswith('.txt'))
+            if reports:
+                newest = os.path.join(crashes, reports[-1])
+                if (not os.path.islink(newest)
+                        and (started is None and not log_text
+                             or started is not None and os.path.getmtime(newest) >= started)):
+                    with open(newest, encoding='utf-8', errors='replace') as stream:
+                        log_text += '\n' + stream.read(512 * 1024)
+    except (OSError, ValueError, TypeError):
+        pass
+
+    result = build_diagnosis(mods, redact_text(log_text) if log_text else '')
+    by_file = {row['file']: row for row in mods}
+    for row in result['suggestions']:
+        row['modId'] = by_file.get(row['file'], {}).get('modId') or ''
+    return result
+
+
+def install_mod(slug: str, instance: str, version: str = "",
+                game_dir: str | None = None,
+                progress_callback: Callable | None = None) -> str:
+    """给某实例安装 Mod(按实例的加载器 + 基础版本过滤)"""
+    game_dir = _gd(game_dir)
+    inst = next((i for i in scan_instances(game_dir) if i["id"] == instance), None)
+    if inst is None:
+        return f"错误:没有实例 {instance}(可用 list_instances 查看)"
+    loader = inst["loader"]
+    if loader not in ("fabric", "forge", "neoforge", "quilt"):
+        return f"错误:{instance} 不是 Mod 实例(加载器:{loader or '原版'})"
+    gv = inst["base"]
+    mods_dir = os.path.join(game_dir, "versions", instance, "mods")
+    filename = download_mod(slug, gv, loader, mods_dir, version_number=version or None,
+                            progress_callback=progress_callback,
+                            strict=os.path.isfile(os.path.join(game_dir, 'diagnostic_snapshots', instance, 'constraint.json')))
+    if filename:
+        if slug in _SHADER_SLUGS:
+            # 光影要按它声明的 Sodium 版本配套装,否则会装出"进世界必崩"的组合
+            _install_shader_dependencies(slug, gv, loader, mods_dir)
+        return f"已安装 {filename} 到 {instance}"
+    return (f"错误:{slug} 没有 {gv}+{loader} 的"
+            f"{'指定版本' if version else '可用'}版本")
+
+
+def _resolve_slug(name: str) -> str:
+    """中文名 → Modrinth slug(查本地库);英文 slug / 已是 slug 的原样返回"""
+    name = name.strip()
+    if not name:
+        return name
+    from launcher_app.resources.mod_cn import find_slugs_by_cn, has_cjk
+    if has_cjk(name):
+        hits = find_slugs_by_cn(name)
+        if hits:
+            return hits[0]
+    return name
+
+
+def install_mods(slugs: list[str] | str, instance: str, game_dir: str | None = None,
+                 progress_callback: Callable | None = None) -> str:
+    """批量给实例安装多个 Mod(一次调用装完,省 AI 工具轮数)。
+    slugs 支持中文名(如 钠/锂/玉/JEI)或英文 slug;可传 list,也可传逗号分隔字符串。
+    逐项报告成功/失败,返回汇总。"""
+    game_dir = _gd(game_dir)
+    if isinstance(slugs, str):
+        slugs = [s.strip() for s in slugs.replace("，", ",").split(",") if s.strip()]
+    slugs = [s for s in (slugs or []) if str(s).strip()]
+    if not slugs:
+        return "错误:没有要安装的 Mod"
+    inst = next((i for i in scan_instances(game_dir) if i["id"] == instance), None)
+    if inst is None:
+        return f"错误:没有实例 {instance}(可用 list_instances 查看)"
+    loader = inst["loader"]
+    if loader not in ("fabric", "forge", "neoforge", "quilt"):
+        return f"错误:{instance} 不是 Mod 实例(加载器:{loader or '原版'})"
+    gv = inst["base"]
+    mods_dir = os.path.join(game_dir, "versions", instance, "mods")
+
+    def dl_one(s: str) -> str:
+        slug = _resolve_slug(str(s))
+        filename = download_mod(slug, gv, loader, mods_dir, progress_callback=progress_callback,
+                                strict=os.path.isfile(os.path.join(_gd(game_dir), 'diagnostic_snapshots', instance, 'constraint.json')))
+        if filename:
+            return f"• {slug}: 已安装 {filename} ✅"
+        return f"• {slug}: 错误:没有 {gv}+{loader} 的可用版本 ❌"
+
+    # 并行下载(最多 4 个同时下),结果按输入顺序汇总
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    results = {}
+    if len(slugs) <= 1:
+        for s in slugs:
+            results[str(s)] = dl_one(s)
+    else:
+        with ThreadPoolExecutor(max_workers=min(4, len(slugs))) as ex:
+            futs = {ex.submit(dl_one, s): s for s in slugs}
+            for f in as_completed(futs):
+                s = futs[f]
+                try:
+                    results[s] = f.result()
+                except Exception as e:
+                    results[s] = f"• {s}: 安装失败:{type(e).__name__}: {e} ❌"
+    lines = [results[str(s)] for s in slugs]
+    ok = sum(1 for l in lines if "已安装" in l)
+    # 光影装完后按声明补齐/锁定 Sodium:放在并行下载之后做,避免和下载线程抢同一文件
+    for s in slugs:
+        if "已安装" not in results.get(str(s), ""):
+            continue
+        slug = _resolve_slug(str(s))
+        if slug in _SHADER_SLUGS:
+            _install_shader_dependencies(slug, gv, loader, mods_dir)
+    return f"共 {len(slugs)} 个,成功 {ok} 个:\n" + "\n".join(lines)
+
+
+def _disable_conflicting_sodium_jars(mods_dir: str, keep_name: str,
+                                     status: Callable = print) -> None:
+    """把 mods 里其它版本的 Sodium 改成 .disabled(可回退)。
+
+    两个 Sodium 并存时加载哪个取决于文件名顺序,极易复现"一进世界就崩";
+    这里只动 sodium-neoforge-/sodium-fabric-/sodium-forge- 这类本体 jar,
+    不会误伤 sodium-extra 等附属模组。
+    """
+    try:
+        names = os.listdir(mods_dir)
+    except OSError:
+        return
+    for name in names:
+        lowered = name.lower()
+        if lowered == keep_name.lower() or not lowered.endswith(".jar"):
+            continue
+        if not any(marker in lowered for marker in _SODIUM_JAR_MARKERS):
+            continue
+        try:
+            os.replace(os.path.join(mods_dir, name),
+                       os.path.join(mods_dir, name + ".disabled"))
+            status(f"已停用版本不匹配的 {name}(改名 .disabled,可回退)")
+        except OSError:
+            pass
+
+
+def _install_shader_dependencies(shader_slug: str, version: str, loader: str,
+                                 mods_dir: str, status: Callable = print) -> None:
+    """按光影声明的 required 依赖安装「锁定版本」的 Sodium。
+
+    Iris 与 Sodium 必须精确配对:Modrinth 上 Iris 的每个 release 都钉了 Sodium 版本
+    (例如 iris 1.8.12 → sodium mc1.21.1-0.6.13)。若像以前那样 iris 与 sodium 各自
+    取最新,就会装出 iris 找不到 Sodium 内部类、进世界即崩的组合。
+    """
+    try:
+        info = get_mod_version(shader_slug, version, loader)
+    except Exception:
+        return
+    for dep in (info or {}).get("dependencies", []) or []:
+        if dep.get("dependency_type") != "required":
+            continue
+        if dep.get("project_id") != SODIUM_PROJECT_ID:
+            continue
+        version_id = dep.get("version_id")
+        if not version_id:
+            status("提示:该光影未钉 Sodium 版本,请自行确认两者兼容")
+            continue
+        try:
+            filename = download_mod("sodium", version, loader, mods_dir,
+                                    version_number={"id": version_id})
+        except Exception as exc:
+            status(f"光影依赖 Sodium 安装失败:{type(exc).__name__}: {exc}")
+            continue
+        if filename:
+            status(f"已按光影要求安装 Sodium:{filename}")
+            _disable_conflicting_sodium_jars(mods_dir, filename, status)
+
+
+def install_instance(version: str, loader: str = "", loader_version: str = "",
+                     shader: bool = False, optimize: bool = False,
+                     fabric_api_version: str | None = None,
+                     game_dir: str | None = None, status: Callable = print,
+                     progress_callback: Callable | None = None) -> str:
+    """创建实例:原版本体 + (可选)加载器 + (可选)Fabric API/光影/优化 Mod。
+    加载器版本留空 = 自动用最新。成功返回实例 id。"""
+    version = (version or "").strip()
+    if not version:
+        return "错误:需要指定游戏版本(如 1.21.1)"
+    loader = (loader or "").strip().lower()
+    if loader and loader not in ("fabric", "forge", "neoforge", "quilt"):
+        return f"错误:不支持的加载器 {loader}(可选 fabric/forge/neoforge/quilt,留空=原版)"
+    game_dir = _gd(game_dir)
+    try:
+        ensure_base(version, game_dir, status_callback=status, progress_callback=progress_callback)
+    except Exception as e:
+        return f"错误:原版 {version} 下载失败:{e}"
+    instance_id = version
+    if loader:
+        try:
+            instance_id = install_loader(loader, version, game_dir,
+                                         loader_version=loader_version or None,
+                                         status_callback=status)
+        except Exception as e:
+            return f"错误:{loader} 加载器安装失败:{e}"
+        mods_dir = os.path.join(game_dir, "versions", instance_id, "mods")
+        mr_loader = loader
+        # Fabric API(绝大多数 Fabric 模组的前置;指定版本时自动装)
+        if loader == "fabric" and fabric_api_version:
+            try:
+                filename = download_mod("fabric-api", version, "fabric", mods_dir,
+                                        version_number=fabric_api_version or None)
+                status(f"Fabric API:{filename or '无可用版本'}")
+            except Exception as e:
+                status(f"Fabric API 下载失败:{e}")
+        if shader or optimize:
+            if shader and mr_loader:
+                slug = SHADER_MODS.get(mr_loader)
+                if slug:
+                    download_mod(slug, version, mr_loader, mods_dir)
+                    # 光影能否生效取决于它声明的 Sodium 版本,必须按声明装,
+                    # 不能和 optimize 里"各自取最新"的 Sodium 混着来。
+                    _install_shader_dependencies(slug, version, mr_loader,
+                                                 mods_dir, status)
+            if optimize and mr_loader:
+                for slug in OPTIMIZE_MODS.get(mr_loader, []):
+                    if shader and slug == "sodium":
+                        continue   # sodium 已按光影依赖锁定,避免版本冲突
+                    download_mod(slug, version, mr_loader, mods_dir)
+    return f"实例就绪:{instance_id}"
+
+
+def install_modpack(slug_or_url: str, instance_name: str = "",
+                    game_dir: str | None = None,
+                    progress_callback: Callable | None = None) -> str:
+    """下载并导入整合法包(Modrinth 项目类型 modpack,即 .mrpack)。
+
+    用法/时机:用户想"装一个整合包"且给的是 Modrinth 链接/slug 时直接下载导入成新实例
+    (自动装基础版+加载器+整合包全部 mod)。若整合包不在 Modrinth 上,返回明确提示,
+    让用户用网盘/官方链接手动下载,再引导(可配合安装引导)。
+
+    - slug_or_url: Modrinth 整合包 slug 或完整链接(如 https://modrinth.com/modpack/smithing)。
+    - instance_name: 可选,自定义实例名(不传用整合包名)。
+    """
+    import os as _os
+    from launcher_app.resources.modpack import import_modpack
+    from launcher_app.resources.modrinth import (download_modpack, get_modpack_file, get_project,
+                          resolve_modpack_ref)
+    gd = _gd(game_dir)
+    ref = resolve_modpack_ref(slug_or_url)
+    if not ref:
+        return ("错误:无法识别整合包引用(需要 Modrinth 链接或 slug,"
+                "如 https://modrinth.com/modpack/smithing)。可先用 search_modpacks 搜。")
+    try:
+        proj = get_project(ref)
+    except Exception as e:
+        return (f"错误:Modrinth 上找不到整合包 {ref}({type(e).__name__}: {e})。"
+                "它可能不在 Modrinth —— 把下载链接/网盘链接给用户,让 TA 手动下载后"
+                "用启动器的「导入整合包」或告诉我路径由我来配置。")
+    if proj.get("project_type") != "modpack":
+        return (f"错误:{proj.get('title')} 不是整合包(项目类型是 {proj.get('project_type')})。"
+                "整合包在 Modrinth 项目类型为 modpack;若想装单个 Mod 请用 install_mod。")
+    # 确定要用的 .mrpack 文件(不指定版本 → 最新)
+    try:
+        info = get_modpack_file(ref)
+    except Exception as e:
+        return f"错误:获取整合包 {ref} 的下载信息失败:{type(e).__name__}: {e}"
+    if not info:
+        return (f"错误:{proj.get('title')} 没有可下载的 .mrpack 文件。"
+                "可能需要向作者申请权限或手动下载,请把官方下载链接给用户。")
+    from launcher_app.resources.pack_downloads import new_download_directory
+    work = new_download_directory(gd)
+    try:
+        local = download_modpack(ref, work, progress_callback=progress_callback)
+    except Exception as e:
+        return f"错误:下载整合包 {ref} 失败:{type(e).__name__}: {e}"
+    if not local:
+        return f"错误:{proj.get('title')} 下载失败(无可用文件)。"
+    try:
+        # instance_name 为空 → import_modpack 默认用包名/文件名
+        inst = import_modpack(local, gd, instance_id=instance_name or None,
+                              status_callback=print,
+                              progress_callback=progress_callback)
+    except Exception as e:
+        # 导入失败可能是同名实例;兜底给友好提示
+        return (f"错误:导入整合包失败:{type(e).__name__}: {e}。"
+                f"已存在同名实例时请自定义 instance_name。原包已保留：{local}")
+    return (f"整合包导入完成:{inst}({info.get('version_number', '最新')}, {proj.get('title')})"
+            f"\n原包已保留，可分享给朋友：{local}")
+
+
+def backup_instance(instance: str, game_dir: str | None = None) -> str:
+    """备份某实例(存档 zip + 模组列表 txt),返回备份位置"""
+    return f"已备份到:{_backup_impl(instance, _gd(game_dir))}"
+
+
+def launch_game(instance: str, game_dir: str | None = None) -> str:
+    from launcher_app.instances.diagnostic_tools import diagnostic_launch
+    return diagnostic_launch(instance, game_dir)
+
+
+from launcher_app.instances.diagnostic_tools import (snapshot_instance, restore_instance_snapshot, list_instance_snapshots,
+                              inspect_mod_jar, set_mod_enabled, observe_game,
+                              find_compatible_mod_versions, find_compatible_mod_replacement,
+                              replace_mod_version, compare_instance_snapshot,
+                              inspect_instance_core)
+
+
+def send_game_command(instance: str, command: str, game_dir: str | None = None,
+                      as_player: str = "") -> str:
+    """向运行中的游戏发送指令(如 /summon zombie)。
+
+    优先走 bridge-mod 本地指令口(正式方案,100% 精确反馈);
+    实例 .bridge/token.txt 存在时用 bridge,否则回退 RCON 通道。
+    游戏内 /ai 传入 as_player 时只能走 bridge，以确保命令永远按发起玩家
+    身份执行，不能退化为 RCON 控制台身份。"""
+    import os as _os
+    import json as _json
+    import time as _time
+    from launcher_app.instances.game_command import send_bridge_command, send_game_command as _rcon_impl
+    gd = _gd(game_dir)
+    token_path = _os.path.join(paths.bridge_dir(instance, gd), "token.txt")
+    if _os.path.isfile(token_path):
+        return send_bridge_command(instance, command, gd, as_player=as_player)
+    if as_player:
+        # Forge 1.16.5 bridge 使用文件交换而非 TCP token。请求来自游戏内 AI
+        # 时必须保持玩家身份；只有存在这个协议文件才尝试，绝不降级为 RCON 控制台。
+        bridge_dir = paths.bridge_dir(instance, gd)
+        req_path = _os.path.join(bridge_dir, "command_request.json")
+        reply_path = _os.path.join(bridge_dir, "command_reply.json")
+        if _os.path.isdir(bridge_dir):
+            seq = _time.time_ns()
+            cmd = command.strip()
+            if not cmd.startswith("/"):
+                cmd = "/" + cmd
+            req = {"seq": seq, "command": cmd, "as_player": as_player}
+            tmp_path = req_path + ".tmp"
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    _json.dump(req, f, ensure_ascii=False)
+                _os.replace(tmp_path, req_path)
+                deadline = _time.monotonic() + 8.0
+                while _time.monotonic() < deadline:
+                    try:
+                        with open(reply_path, encoding="utf-8") as f:
+                            reply = _json.load(f)
+                        if int(reply.get("seq", -1)) == seq:
+                            try:
+                                _os.remove(reply_path)
+                            except OSError:
+                                pass
+                            result = str(reply.get("result") or "")
+                            return ("✅ 已执行: " if reply.get("success") else "⚠️ 命令未执行: ") + result
+                    except (OSError, ValueError, TypeError):
+                        pass
+                    _time.sleep(0.15)
+                return "游戏内 bridge 指令通道超时：请确认已进入世界后重试。"
+            except OSError as e:
+                try:
+                    if _os.path.exists(tmp_path):
+                        _os.remove(tmp_path)
+                except OSError:
+                    pass
+                return f"写入游戏内指令请求失败: {e}"
+        return ("游戏内指令需要 bridge-mod 正在运行，无法安全降级为控制台执行。\n"
+                "请进世界后重试；若已进世界，请在「我的版本 → 一键配置」更新 bridge-mod。")
+    return _rcon_impl(instance, command, gd)
+
+
+def get_command_guide(mc_version: str) -> str:
+    """按游戏版本返回指令指南(指令要点 + NBT/组件写法 + 核心模板)。
+    生成指令前先调用,避免版本语法错误(1.13 指令改版 / 1.20.5 物品组件 / 老版本数字 id)。"""
+    from launcher_app.ai.command_templates import version_guide
+    return version_guide(mc_version)
+
+
+def get_key_bindings(instance: str, query: str, game_dir: str | None = None) -> str:
+    """查询按键绑定(bridge-mod 导出):
+    - 输入按键(如 空格/左Shift/W/32) → 返回该键绑了哪些操作(含 mod,一键多操作全列出)
+    - 输入功能(如 前进/攻击/背包/JEI) → 返回对应按键
+    数据由 bridge-mod 进游戏后自动导出,改键自动刷新。"""
+    from launcher_app.core.key_bindings import query_keybindings
+    return query_keybindings(_gd(game_dir), instance, query)
+
+
+def get_recipe_path(item: str, count: int = 1, instance: str | None = None,
+                    game_dir: str | None = None, brief: bool = True,
+                    recipe_index: int = 0) -> str:
+    """查询合成配方。默认返回精简版(只列直接配方一层,省 token);
+    brief=False 时返回 EMI 风格完整配方:先列出该物品全部合成方式
+    (工作台/熔炉/机器,recipe_index 选第 N 种,默认第 1 种),
+    再套娃展开合成树 + 材料总账。item 支持中文名(如 终极感应供应器)。
+    instance 缺省时自动探测。数据来源:jar 旁路(直接读 mod jar 配方,无需进游戏)
+    + bridge 导出(实际生效,覆盖 jar)。"""
+    import launcher_app.resources.recipe_graph as recipe_graph
+    gd = _gd(game_dir)
+    rd = recipe_graph.load_recipe_data(gd, instance)
+    if rd is None:
+        # 收敛:明确告诉 AI 哪个实例有/缺数据,避免它反复试其它工具
+        have = recipe_graph.instances_with_recipe_data(gd)
+        if have:
+            return (f"还没有{instance or '指定'}实例的配方数据,但以下实例有:"
+                    f"{', '.join(have)}。请用 instance 参数指定其中一个再查;"
+                    f"装了 mod 的实例通常无需进游戏(旁路直接读 jar 配方)。")
+        return ("还没有任何实例的配方数据:装 bridge-mod 进一次世界会自动导出配方"
+                "到 .bridge/recipes.json;已装 mod 的实例也可以直接读 jar 配方。"
+                "不要重复调用其它工具,直接告诉用户这一步即可。")
+    src = {"bridge+jar": "jar 旁路 + bridge 导出", "jar": "jar 旁路(无需进游戏)",
+           "bridge": f"bridge 导出({rd.exported_at})"}.get(
+        getattr(rd, "source_kind", "bridge"), "bridge")
+    head = f"【数据:{rd.source_instance} · {src}】\n"
+    if brief:
+        return head + rd.quick_recipe(item)
+    return head + rd.describe_recipe(item, count, recipe_index=recipe_index)
+
+
+def compare_items(attribute: str, top_n: int = 10, game_dir: str | None = None) -> str:
+    """比较物品参数,返回最强的 N 个。
+    attribute 支持:武器伤害 / 护甲 / 护甲韧性 / 攻速 / 挖掘等级 等。"""
+    import launcher_app.resources.recipe_graph as recipe_graph
+    rd = recipe_graph.load_bridge_data(_gd(game_dir))
+    if rd is None:
+        return ("该实例未导出物品属性数据(.bridge/items.json)——较老版本的 bridge-mod 不导出此项。"
+                "我若凭通用知识/模型判断,结果【可能不准确】。请告诉用户:该版本的物品属性比较仅供参考。")
+    rows = rd.compare_items(attribute, top_n)
+    if not rows:
+        return f"没有找到属性 {attribute} 的数据"
+    key = list(rows[0].keys())[1]
+    return "\n".join(f"{r['item']}  →  {key} = {r[key]}" for r in rows)
+
+
+def set_setting(key: str, value: str, game_dir: str | None = None) -> str:
+    if key.startswith(('browser_', 'ai_web_', 'third_party_plugins_', 'cloud_drive_')):
+        return '浏览器连接、令牌与网页访问域名只能由用户在设置页修改。'
+    s = load_settings()
+    if key not in s:
+        return f"错误:未知设置 {key}(可用 get_settings 查看)"
+    old = s[key]
+    if isinstance(old, bool):
+        s[key] = value.strip().lower() in ("1", "true", "yes", "开", "on")
+    elif isinstance(old, int):
+        try:
+            s[key] = int(value)
+        except ValueError:
+            return f"错误:{key} 需要整数"
+    else:
+        s[key] = value
+    if key == "game_dir":
+        paths.set_game_dir(s[key])   # 改游戏目录:立即全局生效
+    save_settings(s)
+    return f"{key} = {s[key]}"
+
+
+def resolve_mc_name(query: str, instance: str | None = None, game_dir: str | None = None) -> str:
+    """本地把物品/生物/效果/附魔的中文/口语/英文叫法解析成【规范英文名 + id】。
+    用于查 wiki/资料库前先归一化(如 苦力怕 → Creeper/minecraft:creeper),检索命中更准。
+    读实例 mods jar + 版本 jar 的 lang 文件(zh_cn/en_us),外置原版常见词表兜底。"""
+    from launcher_app.ai.mc_names import resolve_mc_name as _r
+    return _r(query, game_dir=_gd(game_dir), instance=instance)
+
+
+def translate_mod_desc(slug: str, game_version: str = "", loader: str = "") -> str:
+    """翻译 Mod 描述(英→中,本地 AI;缓存优先,失败显示原文)。
+    用于:用户问"这个 mod 是干什么的/什么意思"时,取详情并翻成中文。
+    slug 支持中文名(自动解析为 Modrinth slug)。"""
+    slug = _resolve_slug(slug)
+    try:
+        p = get_project(slug)
+    except Exception as e:
+        return f"错误:获取 {slug} 详情失败:{type(e).__name__}: {e}"
+    desc = (p.get("description") or "").strip()
+    title = p.get("title") or slug
+    if not desc:
+        return f"{title}({slug}):该 Mod 没有描述"
+    from launcher_app.resources.mod_translate import translate_text_safe
+    r = translate_text_safe(desc, slug=slug, field="description")
+    head = f"{title}({slug})\n"
+    note = "\n(机翻仅供参考)" if (r["translated"] and r["machine"]) else ""
+    return head + r["text"] + note
+
+
+def repair_instance_core(instance: str, status_callback=None):
+    from launcher_app.instances.instance_maintenance import perform
+    return perform(paths.GAME_DIR, instance, 'repair_core', status=status_callback)
+
+
+def complete_instance_files(instance: str, status_callback=None):
+    from launcher_app.instances.instance_maintenance import perform
+    return perform(paths.GAME_DIR, instance, 'complete_files', status=status_callback)
+
+
+def reset_instance(instance: str, status_callback=None):
+    from launcher_app.instances.instance_maintenance import perform
+    return perform(paths.GAME_DIR, instance, 'reset', status=status_callback)
+
+
+# 工具名 → 实现函数(供 assistant 工具调用注册)
+TOOL_FUNCS = {
+    'compare_instance_snapshot': compare_instance_snapshot,
+    'inspect_instance_core': inspect_instance_core,
+    'snapshot_instance': snapshot_instance,
+    'restore_instance_snapshot': restore_instance_snapshot,
+    'list_instance_snapshots': list_instance_snapshots,
+    'inspect_mod_jar': inspect_mod_jar,
+    'set_mod_enabled': set_mod_enabled,
+    'observe_game': observe_game,
+    'find_compatible_mod_versions': find_compatible_mod_versions,
+    'find_compatible_mod_replacement': find_compatible_mod_replacement,
+    'replace_mod_version': replace_mod_version,
+    'launch_game': launch_game,
+    'repair_instance_core': repair_instance_core,
+    'complete_instance_files': complete_instance_files,
+    'reset_instance': reset_instance,
+    "list_instances": list_instances,
+    "list_mods": list_mods,
+    "search_mods": search_mods,
+    "search_modpacks": search_modpacks,
+    "resolve_mod_concept": resolve_mod_concept,
+    "read_instance_log": read_instance_log,
+    "read_crash_report": read_crash_report,
+    "get_settings": get_settings,
+    "read_public_webpage": read_public_webpage,
+    'browse_cloud_share': browse_cloud_share,
+    'download_cloud_archive': download_cloud_archive,
+    "install_mod": install_mod,
+    "install_mods": install_mods,
+    "install_instance": install_instance,
+    "install_modpack": install_modpack,
+    "backup_instance": backup_instance,
+    "set_setting": set_setting,
+    "send_game_command": send_game_command,
+    "get_command_guide": get_command_guide,
+    "get_key_bindings": get_key_bindings,
+    "get_recipe_path": get_recipe_path,
+    "compare_items": compare_items,
+    "translate_mod_desc": translate_mod_desc,
+    "resolve_mc_name": resolve_mc_name,
+
+    # ---- 其他资源（光影包/资源包） ----
+    "search_resource_packs": search_resource_packs,
+    "search_shaders": search_shaders,
+    "list_resource_packs": list_resource_packs,
+    "list_shaders": list_shaders,
+    "install_resource_pack": install_resource_pack,
+    "install_shader": install_shader,
+}

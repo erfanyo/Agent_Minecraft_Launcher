@@ -1,13 +1,13 @@
 import zipfile
 import pytest
-from export_modpack import PackExportDialog
+from launcher_app.resources.export_modpack import PackExportDialog
 
 pytestmark = pytest.mark.ui
 
 
 @pytest.mark.parametrize('format', ['zip', 'curseforge', 'mrpack'])
 def test_export_runs_in_worker_and_reports_to_status_ball(hub, qtbot, tmp_path, monkeypatch, format):
-    monkeypatch.setattr('ui_notifications.notifications_enabled', lambda: True)
+    monkeypatch.setattr('launcher_app.ui.ui_notifications.notifications_enabled', lambda: True)
     source = tmp_path / 'instance'
     (source / 'config').mkdir(parents=True)
     file = source / 'config/example.txt'
@@ -28,7 +28,7 @@ def test_export_runs_in_worker_and_reports_to_status_ball(hub, qtbot, tmp_path, 
 
 
 def test_existing_export_is_not_overwritten(hub, qtbot, tmp_path, monkeypatch):
-    monkeypatch.setattr('ui_notifications.notifications_enabled', lambda: True)
+    monkeypatch.setattr('launcher_app.ui.ui_notifications.notifications_enabled', lambda: True)
     source = tmp_path / 'source'
     source.mkdir()
     dialog = PackExportDialog('实例', str(source))

@@ -7,7 +7,7 @@ MCP Server 插件(默认关闭):把启动器工具暴露给外部 AI 宿主(MCP 
 """
 import threading
 
-from ui_style import muted_color
+from launcher_app.ui.ui_style import muted_color
 
 PLUGIN_ID = "mcp_server"
 PLUGIN_NAME = "MCP Server"
@@ -25,11 +25,11 @@ def _get_server(port: int):
     global _srv
     with _srv_lock:
         if _srv is None:
-            from mcp_server import MCPHttpServer
+            from launcher_app.browser.mcp_server import MCPHttpServer
             _srv = MCPHttpServer("127.0.0.1", port)
         elif _srv.port != port:
             _srv.stop()
-            from mcp_server import MCPHttpServer
+            from launcher_app.browser.mcp_server import MCPHttpServer
             _srv = MCPHttpServer("127.0.0.1", port)
         return _srv
 

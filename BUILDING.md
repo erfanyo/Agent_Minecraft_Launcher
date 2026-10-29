@@ -1,5 +1,8 @@
 # 构建与发布
 
+业务源码位于 `launcher_app/`，测试位于 `tests/unit/` 和 `tests/ui/`；
+根目录启动入口与构建命令保持原样，详见 [源码目录说明](docs/source-layout.md)。
+
 Windows 是当前正式发布平台。发布环境固定使用 **Python 3.14.7** 和
 `requirements-release.txt` 中锁定的依赖版本。`v0.7.0` 已用这套组合生成可启动的
 单文件程序；正式发布仍必须通过本文件中的成品启动检查，不能只判断进程是否仍存在。
@@ -17,7 +20,7 @@ Windows 是当前正式发布平台。发布环境固定使用 **Python 3.14.7**
 ```powershell
 py install 3.14.7
 py -V:3.14 -m venv .venv-release
-.\.venv-release\Scripts\python.exe -m pip install -r requirements-release.txt
+.\.venv-release\Scripts\python.exe -m pip install -r requirements-release.txt -r requirements-test.txt
 ```
 
 ## 本地验证包
@@ -25,6 +28,9 @@ py -V:3.14 -m venv .venv-release
 ```powershell
 .\build_release.ps1 -NoSign
 ```
+
+本轮（2026-10-29）暂不发布预装模型 ZIP，使用 `./build_release.ps1 -NoSign -SkipLocalAI`。
+手动 CI 的 `include_local_ai` 缺省为 false；源码与 UI 检查仍完整运行，Windows 标准版和 Linux 包照常验证。本地模型支持和 llama.cpp 运行组件保留，仅跳过 GGUF 下载及预装模型 ZIP；不改模型选型。重新需要时可在手动 CI 勾选该输入。
 
 脚本会依次运行完整测试、准备并校验 llama.cpp 与 bridge-mod、构建 exe、实际启动成品做
 无界面检查，并生成两个 Windows 版本及 `dist/SHA256SUMS.txt`。本地 AI ZIP 会自动下载
@@ -72,3 +78,10 @@ WSL 的准备、自动测试和 WSLg 界面测试见 `WSL_TESTING.md`。
 
 Linux 测试包也可在 Linux 环境中运行 `bash tools/build_linux.sh` 构建。正式 Linux
 兼容包以 CI 的 Ubuntu 22.04 产物为准；不要使用较新的本地发行版替代正式构建环境。
+# CurseForge 发行版凭证
+
+2026-10-28 用户提供官方邮件答复：允许 AMCL 将获批应用 Key 内置到桌面二进制、排除公开源码；没有据此批准下载中转后端。授权邮件原件私人保留，不随源码或安装包发布。
+
+Windows/Linux spec 自动读取 CI secret `AMCL_RELEASE_CURSEFORGE_KEY`，或本机忽略目录 `.secrets/curseforge-api-key.txt`。不通过命令行传 Key，不从普通用户配置自动取值；缺省不注入，源码构建继续自行配置。发行版中用户自定义 Key 优先，内置 Key 不回填配置或设置输入框。
+
+构建仅在 PyInstaller 内存代码缓存中替换公开空壳模块。使用每次构建独立随机掩码、SHA256 派生字节流、压缩和字节置乱，避免明文字符串与生成源码落盘；这是混淆，无法阻止有能力的用户从运行时提取。内置值纳入通用日志脱敏，不加 UPX/重型保护壳，以免增加杀软误报。私有 Key 输入和整个 build 工作目录均按敏感材料处理，不能发布构建缓存；只发布已验证的成品。轮换 Key 需重新构建。

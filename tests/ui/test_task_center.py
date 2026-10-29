@@ -4,8 +4,8 @@ import threading
 import pytest
 from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtWidgets import QPushButton
-from ui_tokens import set_theme_mode, current_token
-from ui_style import refresh_theme
+from launcher_app.ui.ui_tokens import set_theme_mode, current_token
+from launcher_app.ui.ui_style import refresh_theme
 
 pytestmark = pytest.mark.ui
 
@@ -132,7 +132,7 @@ def test_workflow_phase_success_is_not_overall_success(hub):
 
 
 def test_download_controller_forwards_large_byte_counters(hub, qtbot):
-    from task_controllers import DownloadTaskController
+    from launcher_app.core.task_controllers import DownloadTaskController
     controller = DownloadTaskController(hub)
     progress = []
     controller.progress.connect(lambda done, total: progress.append((done, total)))
@@ -268,7 +268,7 @@ def test_expansion_positions_avoid_ball_and_stay_in_main_window(hub, x, y):
 
 
 def test_collapse_fades_after_half_and_restores_opacity(hub, qtbot):
-    from ui_anim import set_animations_enabled
+    from launcher_app.ui.ui_anim import set_animations_enabled
     from PySide6.QtCore import QAbstractAnimation
     set_animations_enabled(True)
     task = hub.begin_task('动画测试')
@@ -284,3 +284,70 @@ def test_collapse_fades_after_half_and_restores_opacity(hub, qtbot):
     hub.show_task(task)
     qtbot.waitUntil(lambda: hub.details._animation.state() == QAbstractAnimation.State.Stopped)
     assert hub.details.isVisible() and hub.details.windowOpacity() == 1
+
+
+@pytest.mark.parametrize('window_name', ['details', 'card'])
+def test_minimizing_owner_hides_tools_and_preserves_pending_work(hub, qtbot, window_name):
+    answers, cancelled = [], []
+    task = hub.begin_task('最小化测试', cancel=lambda: cancelled.append(True))
+    if window_name == 'card':
+        hub.request_confirmation(task, '确认', '继续？', [('继续', True)], answers.append)
+    else:
+        hub.show_task(task)
+    tool = getattr(hub, window_name)
+    assert tool.parentWidget() is hub.owner
+    assert tool.isVisible()
+    hub.owner.showMinimized()
+    qtbot.waitUntil(lambda: not tool.isVisible())
+    assert answers == [] and cancelled == []
+    assert hub.tasks[task].state == 'running'
+    hub.owner.showNormal()
+    qtbot.waitUntil(lambda: hub.owner.isVisible() and not hub.owner.isMinimized())
+    hub.present()
+    assert tool.isVisible()
+    assert answers == [] and cancelled == []
+
+
+def test_new_confirmation_stays_queued_while_owner_minimized(hub, qtbot):
+    hub.owner.showMinimized()
+    answers = []
+    task = hub.begin_task('后台确认')
+    hub.request_confirmation(task, '确认', '继续？', [('继续', True)], answers.append)
+    assert not hub.card.isVisible()
+    assert len(hub._requests) == 1 and answers == []
+    hub.owner.showNormal()
+    hub.present()
+    assert hub.card.isVisible()
+    choose(hub)
+    assert answers == [True]
+
+
+@pytest.mark.parametrize('window_name', ['details', 'card'])
+def test_ball_hides_tool_without_cancelling(hub, qtbot, window_name):
+    answers, cancelled = [], []
+    task = hub.begin_task('收起测试', cancel=lambda: cancelled.append(True))
+    if window_name == 'card':
+        hub.request_confirmation(task, '确认', '继续？', [('继续', True)], answers.append)
+    else:
+        hub.show_task(task)
+    tool = getattr(hub, window_name)
+    qtbot.mouseClick(hub.ball, Qt.MouseButton.LeftButton)
+    assert not tool.isVisible()
+    assert cancelled == [] and answers == []
+    hub.present()
+    assert tool.isVisible()
+
+
+def test_owner_hide_interrupts_animation_and_restores_geometry(hub, qtbot):
+    from launcher_app.ui.ui_anim import set_animations_enabled
+    from PySide6.QtCore import QVariantAnimation
+    set_animations_enabled(True)
+    task = hub.begin_task('动画测试')
+    hub.show_task(task)
+    target = hub.details._expanded_geometry
+    assert hub.details._animation.state() == QVariantAnimation.State.Running
+    hub.owner.hide()
+    assert not hub.details.isVisible()
+    assert hub.details._animation.state() == QVariantAnimation.State.Stopped
+    assert hub.details.geometry() == target
+    assert hub.details.windowOpacity() == 1.0

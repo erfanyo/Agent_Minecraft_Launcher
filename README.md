@@ -24,6 +24,16 @@
 
 ## ✨ 功能一览
 
+### 整合包引导与开放接口（规划）
+
+计划通过游戏内 Mod 与启动器联动，提供结合实际配方、任务进度和资料来源的整合包引导，
+以及界面解释、结构投影和分阶段搭建。**1.7.10 Forge、1.12.2 Forge 是必须覆盖的目标版本**，
+与现代版本分阶段适配和验收；这不代表上述功能或全部版本现已可用。
+
+同时计划为 **AI 通关 MC 挑战、多 AI 角色协作、玩家像 RTS 一样指挥角色**预留观察、
+行动、任务调度、控制权、权限和过程记录接口。这些属于后续可能用法，尚未实现；
+详见 [bridge-mod 引导与角色控制扩展规划](bridge-mod/README.md)。
+
 ### 🧠 AI 助手(核心特色)
 - 停靠式对话面板,内置 **DeepSeek** 配置,也支持 **Ollama / LM Studio** 本地模型
 - **工具调用**:AI 能直接操作启动器——
@@ -44,6 +54,7 @@
 
 ### 🔌 Mod 管理
 - Modrinth 中文搜索(如搜"玉"能找到 Jade)、按版本/加载器过滤
+- 资源中心支持 Modrinth / CurseForge 混合浏览与独立来源筛选；CurseForge 支持 Mod、整合包、光影、数据包和资源包，整合包导入新实例，数据包安装到选定存档。
 - 推荐 Mod 列表、每个 Mod 的版本选择、Mod 卡片二级菜单
 - **Mod 依赖网络**:实例管理里一键画出该实例 mod 间的"谁依赖谁 / 谁冲突"(离线解析 jar 元数据,标缺失依赖;力导向图可拖拽缩放)
 - **收藏夹**:下载 Mod 时一键收藏(连同所选版本),收藏页按文件夹管理、拖卡片跨夹复制
@@ -77,7 +88,8 @@
 
 ### 下载状态与反馈日志
 - 下载详情支持取消和重试。取消在下载分块、解压和 Forge 补丁步骤中生效；正在等待网络响应时需等待响应或超时。重试复用校验通过的文件。
-- 整合包导入未完成时保留文件，并暂不列入可启动实例；重新导入同一个压缩包可以继续补齐。CF 清单未下载的 Mod 会明确报未完成。
+- 整合包导入未完成时保留文件，并暂不列入可启动实例；重新导入同一个压缩包可以继续补齐。CurseForge 清单使用设置中获批的 API Key 下载精确文件版本并校验；Mod、资源包、光影按类型安装。文件下载支持 ForgeCDN 候选地址和 MCIM 镜像回退，镜像请求不携带 API Key；仍失败时显示缺失清单和官方链接，监测下载目录、校验文件后复制到实例并继续安装。
+- 支持带完整组件补丁的 MultiMC / Prism 导出包：保留自定义主类、JVM 参数、Tweaker、本地补丁库及 Java 版本要求。缺少组件补丁的包会明确提示，不能按普通 ZIP 当作完整支持。
 - 实例改名同步修改 ID、安装目录及同名版本文件，并更新继承引用、保留基础 MC 版本；运行游戏或安装时暂不可改名。启动准备在后台执行，窗口保持可操作。
 - 下载成功显示绿色勾，失败显示红色 X；点击下载球可查看原因。网络不稳时会提示“连热点试试？”，拒绝访问、文件不存在、磁盘空间不足等有各自的建议。
 - 通用文件下载入口会先尝试首个地址两次，再按下载策略尝试备用源；不代表所有第三方接口都有相同重试次数。
@@ -179,16 +191,33 @@ bridge-mod 的旧版实现不是产品阉割版：会尽量提供完整能力；
 ## 📁 项目结构(简述)
 
 ```
-main.py              主窗口(AI 面板 / 版本树 / 下载 / Mod)
-download_tab.py      下载新实例向导
-instance_manager.py  实例管理 / 运行配置 / 备份
-recipe_graph.py      配方分析(套娃合成树 + 中文索引)
-agent_tools.py       AI 工具层(文本进→文本出,CLI 与 AI 共用)
-assistant.py         AI 对话 + 工具调用 + 权限
-bridge_mod_dist.py   bridge-mod 分发(离线打 exe / 在线 GitHub)
-bridge-mod/          自制 Mod 源码(MultiLoader:fabric + neoforge)
-cli.py               命令行入口
+main.py                  图形界面启动入口
+cli.py                   命令行入口
+ci_smoke.py              跨平台导入与打包资源检查入口
+paths.py                 数据目录与资源路径约定
+launcher_app/
+  ai/                    AI 对话、模型、工具与路由
+  browser/               浏览器桥接、配置与 MCP
+  core/                  账号、任务、备份、更新等基础模块
+  extensions/            插件接口、网页宿主与技能管理
+  features/              随本体发布的正式功能（联机、辅助资源、浏览器等）
+  instances/             游戏实例、安装、启动与诊断
+  resources/             模组、整合包、下载、导入与配方
+  runtime/               Java、进程、内存与系统运行组件
+  servers/               服务端安装、运行与导出
+  ui/                    界面组件、页面与主题
+settings/                设置存储与设置界面
+os_platform/             操作系统适配
+tests/unit/              单元与功能测试
+tests/ui/                界面交互测试
+tools/                   构建、验证与维护工具
+plugins/                 可选扩展（当前随仓库提供 MCP Server）
+plugins_templates/       示例与实验代码，不自动加载
+bridge-mod/              Minecraft 桥接 Mod
 ```
+
+目录约定、完整包名和测试命令见 [源码目录说明](docs/source-layout.md)。
+正式能力与插件的边界见 [本体功能说明](docs/builtin-features.md)。
 
 ## 🧑‍💻 命令行 CLI
 
@@ -206,7 +235,7 @@ python cli.py log neoforge-21.1.248
 
 ```bash
 # 1) 启动服务器(默认端口 8765,服务 AMCL/models/ 目录)
-.venv\Scripts\python.exe dev_model_server.py          # 或指定端口
+.venv\Scripts\python.exe -m launcher_app.ai.dev_model_server  # 或指定端口
 
 # 2) 另开终端,设置环境变量后跑启动器/测试 —— 模型下载自动走本地,不走公网
 $env:AML_MODEL_MIRROR = "http://127.0.0.1:8765"

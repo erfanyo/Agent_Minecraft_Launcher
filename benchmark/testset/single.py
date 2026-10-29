@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from ai_testset import (
+from launcher_app.ai.ai_testset import (
     _any_of, _contains, _instance_from_list, _slug_anywhere, _mc_version,
 )
 
@@ -120,7 +120,7 @@ def cases_by_tag() -> dict:
 
 
 if __name__ == "__main__":
-    import ai_testset
+    import launcher_app.ai.ai_testset as ai_testset
     bad = 0
     for c in CASES:
         tool = c["expect_tool"][0]

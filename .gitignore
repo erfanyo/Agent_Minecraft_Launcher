@@ -47,6 +47,7 @@ private_key*
 
 # 用户配置(本地个性化设置)
 config.json
+.secrets/
 AMCL/
 
 # DSH ���Բ���
@@ -71,4 +72,11 @@ dist_*/
 dist_*.zip
 output/
 tmp/
+
+# 本地关联项目、维护资料、历史成品与制作输出
+related-projects/
+local-maintenance/
+archives/
+outputs/
+00-工作区入口/
 

@@ -12,7 +12,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from ai_testset import _contains, _instance_from_list
+from launcher_app.ai.ai_testset import _contains, _instance_from_list
 
 # 模糊指令:expect_tool = 合理工具集(任一命中即算走对了路);expect_args 多为空(只看方向)
 CASES = [
@@ -79,7 +79,7 @@ def cases_by_tag() -> dict:
 
 
 if __name__ == "__main__":
-    import ai_testset
+    import launcher_app.ai.ai_testset as ai_testset
     bad = 0
     for c in CASES:
         tool = c["expect_tool"][0]

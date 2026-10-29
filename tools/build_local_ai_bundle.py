@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-import model_registry
+import launcher_app.ai.model_registry as model_registry
 
 
 SHORTCUT_BAT = r'''@echo off

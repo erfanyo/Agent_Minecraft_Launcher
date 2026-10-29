@@ -42,7 +42,7 @@ def main():
     frozen = root / 'frozen-baseline'
     if frozen.exists() or (root / 'live-results.json').exists():
         raise ValueError('This trial run already exists; do not overwrite results')
-    import diagnostic_tools as diagnostic
+    import launcher_app.instances.diagnostic_tools as diagnostic
     baseline_hashes = diagnostic._inventory(str(original))
     shutil.copytree(original, frozen)
     import paths
@@ -58,14 +58,14 @@ def main():
         folder.mkdir(parents=True, exist_ok=True)
         return str(folder)
     paths.data_dir = data_dir
-    import ai_run
+    import launcher_app.ai.ai_run as ai_run
     ai_run.data_dir = data_dir
-    import agent_tools
-    from assistant import TOOLS
-    from skill_manager import SkillManager
-    from game_launch_service import GameLaunchService
-    from instances import scan_instances
-    from log_privacy import redact
+    import launcher_app.ai.agent_tools as agent_tools
+    from launcher_app.ai.assistant import TOOLS
+    from launcher_app.extensions.skill_manager import SkillManager
+    from launcher_app.instances.game_launch_service import GameLaunchService
+    from launcher_app.instances.instances import scan_instances
+    from launcher_app.core.log_privacy import redact
     results = []
     for number, fault in enumerate(('duplicate', 'missing_class'), 1):
         identity = f'live-trial-{number}'
@@ -163,7 +163,7 @@ def main():
                 if name in ('replace_mod_version', 'set_mod_enabled') and not snapshotted:
                     raise ValueError('Create a trial snapshot first')
                 if name == 'set_mod_enabled' and not args.get('enabled'):
-                    from safe_paths import safe_component
+                    from launcher_app.core.safe_paths import safe_component
                     safe_component(args['filename'])
                     target = folder / 'mods' / args['filename']
                     if not target.is_file() or sum(digest(p) == digest(target) for p in (folder / 'mods').glob('*.jar')) < 2:

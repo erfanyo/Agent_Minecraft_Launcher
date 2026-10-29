@@ -1,24 +1,6 @@
 {
   "plugins": [
     {
-      "name": "hello",
-      "title": "示例",
-      "version": "0.2.0",
-      "description": "演示注册一个 AI 工具 + 一个设置项 + 一个页面 + 一个技能(完整的插件示例)。",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/hello.py"
-    },
-    {
-      "name": "lan_bridge",
-      "title": "联机",
-      "version": "0.5.0",
-      "description": "启用后自动下载陶瓦和 EasyTier；可用陶瓦大厅编号或虚拟局域网跨启动器联机。",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/lan_bridge.py"
-    },
-    {
       "name": "mcp_server",
       "title": "MCP Server",
       "version": "0.2.0",
@@ -26,69 +8,6 @@
       "author": "erfanyo",
       "repo": "erfanyo/Agent_Minecraft_Launcher",
       "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/mcp_server.py"
-    },
-    {
-      "name": "performance_monitor",
-      "title": "性能监控",
-      "version": "0.1.0",
-      "description": "监听游戏日志并注册一个 AI 工具,可查询实时 FPS / 警告 / 运行状态。",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/performance_monitor.py"
-    },
-    {
-      "name": "create_schematics",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "title": "投影原理图 (Create)",
-      "version": "1.0.0",
-      "description": "管理机械动力(Create)的投影原理图目录:导入/删除 .nbt,打开目录。",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/create_schematics.py"
-    },
-    {
-      "name": "hotai_patches",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "title": "Hotai 补丁查看",
-      "version": "1.0.0",
-      "description": "只读列出实例 hotai/ 目录里已生效的 .badiff 补丁,方便确认补丁有没有打上。",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/hotai_patches.py"
-    },
-    {
-      "name": "kubejs_tools",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "title": "KubeJS 工具",
-      "version": "1.0.0",
-      "description": "浏览 KubeJS 脚本并定位报错(只读)。脚本报错会让服务端直接启动失败,这里可以跳到出错的那一行。",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/kubejs_tools.py"
-    },
-    {
-      "name": "tacz_gunpacks",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "title": "枪包 (TACZ)",
-      "version": "1.0.0",
-      "description": "管理永恒枪械工坊(TaCZ)的枪包目录:导入/删除枪包,打开目录。",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/tacz_gunpacks.py"
-    },
-    {
-      "name": "tlm_packs",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "title": "车万女仆模型包",
-      "version": "1.0.0",
-      "description": "管理 Touhou Little Maid 的自定义模型包目录:导入/删除模型包。",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/tlm_packs.py"
-    },
-    {
-      "name": "ysm_skins",
-      "author": "erfanyo",
-      "repo": "erfanyo/Agent_Minecraft_Launcher",
-      "title": "皮肤 (YSM)",
-      "version": "1.0.0",
-      "description": "管理 Yes Steve Model 的皮肤目录:导入/删除皮肤,打开实例的 ysm 文件夹。",
-      "download_url": "https://raw.githubusercontent.com/erfanyo/Agent_Minecraft_Launcher/main/plugins/ysm_skins.py"
     }
   ]
 }

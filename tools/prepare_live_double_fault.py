@@ -44,7 +44,7 @@ def main():
 
     import paths
     paths.set_game_dir(str(game))
-    from agent_tools import install_mod
+    from launcher_app.ai.agent_tools import install_mod
     installed = install_mod("iris", args.instance, game_dir=str(game))
     if not installed.startswith("已安装 "):
         raise RuntimeError(installed)

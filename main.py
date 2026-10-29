@@ -7,8 +7,8 @@ Agent Minecraft Launcher — 阶段 1 · 启动核心
 - 安装所选版本:客户端 jar + 依赖库 + 资源文件(镜像加速 + sha1 校验)
 - 启动游戏:自动准备 Java → 拼启动命令 → 拉起进程 → 实时显示游戏日志
 """
-from ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
-from task_center import task_question, task_choice
+from launcher_app.ui.ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
+from launcher_app.ui.task_center import task_question, task_choice
 import base64
 import json
 import os
@@ -19,7 +19,7 @@ if __name__ == '__main__' and '--amcl-java-probe' in sys.argv:
     _probe_index = sys.argv.index('--amcl-java-probe')
     _probe_java = sys.argv[_probe_index + 1]
     _probe_output = sys.argv[_probe_index + 2]
-    from java_manager import java_version_probe
+    from launcher_app.runtime.java_manager import java_version_probe
     _probe_major, _probe_error = java_version_probe(_probe_java)
     with open(_probe_output, 'w', encoding='utf-8') as _probe_file:
         json.dump({'major': _probe_major, 'error': _probe_error}, _probe_file, ensure_ascii=False)
@@ -47,22 +47,22 @@ if __name__ == '__main__' and not _CI_STARTUP_SMOKE:
     except Exception:
         pass
 if __name__ == '__main__' and '--amcl-memory-relief' in sys.argv:
-    from memory_relief import main as memory_relief_main
+    from launcher_app.runtime.memory_relief import main as memory_relief_main
     raise SystemExit(memory_relief_main(sys.argv[sys.argv.index('--amcl-memory-relief') + 1]))
 # Dispatch before importing Qt or constructing the launcher in the helper process.
 if __name__ == '__main__' and '--amcl-plugin-web-window' in sys.argv:
-    from plugin_web_worker import main as web_window_main
+    from launcher_app.extensions.plugin_web_worker import main as web_window_main
     raise SystemExit(web_window_main())
 if __name__ == '__main__' and '--amcl-server-host' in sys.argv:
-    from server_host import main as server_host_main
+    from launcher_app.servers.server_host import main as server_host_main
     _server_host_index = sys.argv.index('--amcl-server-host')
     raise SystemExit(server_host_main(sys.argv[_server_host_index + 1:]))
 import time
 from datetime import datetime
 
 import requests
-from log_privacy import redact_text
-from downloader import failure_advice
+from launcher_app.core.log_privacy import redact_text
+from launcher_app.resources.downloader import failure_advice
 
 from PySide6.QtCore import Qt, QSize, QTimer, QFileSystemWatcher, QEvent, QRectF, QPoint, QLockFile
 from PySide6.QtGui import (QColor, QCursor, QGuiApplication, QFont, QIcon, QImageReader, QPainter,
@@ -96,31 +96,31 @@ from PySide6.QtWidgets import (
     QDockWidget,
 )
 
-import updater  # 自动更新(检查 GitHub 新版本 / 下载 / 替换)
-from bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
-from task_controllers import DownloadTaskController, VersionManifestController
-from background_tasks import BackgroundTask
-from assistant import AIChatDock, AI_DOCK_RETURN_MIME, permission_instructions  # AI 助手(右侧停靠对话栏)
-from ai_actions import plain_language_instructions
-from download_indicator import DownloadDetailWidget, DownloadIndicator  # 左下角下载指示器
-from updater_dialog import UpdateDialog  # 检查更新对话框(独立模块)
-from download_tab import DownloadTab  # 下载新实例选项卡(左侧菜单 + 分类面板)
-from fetch_versions import fetch_version_detail, fetch_version_manifest  # 网络模块
-import i18n  # 界面语言(跟随系统,可设置覆盖)
-from i18n import t
-from instance_install_service import InstanceInstallService
-from game_launch_service import GameLaunchService, LoginRequiredError
-from game_process_controller import GameProcessController
-from crash_diagnostics import collect_crash_report, detect_crash
-from instance_catalog_service import InstanceCatalogService
-from modpack import import_modpack as import_modpack_file  # 整合包导入
-from modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
+import launcher_app.core.updater as updater  # 自动更新(检查 GitHub 新版本 / 下载 / 替换)
+from launcher_app.core.bridge_mod_dist import BRIDGE_MOD_VERSION  # bridge-mod 当前版本
+from launcher_app.core.task_controllers import DownloadTaskController, VersionManifestController
+from launcher_app.core.background_tasks import BackgroundTask
+from launcher_app.ai.assistant import AIChatDock, AI_DOCK_RETURN_MIME, permission_instructions  # AI 助手(右侧停靠对话栏)
+from launcher_app.ai.ai_actions import plain_language_instructions
+from launcher_app.ui.download_indicator import DownloadDetailWidget, DownloadIndicator  # 左下角下载指示器
+from launcher_app.ui.updater_dialog import UpdateDialog  # 检查更新对话框(独立模块)
+from launcher_app.resources.download_tab import DownloadTab  # 下载新实例选项卡(左侧菜单 + 分类面板)
+from launcher_app.resources.fetch_versions import fetch_version_detail, fetch_version_manifest  # 网络模块
+import launcher_app.core.i18n as i18n  # 界面语言(跟随系统,可设置覆盖)
+from launcher_app.core.i18n import t
+from launcher_app.instances.instance_install_service import InstanceInstallService
+from launcher_app.instances.game_launch_service import GameLaunchService, LoginRequiredError
+from launcher_app.runtime.game_process_controller import GameProcessController
+from launcher_app.instances.crash_diagnostics import collect_crash_report, detect_crash
+from launcher_app.instances.instance_catalog_service import InstanceCatalogService
+from launcher_app.resources.modpack import import_modpack as import_modpack_file  # 整合包导入
+from launcher_app.resources.modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
 import paths  # 游戏目录(可配置,设置/引导里可改)
 from paths import GAME_DIR, RUNTIME_DIR  # 兼容旧引用(测试用);内部统一用 paths.GAME_DIR
 from os_platform.openpath import open_path  # 跨平台打开文件/文件夹(替代 os.startfile)
 from settings import load_settings, save_settings  # 启动器配置
-from skill_manager import SkillManager, SkillManagerDialog  # 技能(运行时辅助)系统
-from version_tree import fill_version_tree  # 版本树构建(与下载选项卡共用)
+from launcher_app.extensions.skill_manager import SkillManager, SkillManagerDialog  # 技能(运行时辅助)系统
+from launcher_app.ui.version_tree import fill_version_tree  # 版本树构建(与下载选项卡共用)
 
 
 def application_icon() -> QIcon:
@@ -198,16 +198,16 @@ class MainWindow(QMainWindow):
             self.instance_installer.game_dir_for,
         )
         # 预留:自定义配色主题(以后 UI 可能出自定义配色方案)。从设置读 ui_custom_colors 应用。
-        from ui_style import load_theme_from_settings
+        from launcher_app.ui.ui_style import load_theme_from_settings
         load_theme_from_settings(self.settings)
-        from ui_anim import set_animations_enabled
+        from launcher_app.ui.ui_anim import set_animations_enabled
         set_animations_enabled(self.settings.get("ui_animations_enabled", True))
         i18n.set_language(self.settings.get("language", "auto"))  # 界面语言(跟随系统/设置)
 
         # ---- 语言包(第三方/玩梗语言):加载 内置语言包 + AMCL/languages/*.json + 插件注册的包 ----
         # 语言包 = 用 {"原文": "替换文本"} 覆盖启动器所有文本;可选,切换后重启生效。
         try:
-            import i18n as _i18n
+            import launcher_app.core.i18n as _i18n
             import os as _os
             _n = 0
             # ① 内置产品数据语言包(仓库根 languages/,如机翻生成的 en/fr/es...json)
@@ -217,8 +217,11 @@ class MainWindow(QMainWindow):
             _user_dir = paths.data_dir("languages")
             _n += _i18n.load_packs_from_dir(_user_dir)
             _lang = self.settings.get("language", "auto")
-            if _lang in _i18n.list_packs():
-                _i18n.set_language(_lang)
+            # Resolve auto again after packs load, so English systems also use
+            # the bundled English overlay rather than only the legacy table.
+            _i18n.set_language(_lang)
+            QApplication.instance().setLayoutDirection(
+                Qt.LayoutDirection.RightToLeft if _i18n.is_rtl() else Qt.LayoutDirection.LeftToRight)
             print(f"[语言包] 内置+用户共加载 {_n} 个(内置:{_bundle_dir}, 用户:{_user_dir});当前语言 {_i18n.get_language()}")
         except Exception as e:
             print(f"[语言包] 加载异常:{type(e).__name__}: {e}")
@@ -227,8 +230,10 @@ class MainWindow(QMainWindow):
         # 被禁用的插件(settings["plugins_disabled"])跳过;默认关闭的插件需显式启用。
         # 提前到这里装载(先于 设置中心/技能管理器 创建),让插件登记内容立即可见。
         try:
-            import plugin_manager
-            _loaded = plugin_manager.load_all(self.settings)
+            import launcher_app.extensions.plugin_manager as plugin_manager
+            _loaded = plugin_manager.load_all(self.settings, include_builtin=True)
+            from launcher_app.features.registry import FEATURE_IDS
+            print(f"[本体] 注册 {len(FEATURE_IDS)} 项功能")
             print(f"[插件] 装载 {len([k for k, v in _loaded.items() if v])} 个插件")
         except Exception as e:
             print(f"[插件] 装载异常:{type(e).__name__}: {e}")
@@ -238,13 +243,13 @@ class MainWindow(QMainWindow):
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         if sys.platform.startswith(('linux', 'win')):
             self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        from frameless_titlebar import FramelessTitleBar
+        from launcher_app.ui.frameless_titlebar import FramelessTitleBar
         self._running_instances = set()
         self._running_label = QLabel("")     # 放在标题栏(悬停看具体实例)
         self._running_label.setMaximumWidth(160)
-        self._server_running_label = QLabel('尚未启动服务端')
+        self._server_running_label = QLabel(t('尚未启动服务端'))
         self._server_running_label.setMaximumWidth(160)
-        self._server_running_label.setToolTip('显示由 AMCL 托管的运行中服务端')
+        self._server_running_label.setToolTip(t('显示由 AMCL 托管的运行中服务端'))
         self._server_running_task = None
         running_status = QWidget()
         running_status_layout = QHBoxLayout(running_status)
@@ -256,21 +261,19 @@ class MainWindow(QMainWindow):
                                            trailing_widget=running_status)
         self._ai_focus_mode = False
         self._ai_transition = None
-        self.ai_mode_button = QPushButton("AI 模式")
-        self.ai_mode_button.setToolTip("进入全屏对话工作台")
-        self.online_button = QPushButton("联机")
-        self.online_button.setToolTip("联机方案中心")
-        self.settings_button = QPushButton("设置")
-        self.settings_button.setToolTip("启动器设置")
+        self.ai_mode_button = QPushButton(t('AI 模式'))
+        self.ai_mode_button.setToolTip(t('进入全屏对话工作台'))
+        self.online_button = QPushButton(t('联机'))
+        self.online_button.setToolTip(t('联机方案中心'))
+        self.settings_button = QPushButton(t('设置'))
+        self.settings_button.setToolTip(t('启动器设置'))
         self.title_nav = QWidget(self.title_bar)
         nav_layout = QHBoxLayout(self.title_nav)
         nav_layout.setContentsMargins(0, 0, 0, 0)
-        nav_layout.setSpacing(12)
-        for button, width in ((self.ai_mode_button, 110),
-                              (self.online_button, 84),
-                              (self.settings_button, 84)):
+        nav_layout.setSpacing(8)
+        for button in (self.ai_mode_button, self.online_button, self.settings_button):
             button.setProperty('titleNav', True)
-            button.setFixedSize(width, 28)
+            button.setFixedSize(110, 28)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             nav_layout.addWidget(button)
         self.title_bar.set_center_widget(self.title_nav)
@@ -287,7 +290,7 @@ class MainWindow(QMainWindow):
         # 相关方法(load_versions/import_modpack/open_game_dir/clear_instances/open_update_dialog)仍保留可调用。
 
         # ---- Tab「我的实例」:仿 PCL2 首页(左 1/3 登录+当前选择+启动按钮,右 2/3 实例/更新日志/动态) ----
-        from version_home import VersionHome
+        from launcher_app.ui.version_home import VersionHome
         tab_a = VersionHome()
         self.home_panel = tab_a                     # 保留引用,便于刷新登录显示等
         self.instance_list = tab_a.instance_list    # 版本列表(兼容旧引用:右键/视图/双击)
@@ -304,6 +307,8 @@ class MainWindow(QMainWindow):
         tab_a.login_changed.connect(self._on_login_changed)
         tab_a.one_click_config_requested.connect(self._one_click_config_kind)
         tab_a.import_modpack_requested.connect(self.import_modpack)
+        from launcher_app.ui.browser_downloads import start_cloud_browser_import
+        tab_a.import_cloud_requested.connect(lambda: start_cloud_browser_import(self))
         tab_a.open_resources_requested.connect(self._open_resource_page)
         tab_a.tutorial_requested.connect(self.open_tutorial)
         # 左侧「实例详情」大按钮:客户端实例 → 实例详情页;服务端 → 服务端详情页
@@ -311,7 +316,7 @@ class MainWindow(QMainWindow):
         tab_a.smart_import_requested.connect(self._smart_import_path)
 
         # ---- 「下载新资源」综合入口:左侧菜单 + 首页/实例/Mod/光影/数据包/资源包 ----
-        from resource_center import ResourceCenter
+        from launcher_app.ui.resource_center import ResourceCenter
         # 版本清单由 MainWindow.load_versions 统一加载，避免下载页构造时重复请求。
         self.resource_center = ResourceCenter(auto_load_versions=False)
         self.resource_center.set_ui_mode(self.settings.get("ui_mode", "beginner"))
@@ -328,27 +333,27 @@ class MainWindow(QMainWindow):
         # 右键菜单:实例(启动/打开目录/删除)
         self.instance_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.instance_list.customContextMenuRequested.connect(self._instance_menu)
-        from folder_instance_import import start_import
+        from launcher_app.resources.folder_instance_import import start_import
         self.instance_list.folders_dropped.connect(lambda folders: start_import(self, folders))
 
         # ---- 主选项卡(我的实例 / 共用详情 / 下载新资源) ----
         self.main_tabs = QTabWidget()
-        from ui_style import tab_style, card_btn_style, set_style
+        from launcher_app.ui.ui_style import tab_style, card_btn_style, set_style
         set_style(self.main_tabs, tab_style)   # 外层标签页:圆角+字体放大(14px)
         self.main_tabs.addTab(tab_a, t("MY_INSTANCES"))
         self._my_inst_tab_idx = 0   # 「我的实例」= 主标签第 0 页(拖入文件 → 当作整合包安装)
         # 客户端与服务端详情共用一个顶层标签页。
-        from instance_manager import InstanceManagerDialog
+        from launcher_app.ui.instance_manager import InstanceManagerDialog
         self.instance_details = InstanceManagerDialog()
         self.instance_details.setObjectName("instance_details")
         tab_a.instance_selected.connect(self._on_instance_selected)
-        from server_details import ServerDetailsView
+        from launcher_app.servers.server_details import ServerDetailsView
         self.server_details = ServerDetailsView()
         self.server_details.setObjectName("server_details")
         tab_a.server_center.selection_changed.connect(self._on_server_selected)
         tab_a.server_center.running_changed.connect(lambda _running: self._scan_running_servers())
         self.details_stack = QStackedWidget()
-        self.details_placeholder = QLabel("请先在“我的实例”中选择一个实例或服务端。")
+        self.details_placeholder = QLabel(t('请先在“我的实例”中选择一个实例或服务端。'))
         self.details_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.details_stack.addWidget(self.details_placeholder)
         self.details_stack.addWidget(self.instance_details)
@@ -356,20 +361,20 @@ class MainWindow(QMainWindow):
         self._details_tab_idx = self.main_tabs.addTab(self.details_stack, t("INSTANCE_DETAILS"))
         self.main_tabs.addTab(self.resource_center, t("RESOURCES"))
         # 联机使用非模态独立窗口，不参与主窗口 Dock 布局。
-        from online_center import OnlineCenter
+        from launcher_app.ui.online_center import OnlineCenter
         from PySide6.QtWidgets import QDialog
         self.online_dock = QDialog(self, Qt.WindowType.Window)
-        self.online_dock.setWindowTitle("联机 · AMCL")
+        self.online_dock.setWindowTitle(t('联机 · AMCL'))
         self.online_dock.setModal(False)
         self.online_dock.resize(960, 720)
         self.online_dock.setMinimumSize(560, 400)
         self.online_dock.setSizeGripEnabled(True)
-        from ui_style import current_color
+        from launcher_app.ui.ui_style import current_color
         set_style(self.online_dock, lambda: (
             f'QDialog {{ background: {current_color("bg1")}; }}'))
         online_window_layout = QVBoxLayout(self.online_dock)
         online_window_layout.setContentsMargins(0, 0, 0, 0)
-        from ui_background import BackgroundWidget
+        from launcher_app.ui.ui_background import BackgroundWidget
         self.online_surface = BackgroundWidget(self.online_dock)
         self.online_surface.setMinimumWidth(0)
         online_body = QVBoxLayout(self.online_surface)
@@ -388,7 +393,7 @@ class MainWindow(QMainWindow):
 
         # ---- 插件注册的主标签页(与下载新资源平级) ----
         try:
-            import plugin_manager
+            import launcher_app.extensions.plugin_manager as plugin_manager
             for _label, _build in plugin_manager.MAIN_TABS:
                 try:
                     self.main_tabs.addTab(_build(), _label)
@@ -404,12 +409,12 @@ class MainWindow(QMainWindow):
         self._log_feedback_setup()
 
         # ---- 组装整个窗口(背景引擎:BackgroundWidget 垫底画壁纸+遮罩)----
-        from ui_background import BackgroundWidget
+        from launcher_app.ui.ui_background import BackgroundWidget
         central = BackgroundWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.main_tabs)
-        from ai_focus_mode import AIFocusSidebar
+        from launcher_app.ai.ai_focus_mode import AIFocusSidebar
         self.ai_focus_sidebar = AIFocusSidebar(self)
         self.ai_focus_sidebar.installEventFilter(self)
         self.settings_page = BackgroundWidget()
@@ -431,7 +436,7 @@ class MainWindow(QMainWindow):
         # ---- 全局键盘导航(遥控器式):顶部分类标签 左右切换;当前页左菜单 上下切换;Enter 进入分项 ----
         # 焦点在实例列表/按钮/输入框等"自己会消费按键"的控件上时不抢键(防回归)。
         try:
-            from keyboard_nav import install_global_nav
+            from launcher_app.ui.keyboard_nav import install_global_nav
 
             def _current_page_menu(win):
                 """返回当前主标签页内的左菜单(QWidget)或 None。"""
@@ -445,7 +450,7 @@ class MainWindow(QMainWindow):
                     if m is not None:
                         return m
                 # 兜底:递归找一个 LeftMenu
-                from left_menu import LeftMenu
+                from launcher_app.ui.left_menu import LeftMenu
                 return page.findChild(LeftMenu)
 
             install_global_nav(self, _current_page_menu)
@@ -545,8 +550,10 @@ class MainWindow(QMainWindow):
         self._dl_progress = (0, 1)
         # 下载球 = 悬浮球:置顶、可拖动,默认在内容区右下角(AI 子窗口左侧、主窗口侧外部)
         self.dl_indicator = DownloadIndicator(self._background)
-        from task_center import TaskCenter
+        from launcher_app.ui.task_center import TaskCenter
         self.task_center = TaskCenter(self.dl_indicator, self)
+        from launcher_app.ui.import_recovery import ImportRecoveryController
+        self._import_recovery = ImportRecoveryController(self, self.task_center)
         self.dl_indicator.clicked.connect(self.open_download_detail)
         self.dl_indicator.shown.connect(self._place_download_ball)
         self.dl_indicator.show()
@@ -567,7 +574,7 @@ class MainWindow(QMainWindow):
         # 启动阶段结束标记。详情页已改为「用户点开才显示」的覆盖层,不再需要在
         # 这里挡住自动挂载;保留该标记供外部/测试判断窗口是否已完成初始化。
         self._ui_ready = True
-        from ui_anim import install_interaction_feedback
+        from launcher_app.ui.ui_anim import install_interaction_feedback
         self._interaction_feedback = install_interaction_feedback(self)
         # 窗口大小/位置:放在最后恢复,确保其它控件已建好、不会在显示过程中被挤压
         self._restore_window_geometry()
@@ -594,7 +601,7 @@ class MainWindow(QMainWindow):
         self._central_stack.setCurrentWidget(self.settings_page)
         self._update_mode_button()
         self._recompute_wallpaper()
-        from ui_anim import reveal
+        from launcher_app.ui.ui_anim import reveal
         reveal(self.settings_page)
 
     def _close_settings(self):
@@ -614,7 +621,7 @@ class MainWindow(QMainWindow):
         self.dl_indicator.setVisible(saved['download_visible'])
         self._update_mode_button()
         self._recompute_wallpaper()
-        from ui_anim import reveal
+        from launcher_app.ui.ui_anim import reveal
         reveal(self._central_stack.currentWidget())
 
     def _on_mode_button_clicked(self):
@@ -626,20 +633,20 @@ class MainWindow(QMainWindow):
     def _update_mode_button(self):
         other_page = self._settings_open
         if other_page:
-            self.ai_mode_button.setText('主页')
-            self.ai_mode_button.setToolTip('返回当前模式的主页')
+            self.ai_mode_button.setText(t('主页'))
+            self.ai_mode_button.setToolTip(t('返回当前模式的主页'))
         elif self._ai_focus_mode:
-            self.ai_mode_button.setText('常规模式')
-            self.ai_mode_button.setToolTip('退出 AI 模式')
+            self.ai_mode_button.setText(t('常规模式'))
+            self.ai_mode_button.setToolTip(t('退出 AI 模式'))
         else:
-            self.ai_mode_button.setText('AI 模式')
-            self.ai_mode_button.setToolTip('进入全屏对话工作台')
+            self.ai_mode_button.setText(t('AI 模式'))
+            self.ai_mode_button.setToolTip(t('进入全屏对话工作台'))
 
     def _on_settings_applied(self):
         """设置窗口保存后:刷新本窗口与各处联动。"""
         s = self.settings_center.settings
         self.settings = s
-        from ui_anim import set_animations_enabled
+        from launcher_app.ui.ui_anim import set_animations_enabled
         set_animations_enabled(s.get("ui_animations_enabled", True))
         self.ai_dock.apply_settings(s)
         self.skill_mgr.settings = s
@@ -652,7 +659,7 @@ class MainWindow(QMainWindow):
     def _on_visual_settings_changed(self):
         """颜色/壁纸/动画自动保存后只刷新外观，避免重扫实例和重载 AI。"""
         self.settings = self.settings_center.settings
-        from ui_style import (set_theme_mode, apply_global_dark_palette,
+        from launcher_app.ui.ui_style import (set_theme_mode, apply_global_dark_palette,
                               popup_menu_style, refresh_theme)
         set_theme_mode(self.settings.get('ui_theme', 'system'))
         apply_global_dark_palette(QApplication.instance())
@@ -660,7 +667,7 @@ class MainWindow(QMainWindow):
         self.title_bar.refresh_theme()
         self._paint_title_background()
         self.ai_dock._dock_header.refresh_theme()
-        from ui_anim import set_animations_enabled
+        from launcher_app.ui.ui_anim import set_animations_enabled
         set_animations_enabled(self.settings.get("ui_animations_enabled", True))
         self.apply_background()
         self._apply_dock_separator_style()
@@ -680,9 +687,9 @@ class MainWindow(QMainWindow):
 
     def apply_background(self):
         """按设置应用背景壁纸 + 遮罩 + 面板/按钮/文本框透明化(阶段 2 · 决策 2)。"""
-        from ui_background import (load_wallpaper, mask_strength,
+        from launcher_app.ui.ui_background import (load_wallpaper, mask_strength,
                                    input_style_qss, scroll_surface_qss)
-        from ui_tokens import set_wallpaper_active, is_wallpaper_active
+        from launcher_app.ui.ui_tokens import set_wallpaper_active, is_wallpaper_active
         pix = load_wallpaper(self.settings)
         mask = mask_strength(self.settings)
         active = pix is not None
@@ -699,13 +706,13 @@ class MainWindow(QMainWindow):
         # 壁纸激活态变了 → 切换面板/按钮不透明度并全量重刷样式(否则跳过,省成本)
         if is_wallpaper_active() != active:
             set_wallpaper_active(active)
-            from ui_style import refresh_theme
+            from launcher_app.ui.ui_style import refresh_theme
             refresh_theme()
         self._apply_dock_separator_style()
 
     def _apply_dock_separator_style(self):
         """Give the AI dock a visible, generous resize seam."""
-        from ui_style import current_color
+        from launcher_app.ui.ui_style import current_color
         base = current_color('btn_border')
         hover = current_color('accent')
         self.setStyleSheet(
@@ -714,7 +721,7 @@ class MainWindow(QMainWindow):
 
     def _paint_title_background(self):
         """Keep the top dock opaque when the Linux window itself is translucent."""
-        from ui_style import current_color
+        from launcher_app.ui.ui_style import current_color
         color = QColor(current_color('bg1'))
         for widget in (self.title_dock, self.title_bar):
             palette = widget.palette()
@@ -723,7 +730,7 @@ class MainWindow(QMainWindow):
 
     def _recompute_wallpaper(self):
         """按当前中央区尺寸 + 壁纸源,重算共享壁纸(一张画布),并设置中央区与 AI dock 视口。"""
-        from ui_background import prepare_shared_wallpaper
+        from launcher_app.ui.ui_background import prepare_shared_wallpaper
         pix = getattr(self, "_wallpaper_source", None)
         mask = getattr(self, "_wallpaper_mask", 0.55)
         online = getattr(self, 'online_surface', None)
@@ -817,7 +824,7 @@ class MainWindow(QMainWindow):
                     lparam = int(msg.lParam)
                     sx = ctypes.c_short(lparam & 0xFFFF).value
                     sy = ctypes.c_short((lparam >> 16) & 0xFFFF).value
-                    from win_frameless import hit_test
+                    from launcher_app.ui.win_frameless import hit_test
                     hit = hit_test(int(self.winId()), sx, sy)
                     if hit != 1:
                         return True, hit
@@ -953,7 +960,7 @@ class MainWindow(QMainWindow):
         self._position_resize_handles()
         if sys.platform == "win32" and getattr(self, "_win_patched", False) is False:
             try:
-                from win_frameless import apply_win_styles
+                from launcher_app.ui.win_frameless import apply_win_styles
                 apply_win_styles(int(self.winId()))
                 self._win_patched = True
             except Exception:
@@ -976,7 +983,7 @@ class MainWindow(QMainWindow):
         最大化/最小化不写入记录(见 window_geometry.capture),所以这里恢复的
         始终是一个普通状态的尺寸,用户在标题栏还能自己最大化。
         """
-        import window_geometry as wg
+        import launcher_app.ui.window_geometry as wg
         try:
             target = wg.restore_target(self.settings.get(wg.SETTINGS_KEY),
                                        QApplication.screens(),
@@ -990,7 +997,7 @@ class MainWindow(QMainWindow):
     def _save_window_geometry(self):
         """关闭时保存几何;最大化/全屏时不覆盖已有记录。"""
         try:
-            import window_geometry as wg
+            import launcher_app.ui.window_geometry as wg
             geom = wg.capture(self)
             if geom is None:
                 return
@@ -1002,7 +1009,7 @@ class MainWindow(QMainWindow):
 
     def reset_window_geometry(self):
         """「恢复默认尺寸」:回到默认大小并居中(标题栏按钮调用)。"""
-        import window_geometry as wg
+        import launcher_app.ui.window_geometry as wg
         target = wg.default_geometry(QApplication.screens(),
                                      QApplication.primaryScreen())
         if self.isMaximized() or self.isFullScreen():
@@ -1019,7 +1026,7 @@ class MainWindow(QMainWindow):
         记住、绝不静默启用。这里仅在启动后调用一次。
         """
         try:
-            import plugin_prompt as pp
+            import launcher_app.extensions.plugin_prompt as pp
             installed = pp.installed_mod_names(paths.GAME_DIR)
             if not installed:
                 return
@@ -1047,12 +1054,11 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(content)
         layout.setContentsMargins(10, 5, 10, 5)
         label = QLabel(
-            f"检测到 {', '.join(item['mods'])}；插件「{item['name']}」可提供对应的管理界面。"
-            '启用后下次启动生效，也能在「设置 → 插件」里调整。')
+            t('检测到 {v0}；插件「{v1}」可提供对应的管理界面。启用后下次启动生效，也能在「设置 → 插件」里调整。').format(v0=(', '.join(item['mods'])), v1=(item['name'])))
         label.setWordWrap(True)
         layout.addWidget(label, 1)
-        enable = QPushButton('启用插件')
-        later = QPushButton('暂不启用')
+        enable = QPushButton(t('启用插件'))
+        later = QPushButton(t('暂不启用'))
         layout.addWidget(enable)
         layout.addWidget(later)
         dock.setWidget(content)
@@ -1060,7 +1066,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
 
         def finish(*, declined):
-            import plugin_prompt as pp
+            import launcher_app.extensions.plugin_prompt as pp
             data = pp.remember(load_settings(), item['id'], declined=declined)
             if not declined:
                 enabled = set(data.get('plugins_enabled', []) or [])
@@ -1085,7 +1091,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.settings_center.flush_autosave()
         if getattr(self.home_panel.server_center, '_busy', False):
-            inline_notice(self, '服务端任务尚未结束', '请等待服务端扫描、导入或补全任务结束后再关闭启动器。')
+            inline_notice(self, t('服务端任务尚未结束'), t('请等待服务端扫描、导入或补全任务结束后再关闭启动器。'))
             event.ignore()
             return
         """窗口关闭:卸载本地 AI 引擎(llama-server),确保无残留进程。"""
@@ -1113,7 +1119,7 @@ class MainWindow(QMainWindow):
         """Play the full transition before switching between launcher and AI layouts."""
         if getattr(self, '_ai_transition', None) is not None:
             return
-        from ai_focus_mode import AIFocusTransition
+        from launcher_app.ai.ai_focus_mode import AIFocusTransition
         entering = not self._ai_focus_mode
         transition = AIFocusTransition(self, entering)
         self._ai_transition = transition
@@ -1150,7 +1156,7 @@ class MainWindow(QMainWindow):
             header.archive_button.hide()
             header.float_button.hide()
             header.close_button.hide()
-            header.chat_button.setText('对话')
+            header.chat_button.setText(t('对话'))
             self._central_stack.setCurrentWidget(self.ai_focus_sidebar)
             self._central_stack.setMaximumWidth(300)
             self.ai_strip_dock.hide()
@@ -1175,7 +1181,7 @@ class MainWindow(QMainWindow):
             header.archive_button.show()
             header.float_button.show()
             header.close_button.show()
-            header.chat_button.setText('聊天')
+            header.chat_button.setText(t('聊天'))
             dock.setFeatures(saved.get('features', dock.features()))
             dock.tabs.setCurrentIndex(saved.get('tab', 0))
             if saved.get('floating'):
@@ -1218,7 +1224,7 @@ class MainWindow(QMainWindow):
         self.online_surface.set_wallpaper(
             getattr(self, '_wallpaper_source', None), getattr(self, '_wallpaper_mask', 0.55))
         if not was_visible:
-            from ui_anim import reveal
+            from launcher_app.ui.ui_anim import reveal
             QTimer.singleShot(0, lambda: reveal(self.online_surface)
                               if self.online_dock.isVisible() else None)
 
@@ -1249,14 +1255,14 @@ class MainWindow(QMainWindow):
         # 兼容显式请求旧基础知识页的调用；首次引导和设置重播均直接进入遮罩。
         if intro:
             try:
-                from tutorial_intro import TutorialIntroDialog
+                from launcher_app.ui.tutorial_intro import TutorialIntroDialog
                 if TutorialIntroDialog(self).exec() != 1:
                     return   # 用户跳过基础知识 → 不继续引导
             except Exception:
                 pass
 
-        from guide_overlay import GuideDriver
-        from tutorial_steps import first_game_steps
+        from launcher_app.ui.guide_overlay import GuideDriver
+        from launcher_app.ui.tutorial_steps import first_game_steps
         self._guide_driver = GuideDriver(self, first_game_steps())
         self._guide_driver.finished.connect(lambda: self.statusBar().showMessage("引导教程演示结束"))
         self._guide_driver.start()
@@ -1271,14 +1277,14 @@ class MainWindow(QMainWindow):
     def send_game_command_dialog(self):
         """手动给运行中的游戏发指令(如 /summon zombie)。也可在 AI 输入框直接输 / 开头。"""
         from PySide6.QtWidgets import QInputDialog
-        from game_command import send_command
-        cmd, ok = QInputDialog.getText(self, "发送游戏指令",
-                                       "输入游戏指令(如 summon zombie,可省略开头的 /):")
+        from launcher_app.instances.game_command import send_command
+        cmd, ok = QInputDialog.getText(self, t('发送游戏指令'),
+                                       t('输入游戏指令(如 summon zombie,可省略开头的 /):'))
         if not ok or not cmd.strip():
             return
         result = send_command(cmd, self)
         if "\n" in result:
-            QMessageBox.information(self, "游戏指令", result)
+            QMessageBox.information(self, t('游戏指令'), result)
         else:
             self.statusBar().showMessage(result)
 
@@ -1294,7 +1300,7 @@ class MainWindow(QMainWindow):
 
     def _build_ai_strip(self):
         """AI 被收起时贴在主窗口右边缘的超窄竖条:一个竖排「▶」按钮,点它展开。"""
-        from ui_background import BackgroundWidget
+        from launcher_app.ui.ui_background import BackgroundWidget
         self.ai_strip = BackgroundWidget()   # 窄条也透明,画共享壁纸片段
         self.ai_strip.setFixedWidth(22)
         sv = QVBoxLayout(self.ai_strip)
@@ -1302,8 +1308,8 @@ class MainWindow(QMainWindow):
         sv.setSpacing(0)
         expand_btn = QPushButton("▶")
         expand_btn.setFixedSize(22, 72)
-        expand_btn.setToolTip("展开 AI 助手")
-        from ui_style import set_style, accent_border_style
+        expand_btn.setToolTip(t('展开 AI 助手'))
+        from launcher_app.ui.ui_style import set_style, accent_border_style
         set_style(expand_btn, accent_border_style)
         expand_btn.clicked.connect(self._expand_ai)
         sv.addWidget(expand_btn)
@@ -1387,7 +1393,7 @@ class MainWindow(QMainWindow):
     def clear_instances(self):
         """清空所有实例(versions 目录),共用文件(依赖库/资源/Java)保留"""
         if action_question(
-                self, "确认", "确定要删除所有实例吗?\n(versions 目录会被清空,共用文件保留)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+                self, t('确认'), t('确定要删除所有实例吗?\n(versions 目录会被清空,共用文件保留)'), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         versions_dir = os.path.join(paths.GAME_DIR, "versions")
         if os.path.isdir(versions_dir):
@@ -1399,11 +1405,11 @@ class MainWindow(QMainWindow):
         self.refresh_instances()
         self.statusBar().showMessage("所有实例已清空")
 
-    def import_modpack(self):
+    def import_modpack(self, path=None, *, safety_checked=False):
         """导入整合包(自动识别格式:Modrinth .mrpack / CurseForge .zip / 扁平实例文件夹 zip),后台执行不卡界面"""
         if self.skill_mgr.is_enabled('smart_import') is True:
-            from smart_import_ui import start_smart_import
-            start_smart_import(self)
+            from launcher_app.ui.smart_import_ui import start_smart_import
+            start_smart_import(self, path or None, safety_checked=safety_checked)
             return
         import traceback as _tb
         DBG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -1418,15 +1424,21 @@ class MainWindow(QMainWindow):
                 pass
 
         from PySide6.QtWidgets import QInputDialog
-        path, _f = QFileDialog.getOpenFileName(
-            self, "选择整合包", "", "整合包 (*.mrpack *.zip)")
+        from launcher_app.ui.cloud_download import choose_classic_archive
+        path = path or choose_classic_archive(self)
         dbg(f"file dialog returned: {path!r}")
         if not path:
             dbg("empty path -> return")
             return
 
+        if not safety_checked:
+            from launcher_app.ui.import_safety import check_before_import
+            check_before_import(self, path, lambda prepared: self.import_modpack(
+                prepared, safety_checked=True))
+            return
+
         # 识别格式;扁平整合包(无清单的实例文件夹 zip)需要用户提供 MC 版本(可选加载器)
-        from modpack import detect_modpack_format, suggested_instance_id
+        from launcher_app.resources.modpack import detect_modpack_format, suggested_instance_id
         mc_version = None
         loader = None
         try:
@@ -1440,18 +1452,18 @@ class MainWindow(QMainWindow):
             self.home_panel.server_center.scan_import(path)
             return
         if fmt == "flat":
-            mc_version, okv = QInputDialog.getText(self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
+            mc_version, okv = QInputDialog.getText(self, t('导入扁平整合包'), t('该整合包没有清单,请填游戏版本(如 1.20.1):'))
             if not okv or not mc_version.strip():
                 return
             mc_version = mc_version.strip()
             loader, okl = QInputDialog.getItem(
-                self, "导入扁平整合包", "加载器(可选,跳过=原版):",
+                self, t('导入扁平整合包'), t('加载器(可选,跳过=原版):'),
                 ["(原版)", "fabric", "forge", "neoforge"], 0, False)
             if okl:
                 loader = None if loader == "(原版)" else loader
         elif fmt is None:
-            task_warning(self, "导入整合包",
-                                "无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)")
+            task_warning(self, t('导入整合包'),
+                                t('无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)'))
             dbg("fmt None -> warning, return")
             return
 
@@ -1462,8 +1474,8 @@ class MainWindow(QMainWindow):
             dbg(f"default_id={default_id!r}")
             if default_id and os.path.isdir(os.path.join(paths.GAME_DIR, "versions", default_id)):
                 new_id, okn = QInputDialog.getText(
-                    self, "实例名重复",
-                    f"已存在实例「{default_id}」,请为新实例命名:", text=default_id + "-2")
+                    self, t('实例名重复'),
+                    t('已存在实例「{v0}」,请为新实例命名:').format(v0=(default_id)), text=default_id + "-2")
                 if not okn or not new_id.strip():
                     dbg("name conflict -> user cancelled")
                     return
@@ -1524,7 +1536,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'task_center'):
             self._ensure_dl_overlay(create_download=True)
             self.task_center.begin_task('下载', task_id='download', cancel=self._cancel_current_task)
-        self.dl_indicator.setToolTip("下载中,点击查看详情")
+        self.dl_indicator.setToolTip(t('下载中,点击查看详情'))
         self.dl_indicator.show()
         try:
             self.download_tab.set_progress(0, 1)
@@ -1557,12 +1569,12 @@ class MainWindow(QMainWindow):
         if ok:
             self.statusBar().showMessage("下载任务完成")
             self._dl_log.append("✅ 下载任务完成")
-            self.dl_indicator.setToolTip("下载完成,点击查看详情")
+            self.dl_indicator.setToolTip(t('下载完成,点击查看详情'))
             self.dl_indicator.set_completed(True)
         else:
             self.statusBar().showMessage(f"下载失败: {error}")
             self._dl_log.append(f"❌ 下载失败: {error}")
-            self.dl_indicator.setToolTip("下载失败,点击查看详情")
+            self.dl_indicator.setToolTip(t('下载失败,点击查看详情'))
             self.dl_indicator.set_completed(False)
         self.dl_indicator.set_progress(1, 1)
         self.dl_indicator.set_completed(ok)
@@ -1571,8 +1583,11 @@ class MainWindow(QMainWindow):
             advice = failure_advice(error)
             self._dl_log.append(advice)
             self.download_tab.set_status(f"下载失败：{error}\n{advice}")
-            self.dl_indicator.setToolTip(f"下载失败\n{advice}\n点击查看详情")
+            self.dl_indicator.setToolTip(t('下载失败\n{v0}\n点击查看详情').format(v0=(advice)))
         self._dl_finish(ok)
+        if not ok and '[CF_MISSING_REPORT]' in error:
+            from launcher_app.resources.cf_manual import show_missing_dialog
+            show_missing_dialog(self, error, self._retry_download)
 
     def _on_download_cancelled(self):
         if hasattr(self, 'task_center'):
@@ -1582,7 +1597,7 @@ class MainWindow(QMainWindow):
         self._dl_log.append("已取消下载。已校验的文件会保留，重试时会尽量复用。")
         self.dl_indicator.set_progress(0, 1)
         self.dl_indicator.set_waiting()
-        self.dl_indicator.setToolTip("下载已取消，点击查看详情")
+        self.dl_indicator.setToolTip(t('下载已取消，点击查看详情'))
         self._busy_download(False)
 
     def _cancel_current_task(self):
@@ -1590,7 +1605,7 @@ class MainWindow(QMainWindow):
             self._launch_task.cancel()
         else:
             self.download_tasks.cancel()
-        self.dl_indicator.setToolTip("正在收尾，稍等一下…")
+        self.dl_indicator.setToolTip(t('正在收尾，稍等一下…'))
 
     def _retry_download(self):
         if self.download_tasks.state not in {'failed', 'cancelled'}:
@@ -1621,7 +1636,7 @@ class MainWindow(QMainWindow):
                                             cancel=self._cancel_current_task)
                 self.task_center.update_task('download', state='idle')
             return
-        from ui_overlay import ContentOverlay
+        from launcher_app.ui.ui_overlay import ContentOverlay
 
         def live():
             return (list(self._dl_log), self._dl_progress[0], self._dl_progress[1])
@@ -1667,7 +1682,7 @@ class MainWindow(QMainWindow):
             lambda m: self._log_feedback(m, "状态"))
         # 日志文件(供 AI 定位问题读取):.minecraft/logs/launcher.log
         try:
-            self._launcher_log_path = os.path.join(paths.GAME_DIR, "logs", "launcher.log")
+            self._launcher_log_path = os.path.join(paths.GAME_DIR, "logs", 'launcher.log')
             os.makedirs(os.path.dirname(self._launcher_log_path), exist_ok=True)
         except Exception:
             self._launcher_log_path = None
@@ -1717,7 +1732,7 @@ class MainWindow(QMainWindow):
         self._drop_overlay = ov
 
         # AI 浮窗专用落点；使用 Qt 拖放协议而非顶层窗口坐标，Wayland 也能识别。
-        dock_hint = QLabel("松开，将 AI 助手停靠回右侧", self)
+        dock_hint = QLabel(t('松开，将 AI 助手停靠回右侧'), self)
         dock_hint.setObjectName("aiDockDropHint")
         dock_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         dock_hint.setWordWrap(True)
@@ -1803,26 +1818,31 @@ class MainWindow(QMainWindow):
                     for folder in list(dict.fromkeys(folders)):
                         self.install_modpack_from_path(folder)
                 else:
-                    from folder_instance_import import start_import
+                    from launcher_app.resources.folder_instance_import import start_import
                     start_import(self, list(dict.fromkeys(folders)))
             e.setDropAction(Qt.DropAction.CopyAction)
             e.accept()
         else:
             e.ignore()   # 其它页面:不当作整合包,交由该页控件处理(如实例详情列表拷入文件夹)
 
-    def install_modpack_from_path(self, path: str):
+    def install_modpack_from_path(self, path: str, *, safety_checked=False):
         """把本地的整合包文件导入成新实例(拖放入口;自动识别格式)。"""
         enabled = getattr(getattr(self, 'skill_mgr', None), 'is_enabled',
                           lambda _name: False)('smart_import') is True
         if enabled:
-            from smart_import_ui import start_smart_import
-            start_smart_import(self, path)
+            from launcher_app.ui.smart_import_ui import start_smart_import
+            start_smart_import(self, path, safety_checked=safety_checked)
+            return
+        if not safety_checked:
+            from launcher_app.ui.import_safety import check_before_import
+            check_before_import(self, path, lambda prepared: self.install_modpack_from_path(
+                prepared, safety_checked=True))
             return
         if os.path.isdir(path):
-            from folder_instance_import import start_import
+            from launcher_app.resources.folder_instance_import import start_import
             start_import(self, [path])
             return
-        from modpack import detect_modpack_format, import_modpack
+        from launcher_app.resources.modpack import detect_modpack_format, import_modpack
         from PySide6.QtWidgets import QInputDialog
         fmt = detect_modpack_format(path)
         mc_version = None
@@ -1833,18 +1853,18 @@ class MainWindow(QMainWindow):
             return
         if fmt == "flat":
             mc_version, ok = QInputDialog.getText(
-                self, "导入扁平整合包", "该整合包没有清单,请填游戏版本(如 1.20.1):")
+                self, t('导入扁平整合包'), t('该整合包没有清单,请填游戏版本(如 1.20.1):'))
             if not ok or not mc_version.strip():
                 return
             mc_version = mc_version.strip()
             loader, ok2 = QInputDialog.getItem(
-                self, "加载器", "加载器(可选,跳过=原版):",
+                self, t('加载器'), t('加载器(可选,跳过=原版):'),
                 ["(原版)", "fabric", "forge", "neoforge"], 0, False)
             if ok2:
                 loader = None if loader == "(原版)" else loader
         elif fmt is None:
-            task_notice(self, "拖入文件",
-                                    "无法识别该文件为整合包(Modrinth/CurseForge/实例文件夹 zip)。")
+            task_notice(self, t('拖入文件'),
+                                    t('无法识别该文件为整合包(Modrinth/CurseForge/实例文件夹 zip)。'))
             return
 
         def worker(status, progress):
@@ -1912,7 +1932,7 @@ class MainWindow(QMainWindow):
         # compositor. Clear corners, then paint an antialiased background.
         super().paintEvent(event)
         if sys.platform.startswith(('linux', 'win')):
-            from ui_style import current_color
+            from launcher_app.ui.ui_style import current_color
             painter = QPainter(self)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
             painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
@@ -1969,11 +1989,11 @@ class MainWindow(QMainWindow):
     def _scan_running_servers(self):
         if self._server_running_task is not None and self._server_running_task.is_running:
             return
-        from server_packs import list_servers
-        from server_host_client import managed_status
+        from launcher_app.servers.server_packs import list_servers
+        from launcher_app.servers.server_host_client import managed_status
         game_root = paths.GAME_DIR
         def scan(task):
-            from task_context import checkpoint
+            from launcher_app.core.task_context import checkpoint
             running = []
             seen = set()
             for server in list_servers(game_root):
@@ -1989,18 +2009,18 @@ class MainWindow(QMainWindow):
         task.start()
 
     def _apply_running_servers(self, running):
-        from ui_style import success_color, muted_color
+        from launcher_app.ui.ui_style import success_color, muted_color
         label = self._server_running_label
         if running:
             text = ('已启动服务端:' + running[0][0] if len(running) == 1
                     else f'已启动服务端:{len(running)}个')
             label.setText(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, 160))
-            label.setToolTip('运行中的服务端:\n' + '\n'.join(
+            label.setToolTip(t('运行中的服务端:\n') + '\n'.join(
                 f'{name} · PID {pid}' for name, pid in running))
             label.setStyleSheet(f'color: {success_color()}; font-weight: bold;')
         else:
-            label.setText('尚未启动服务端')
-            label.setToolTip('显示由 AMCL 托管的运行中服务端')
+            label.setText(t('尚未启动服务端'))
+            label.setToolTip(t('显示由 AMCL 托管的运行中服务端'))
             label.setStyleSheet(f'color: {muted_color()};')
 
     def _scan_running_games(self):
@@ -2008,7 +2028,7 @@ class MainWindow(QMainWindow):
         self._scan_running_servers()
         if self._running_scan_task is not None and self._running_scan_task.is_running:
             return
-        from instances import scan_instances, detect_running_clients
+        from launcher_app.instances.instances import scan_instances, detect_running_clients
         directories = {row['id']: self.game_dir_for(row['id']) for row in scan_instances()}
         task = BackgroundTask(lambda current: detect_running_clients(directories), self)
         self._running_scan_task = task
@@ -2021,14 +2041,14 @@ class MainWindow(QMainWindow):
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
-        from ui_style import muted_color, success_color
+        from launcher_app.ui.ui_style import muted_color, success_color
         import psutil
         def window_open(pid, owned=False):
             if not psutil.pid_exists(pid):
                 return False
             if os.name != 'nt':
                 return True
-            from memory_relief import visible_game_window
+            from launcher_app.runtime.memory_relief import visible_game_window
             if visible_game_window(pid):
                 self._seen_game_windows.add(pid)
                 return True
@@ -2062,12 +2082,12 @@ class MainWindow(QMainWindow):
             self._running_label.setText(
                 self._running_label.fontMetrics().elidedText(
                     running_text, Qt.TextElideMode.ElideRight, 160))
-            self._running_label.setToolTip("运行中的实例:\n" + "\n".join(
+            self._running_label.setToolTip(t('运行中的实例:\n') + "\n".join(
                 f"{name}（PID {pid}）" for pid, name in live.items()))
             self._running_label.setStyleSheet(f"color: {success_color()}; font-weight: bold;")
         else:
-            self._running_label.setText("尚未启动游戏")
-            self._running_label.setToolTip("启动实例后这里会显示运行中的游戏")
+            self._running_label.setText(t('尚未启动游戏'))
+            self._running_label.setToolTip(t('启动实例后这里会显示运行中的游戏'))
             self._running_label.setStyleSheet(f"color: {muted_color()};")
         QTimer.singleShot(0, self.title_bar._place_center_widget)
 
@@ -2080,7 +2100,7 @@ class MainWindow(QMainWindow):
         self.dl_indicator.set_progress(done, total)
         if done < total:
             self.dl_indicator.set_completed(False)
-        self.dl_indicator.setToolTip("下载中,点击查看详情")
+        self.dl_indicator.setToolTip(t('下载中,点击查看详情'))
         self.dl_indicator.show()
 
     def report_download_progress(self, title: str, status: str, done: int, total: int):
@@ -2094,11 +2114,11 @@ class MainWindow(QMainWindow):
         if done < total:
             self.dl_indicator.set_completed(False)
         if status and "失败" in status:
-            self.dl_indicator.setToolTip(f"{title}失败,点击查看详情")
+            self.dl_indicator.setToolTip(t('{v0}失败,点击查看详情').format(v0=(title)))
         elif status and ("完成" in status or "已就绪" in status.lower()):
-            self.dl_indicator.setToolTip(f"{title}完成,点击查看详情")
+            self.dl_indicator.setToolTip(t('{v0}完成,点击查看详情').format(v0=(title)))
         else:
-            self.dl_indicator.setToolTip(f"正在下载{title},点击查看详情")
+            self.dl_indicator.setToolTip(t('正在下载{v0},点击查看详情').format(v0=(title)))
         self.dl_indicator.show()
 
     def report_download_done(self, title: str, ok: bool, msg: str):
@@ -2108,12 +2128,12 @@ class MainWindow(QMainWindow):
         self._dl_progress = (1, 1)
         self.dl_indicator.set_progress(1, 1)
         self.dl_indicator.set_completed(ok)
-        self.dl_indicator.setToolTip(f"{title}" + ("完成,点击查看详情" if ok else "失败,点击查看详情"))
+        self.dl_indicator.setToolTip(f"{title}" + (t('完成,点击查看详情') if ok else t('失败,点击查看详情')))
         self.dl_indicator.set_failed(not ok)
         if not ok:
             advice = failure_advice(msg)
             self._dl_log.append(advice)
-            self.dl_indicator.setToolTip(f"{title}失败\n{advice}\n点击查看详情")
+            self.dl_indicator.setToolTip(t('{v0}失败\n{v1}\n点击查看详情').format(v0=(title), v1=(advice)))
         self.dl_indicator.show()
 
     def model_download_progress(self, status: str, done: int, total: int):
@@ -2224,14 +2244,14 @@ class MainWindow(QMainWindow):
 
     def _start_launch_button_animation(self):
         """Keep launch progress visible inside the primary button."""
-        from ui_anim import is_animations_enabled
+        from launcher_app.ui.ui_anim import is_animations_enabled
         if not hasattr(self, '_launch_button_timer'):
             self._launch_button_timer = QTimer(self)
             self._launch_button_timer.setInterval(180)
             self._launch_button_timer.timeout.connect(self._advance_launch_button_animation)
         self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
         self._launch_button_frame = 0
-        self.launch_btn.setText('启动中…')
+        self.launch_btn.setText(t('启动中…'))
         self.ai_focus_sidebar.set_launch_state("starting")
         if is_animations_enabled():
             self._launch_button_timer.start()
@@ -2239,7 +2259,7 @@ class MainWindow(QMainWindow):
     def _advance_launch_button_animation(self):
         self._launch_button_frame = (self._launch_button_frame + 1) % 4
         if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
-            self.launch_btn.setText('启动中' + '·' * self._launch_button_frame)
+            self.launch_btn.setText(t('启动中') + '·' * self._launch_button_frame)
 
     def _stop_launch_button_animation(self):
         self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
@@ -2257,7 +2277,7 @@ class MainWindow(QMainWindow):
         self._launch_button_generation = getattr(self, '_launch_button_generation', 0) + 1
         generation = self._launch_button_generation
         if self.home_panel.tabs.currentIndex() != self.home_panel._server_tab_index:
-            self.launch_btn.setText('✓ 启动成功')
+            self.launch_btn.setText(t('✓ 启动成功'))
         self.ai_focus_sidebar.set_launch_state("success")
         QTimer.singleShot(1800, lambda: self._stop_launch_button_animation()
                           if self._launch_button_generation == generation else None)
@@ -2273,7 +2293,7 @@ class MainWindow(QMainWindow):
             return
 
         if not _processes_checked:
-            from instances import scan_instances, detect_running_clients
+            from launcher_app.instances.instances import scan_instances, detect_running_clients
             directories = {row['id']: self.game_dir_for(row['id']) for row in scan_instances()}
             task = BackgroundTask(lambda current: detect_running_clients(directories), self)
             self._launch_task = task
@@ -2293,8 +2313,8 @@ class MainWindow(QMainWindow):
 
         self._update_running_label()
         if self._running_instances:
-            if action_question(self, '启动另一个实例',
-                    f"已有游戏正在运行，是否继续启动「{v['id']}」？\n多开会增加内存占用，同一实例共用存档时请勿同时进入同一个世界。",
+            if action_question(self, t('启动另一个实例'),
+                    t('已有游戏正在运行，是否继续启动「{v0}」？\n多开会增加内存占用，同一实例共用存档时请勿同时进入同一个世界。').format(v0=(v['id'])),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
                 return
@@ -2303,7 +2323,7 @@ class MainWindow(QMainWindow):
 
         v = dict(v)
         from copy import deepcopy
-        from accounts import update_refreshed_microsoft_credentials
+        from launcher_app.core.accounts import update_refreshed_microsoft_credentials
         launch_settings = deepcopy(load_settings())
         game_root, runtime_root = paths.GAME_DIR, paths.RUNTIME_DIR
         service = GameLaunchService(
@@ -2321,7 +2341,7 @@ class MainWindow(QMainWindow):
         self._dl_log = []
         self._dl_progress = (0, 1)
         self.dl_indicator.set_progress(0, 1)
-        self.dl_indicator.setToolTip("正在准备启动，点击查看详情")
+        self.dl_indicator.setToolTip(t('正在准备启动，点击查看详情'))
         if hasattr(self, 'task_center'):
             self._ensure_dl_overlay(create_download=True, task_title='启动准备')
             self.task_center.begin_task('启动准备', task_id='download', cancel=self._cancel_current_task)
@@ -2341,13 +2361,13 @@ class MainWindow(QMainWindow):
         self.ai_focus_sidebar.set_launch_state("failed")
         self.launch_btn.setEnabled(True)
         self.dl_indicator.set_failed(True)
-        self.dl_indicator.setToolTip("启动准备失败，点击查看状态与日志")
-        task_warning(self, "启动准备没完成", redact_text(error, self.settings))
+        self.dl_indicator.setToolTip(t('启动准备失败，点击查看状态与日志'))
+        task_warning(self, t('启动准备没完成'), redact_text(error, self.settings))
 
     def _start_prepared_game(self, plan, v):
         # 准备阶段可能刷新了正版令牌；下次启动须读取刚保存的凭证。
         self.settings = load_settings()
-        from memory_launch_card import offer_memory_actions
+        from launcher_app.ui.memory_launch_card import offer_memory_actions
         if offer_memory_actions(self, plan, v, self._start_game_after_memory):
             return
         self._start_game_after_memory(plan, v)
@@ -2396,7 +2416,7 @@ class MainWindow(QMainWindow):
             self.ai_focus_sidebar.set_launch_state("failed")
             self.statusBar().showMessage(f"启动失败: {e}")
             self.dl_indicator.set_failed(True)
-            self.dl_indicator.setToolTip("启动失败，点击查看状态与日志")
+            self.dl_indicator.setToolTip(t('启动失败，点击查看状态与日志'))
             if hasattr(self, 'task_center'):
                 self.task_center.finish_task('download', 'failed', redact_text(str(e), self.settings))
             self.launch_btn.setEnabled(True)
@@ -2405,11 +2425,11 @@ class MainWindow(QMainWindow):
         self._show_launch_button_success()
         self.launch_btn.setEnabled(True)
         self.dl_indicator.set_completed(True)
-        self.dl_indicator.setToolTip("游戏已启动，点击查看状态与日志")
+        self.dl_indicator.setToolTip(t('游戏已启动，点击查看状态与日志'))
         if hasattr(self, 'task_center'):
             self.task_center.finish_task('download', message='游戏已启动')
 
-        from memory_policy import track_process
+        from launcher_app.runtime.memory_policy import track_process
         track_process(self.game_process, os.path.join(paths.GAME_DIR, 'versions', v['id']))
 
         # 只在进程确实已拉起后记录，下载/Java/命令拼装失败不会污染下次默认选择。
@@ -2441,7 +2461,7 @@ class MainWindow(QMainWindow):
         # 记录本次运行起点,用于判断"本次是否新产生了崩溃报告"(即使退出码为 0)
         self._game_started_at = time.time()
         if exit_after:
-            from memory_launch_card import exit_when_ready
+            from launcher_app.ui.memory_launch_card import exit_when_ready
             exit_when_ready(self, self.game_process)
 
     def _on_game_log_line(self, line: str):
@@ -2471,11 +2491,11 @@ class MainWindow(QMainWindow):
         self._stop_in_game_ai()
         if code not in (0, None):
             self.dl_indicator.set_failed(True)
-            self.dl_indicator.setToolTip(f"游戏异常退出（{code}），点击查看日志")
+            self.dl_indicator.setToolTip(t('游戏异常退出（{v0}），点击查看日志').format(v0=(code)))
             self._auto_debug(code)
         elif self._detect_log_crash():
             self.dl_indicator.set_failed(True)
-            self.dl_indicator.setToolTip("发现崩溃报告，点击查看日志")
+            self.dl_indicator.setToolTip(t('发现崩溃报告，点击查看日志'))
             self._auto_debug(0)
 
     def _start_in_game_ai(self, instance_id: str):
@@ -2484,7 +2504,7 @@ class MainWindow(QMainWindow):
         try:
             if str(self.settings.get("ai_in_game", "off") or "off").strip().lower() == "off":
                 return
-            from in_game_ai import InGameAI, make_answerer
+            from launcher_app.ai.in_game_ai import InGameAI, make_answerer
             ai = InGameAI(instance_id,
                           make_answerer(win=self, settings=self.settings),
                           poll=1.0, game_dir=paths.GAME_DIR)
@@ -2528,8 +2548,8 @@ class MainWindow(QMainWindow):
         msg = collect_crash_report(game_dir, code)
         preview = msg[:400] + ("…" if len(msg) > 400 else "")
         if QMessageBox.question(
-                self, "游戏异常退出",
-                f"{preview}\n\n要让 AI 助手分析原因并给出解决办法吗?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes:
+                self, t('游戏异常退出'),
+                t('{v0}\n\n要让 AI 助手分析原因并给出解决办法吗?').format(v0=(preview)), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes:
             self.ai_dock.ask(f"我的游戏异常退出了(退出码 {code}),帮我分析原因和解决办法:\n{msg}")
 
     def create_instance(self, version: str, loader_key, modrinth_loader,
@@ -2562,7 +2582,7 @@ class MainWindow(QMainWindow):
     # ---- 下载 Mod 选项卡 ----
     def refresh_instances(self):
         """扫描实例,刷新:我的版本列表 + 下载 Mod 卡片 + versions 里的实例记录"""
-        from instance_catalog_service import fingerprint
+        from launcher_app.instances.instance_catalog_service import fingerprint
         scanned_fingerprint = fingerprint(paths.GAME_DIR)
         shown = self.instance_catalog.refresh()
 
@@ -2660,7 +2680,7 @@ class MainWindow(QMainWindow):
     def _on_instance_dir_debounced(self):
         """防抖到期:确实有变动才刷新。避免 refresh→tidy→目录变动→refresh 死循环。"""
         try:
-            from instance_catalog_service import fingerprint
+            from launcher_app.instances.instance_catalog_service import fingerprint
             if fingerprint(paths.GAME_DIR) == getattr(self, '_instance_fingerprint', None):
                 return
             self.refresh_instances()
@@ -2674,19 +2694,19 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("未选择安装位置")
                 return
             if not isinstance(version, dict) or not version.get("file_id"):
-                self.statusBar().showMessage("请先在“手动下载”中选择一个 CurseForge 文件版本")
+                self.statusBar().showMessage("请先在详情中选择一个 CurseForge 文件版本")
                 return
-            title = hit.get("title") or "CurseForge Mod"
+            title = hit.get("title") or "CurseForge 资源"
             project_id = hit.get("curseforge_id")
             file_id = version["file_id"]
 
             def worker(status, progress):
                 try:
-                    from curseforge import download_mod
+                    from launcher_app.resources.curseforge import download_mod
                     filename = download_mod(project_id, file_id, target_dir, progress_callback=progress)
                     status(f"✅ 已下载 {filename} → {sub_dir}")
                 except Exception as e:
-                    status(f"❌ 下载 CurseForge Mod {title} 失败: {e}")
+                    status(f"❌ 下载 CurseForge 资源 {title} 失败: {e}")
 
             self._run_download(worker)
             return
@@ -2712,7 +2732,7 @@ class MainWindow(QMainWindow):
         skipped_deps = False
         if sub_dir == "mods":
             try:
-                from modrinth import (dependency_is_installed,
+                from launcher_app.resources.modrinth import (dependency_is_installed,
                                       installed_mod_identifiers, resolve_dependencies)
                 deps = resolve_dependencies(slug, gv, use_loader, version)
             except Exception:
@@ -2743,7 +2763,7 @@ class MainWindow(QMainWindow):
                         return
 
         def worker(status, progress):
-            from modrinth import (dependency_is_installed, download_mod,
+            from launcher_app.resources.modrinth import (dependency_is_installed, download_mod,
                                   installed_mod_identifiers)
             if skipped_deps:
                 status('已手动跳过前置，仅下载所选 Mod；缺少必需前置可能导致游戏无法加载。')
@@ -2766,53 +2786,52 @@ class MainWindow(QMainWindow):
             if not filename:
                 if gv:
                     target = f"{gv}{'+' + use_loader if use_loader else ''}"
-                    raise RuntimeError(f"{slug} 没有适用于 {target} 的可下载文件；请在手动下载中更换版本或筛选条件")
-                raise RuntimeError(f"{slug} 所选版本没有可下载文件；请在手动下载中更换版本")
+                    raise RuntimeError(f"{slug} 没有适用于 {target} 的可下载文件；请在详情中更换文件版本，或调整顶部筛选")
+                raise RuntimeError(f"{slug} 所选版本没有可下载文件；请在详情中更换文件版本")
             status(f"✅ 已下载 {filename} → {sub_dir}")
 
         self._run_download(worker)
 
     def _resource_download_modpack(self, hit, version):
-        """资源中心-整合包下载:下载 Modrinth 的 .mrpack 并导入成【新实例】。
+        """下载所选平台的整合包，并按清单导入成新实例。
         (整合包是一键全集,不装进已有实例,而是创建一个新实例。)"""
-        import shutil as _sh
         slug = hit["slug"]
         title = hit.get("title", slug)
 
         def worker(status, progress):
-            from modpack import import_modpack
-            from modrinth import download_modpack
-            tmp = os.path.join(paths.GAME_DIR, "downloads", "modpack_tmp")
-            try:
-                os.makedirs(tmp, exist_ok=True)
-            except Exception:
-                pass
-            # 1) 下载 .mrpack
+            from launcher_app.resources.modpack import import_modpack
+            from launcher_app.resources.modrinth import download_modpack
+            from launcher_app.resources.pack_downloads import new_download_directory
+            tmp = new_download_directory(paths.GAME_DIR)
+            # 1) 下载 Modrinth .mrpack 或 CurseForge .zip
             try:
                 status(f"下载整合包 {title}...")
-                local = download_modpack(slug, tmp, version_number=version,
-                                         progress_callback=progress)
+                if hit.get("source") == "curseforge":
+                    from launcher_app.resources.curseforge import download_mod as download_cf_resource
+                    if not isinstance(version, dict) or not version.get("file_id"):
+                        raise ValueError("请先选择一个 CurseForge 整合包文件版本")
+                    filename = download_cf_resource(hit["curseforge_id"], version["file_id"], tmp,
+                                                    progress_callback=progress)
+                    local = os.path.join(tmp, filename)
+                else:
+                    local = download_modpack(slug, tmp, version_number=version,
+                                             progress_callback=progress)
                 if not local:
-                    status("❌ 该整合包没有可下载的 .mrpack 文件")
+                    status("❌ 该整合包没有可下载的文件")
                     return
             except Exception as e:
                 status(f"❌ 下载整合包失败:{type(e).__name__}: {e}")
                 return
-            # 2) 导入成新实例(.mrpack 清单自带 MC 版本/加载器/文件,无需手动填)
+            # 2) 按包内清单安装基础、加载器和资源文件。
             try:
                 status("导入整合包(自动装基础+加载器+全部 mod,可能要几分钟)...")
                 inst = import_modpack(local, paths.GAME_DIR,
                                       status_callback=status,
                                       progress_callback=progress)
-                status(f"✅ 整合包导入完成:{inst}")
+                status(f"整合包导入完成:{inst}；原包已保留，可分享：{local}")
             except Exception as e:
                 status(f"❌ 整合包导入失败:{type(e).__name__}: {e}"
-                       "(同名实例可先在「我的版本」删除或改名后重试)")
-            finally:
-                try:
-                    _sh.rmtree(tmp, ignore_errors=True)
-                except Exception:
-                    pass
+                       f"(同名实例可先在「我的版本」删除或改名后重试)。原包已保留：{local}")
 
         self._run_download(worker)
 
@@ -2906,19 +2925,19 @@ class MainWindow(QMainWindow):
         if not inst or not inst.get('id'):
             return
         menu = QMenu(self)
-        from ui_style import popup_menu_style
+        from launcher_app.ui.ui_style import popup_menu_style
         menu.setStyleSheet(popup_menu_style())
         config_menu = menu.addMenu("一键配置")
-        config_menu.addAction("Bridge Mod（推荐）…", lambda: self._one_click_bridge_for(inst))
-        rcon_menu_item = config_menu.addAction("RCON（临时方案）…", lambda: self._one_click_rcon_for(inst))
-        rcon_menu_item.setToolTip("临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放")
+        config_menu.addAction(t('Bridge Mod（推荐）…'), lambda: self._one_click_bridge_for(inst))
+        rcon_menu_item = config_menu.addAction(t('RCON（临时方案）…'), lambda: self._one_click_rcon_for(inst))
+        rcon_menu_item.setToolTip(t('临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放'))
         # 联机 mod 一键配置:按实例版本+加载器判断支持才显示(不支持不出现)
         self._add_online_mod_menu_items(config_menu, inst)
-        menu.addAction("重命名实例…", lambda: self._rename_instance(inst))
-        menu.addAction("备份实例", lambda: self.backup_current_instance(inst))
-        menu.addAction("打开实例目录", lambda: open_path(self.game_dir_for(inst["id"])))
+        menu.addAction(t('重命名实例…'), lambda: self._rename_instance(inst))
+        menu.addAction(t('备份实例'), lambda: self.backup_current_instance(inst))
+        menu.addAction(t('打开实例目录'), lambda: open_path(self.game_dir_for(inst["id"])))
         menu.addSeparator()
-        menu.addAction("删除实例…", lambda: self._delete_instance(inst))
+        menu.addAction(t('删除实例…'), lambda: self._delete_instance(inst))
         menu.exec(global_pos)
 
     def _current_instance(self):
@@ -2932,7 +2951,7 @@ class MainWindow(QMainWindow):
         """「我的版本」首页「一键配置 ▾」按钮 → 按用户选择执行 bridge-mod / RCON / 自动。"""
         inst = self._current_instance()
         if inst is None:
-            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, t('一键配置'), t('请先在「我的版本」里选中一个实例'))
             return
         if kind == "bridge":
             self._one_click_bridge_for(inst)
@@ -2947,7 +2966,7 @@ class MainWindow(QMainWindow):
         """「我的版本」顶部:一键配置下拉菜单(未来扩展更多配置项)"""
         inst = self._current_instance()
         if inst is None:
-            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, t('一键配置'), t('请先在「我的版本」里选中一个实例'))
             return
         self._one_click_config_for(inst)
 
@@ -2955,7 +2974,7 @@ class MainWindow(QMainWindow):
     def _one_click_bridge_current(self):
         inst = self._current_instance()
         if inst is None:
-            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, t('一键配置'), t('请先在「我的版本」里选中一个实例'))
             return
         self._one_click_bridge_for(inst)
 
@@ -2969,9 +2988,8 @@ class MainWindow(QMainWindow):
         """
         loader = inst.get("loader")
         if loader not in ("fabric", "forge", "neoforge"):
-            inline_notice(self, f"一键配置 · {inst['id']}",
-                                    "该实例没有加载器(原版),bridge-mod 是 mod 需要加载器。\n"
-                                    "先给这个实例装个 Fabric/Forge 等加载器再回来。")
+            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                                    t('该实例没有加载器(原版),bridge-mod 是 mod 需要加载器。\n先给这个实例装个 Fabric/Forge 等加载器再回来。'))
             return
         self._check_bridge_async(inst, self._on_bridge_status_ready)
 
@@ -2980,7 +2998,7 @@ class MainWindow(QMainWindow):
 
         payload = {"status": ..., "info": ...};检测失败会弹提示(不静默失败)。
         """
-        import bridge_mod_dist
+        import launcher_app.core.bridge_mod_dist as bridge_mod_dist
         inst_dir = self.game_dir_for(inst["id"])
         loader = inst.get("loader")
         self.statusBar().showMessage(f"正在检测 {inst['id']} 的 bridge-mod 状态…")
@@ -2995,9 +3013,8 @@ class MainWindow(QMainWindow):
         task = BackgroundTask(work, self)
         task.succeeded.connect(lambda payload: on_ready(inst, payload))
         task.failed.connect(lambda err: inline_warning(
-            self, f"一键配置 · {inst['id']}",
-            f"检测 bridge-mod 状态失败:{err}\n"
-            "(可能是无法访问 GitHub;也可以手动把 agentmc-bridge-*.jar 放进实例 mods 目录)"))
+            self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+            t('检测 bridge-mod 状态失败:{v0}\n(可能是无法访问 GitHub;也可以手动把 agentmc-bridge-*.jar 放进实例 mods 目录)').format(v0=(err))))
         task.finished.connect(self.statusBar().clearMessage)
         task.start()
 
@@ -3006,39 +3023,31 @@ class MainWindow(QMainWindow):
         status = (payload or {}).get("status")
         info = (payload or {}).get("info")
         if status == "up_to_date":
-            inline_notice(self, f"一键配置 · {inst['id']}",
-                                    "✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n"
-                                    "(无需'对局域网开放',指令结果可精确回传)。")
+            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                                    t("✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n(无需'对局域网开放',指令结果可精确回传)。"))
             return
         if status == "incompatible":
             ret = action_question(
-                self, f"一键配置 · {inst['id']}",
-                "检测到当前 mods 目录中有其他 MC 版本或加载器的 bridge-mod。\n\n"
-                f"将替换为适用于 {inst['base']}+{inst['loader']} 的版本吗？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                t('检测到当前 mods 目录中有其他 MC 版本或加载器的 bridge-mod。\n\n将替换为适用于 {v0}+{v1} 的版本吗？').format(v0=(inst['base']), v1=(inst['loader'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret == QMessageBox.StandardButton.Yes:
                 self._install_bridge_mod(inst)
             return
         if status == "outdated":
             ret = action_question(
-                self, f"一键配置 · {inst['id']}",
-                f"⚠️ 检测到已装 bridge-mod 但版本较旧({inst['base']}+{inst['loader']})。\n\n"
-                "自动更新到最新版吗?(会覆盖旧的 jar)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                t('⚠️ 检测到已装 bridge-mod 但版本较旧({v0}+{v1})。\n\n自动更新到最新版吗?(会覆盖旧的 jar)').format(v0=(inst['base']), v1=(inst['loader'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret == QMessageBox.StandardButton.Yes:
                 self._install_bridge_mod(inst)
             return
         if info is None:
             # 不兼容:明确提示,并引导走 RCON 临时方案
             inline_notice(
-                self, f"一键配置 · {inst['id']}",
-                f"💡 bridge-mod 暂不兼容 {inst['base']}+{inst['loader']}"
-                "(版本表/自动发现都没有这个组合)。\n\n"
-                "可以改用临时方案 RCON:功能略弱(指令结果不精确),但覆盖更多版本。\n"
-                "要换 RCON 的话,点菜单里的「一键配置 RCON」。")
+                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                t('💡 bridge-mod 暂不兼容 {v0}+{v1}(版本表/自动发现都没有这个组合)。\n\n可以改用临时方案 RCON:功能略弱(指令结果不精确),但覆盖更多版本。\n要换 RCON 的话,点菜单里的「一键配置 RCON」。').format(v0=(inst['base']), v1=(inst['loader'])))
             return
-        ret = action_question(self, f"一键配置 · {inst['id']}",
-                                   f"未安装 bridge-mod(本地指令口,推荐)。\n\n"
-                                   f"检测到 {inst['base']}+{inst['loader']} 可用的 "
-                                   f"bridge-mod v{info['version']},自动下载安装吗?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+        ret = action_question(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                                   t('未安装 bridge-mod(本地指令口,推荐)。\n\n检测到 {v0}+{v1} 可用的 bridge-mod v{v2},自动下载安装吗?').format(v0=(inst['base']), v1=(inst['loader']), v2=(info['version'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
         if ret != QMessageBox.StandardButton.Yes:
             return
         self._install_bridge_mod(inst)
@@ -3047,45 +3056,41 @@ class MainWindow(QMainWindow):
     def _one_click_rcon_current(self):
         inst = self._current_instance()
         if inst is None:
-            inline_notice(self, "一键配置", "请先在「我的版本」里选中一个实例")
+            inline_notice(self, t('一键配置'), t('请先在「我的版本」里选中一个实例'))
             return
         self._one_click_rcon_for(inst)
 
     def _one_click_rcon_for(self, inst):
         """一键配置 RCON(临时方案):需要 Lan Server Properties + 进世界后手动对局域网开放"""
-        from game_command import ensure_rcon_config, has_lan_server_properties, read_rcon_config
+        from launcher_app.instances.game_command import ensure_rcon_config, has_lan_server_properties, read_rcon_config
         inst_dir = self.game_dir_for(inst["id"])
         loader = inst.get("loader")
         if read_rcon_config(inst_dir):
-            inline_notice(self, f"一键配置 · {inst['id']}",
-                                    "✅ RCON 已就绪。\n"
-                                    "(临时方案:进世界后按 ESC → 对局域网开放,RCON 才监听端口)")
+            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                                    t('✅ RCON 已就绪。\n(临时方案:进世界后按 ESC → 对局域网开放,RCON 才监听端口)'))
             return
         if not has_lan_server_properties(inst_dir):
             if loader not in ("fabric", "forge", "neoforge"):
                 inline_notice(
-                    self, f"一键配置 · {inst['id']}",
-                    "该实例没有加载器(原版),而 Lan Server Properties 需要加载器。\n"
-                    "先给这个实例装个加载器再回来。")
+                    self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                    t('该实例没有加载器(原版),而 Lan Server Properties 需要加载器。\n先给这个实例装个加载器再回来。'))
                 return
             ret = action_question(
-                self, f"一键配置 · {inst['id']}",
-                "临时方案需要 Lan Server Properties mod\n"
-                "(自动开 RCON,但每次进世界需手动'对局域网开放')。\n\n"
-                "是否自动从 Modrinth 下载并安装?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
+                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                t("临时方案需要 Lan Server Properties mod\n(自动开 RCON,但每次进世界需手动'对局域网开放')。\n\n是否自动从 Modrinth 下载并安装?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
             if ret != QMessageBox.StandardButton.Yes:
                 return
             self._install_lan_server_properties(inst)
             return
         msg = ensure_rcon_config(inst_dir)
         if "\n" in msg:
-            inline_notice(self, f"一键配置 · {inst['id']}", msg)
+            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])), msg)
         else:
             self.statusBar().showMessage(msg)
 
     def _add_online_mod_menu_items(self, menu, inst):
         """在实例右键菜单加「一键配置 <联机mod>」项——仅当该实例版本+加载器支持时才显示。"""
-        import lan_tools
+        import launcher_app.ui.lan_tools as lan_tools
         gv = inst.get("base")
         loader = inst.get("loader") or ""
         if loader not in ("fabric", "forge", "neoforge"):
@@ -3097,37 +3102,34 @@ class MainWindow(QMainWindow):
                 continue
             if ok:
                 it = menu.addAction(
-                    f"一键配置 {name}…",
+                    t('一键配置 {v0}…').format(v0=(name)),
                     lambda _c=False, s=slug: self._one_click_online_mod_for(inst, s))
-                it.setToolTip(f"{name}:{gv}+{loader} 可用,自动下载安装")
+                it.setToolTip(t('{v0}:{v1}+{v2} 可用,自动下载安装').format(v0=(name), v1=(gv), v2=(loader)))
 
     def _one_click_online_mod_for(self, inst, slug: str):
         """一键配置联机 mod(Essential / e4mc):按版本+加载器判断是否支持,支持才装。
         已装 → 提示就绪;不支持 → 说明不支持;支持且未装 → 确认后后台下载。"""
-        import lan_tools
+        import launcher_app.ui.lan_tools as lan_tools
         inst_dir = self.game_dir_for(inst["id"])
         loader = inst.get("loader") or ""
         gv = inst["base"]
         name = lan_tools.ONLINE_MODS.get(slug, slug)
         # 不支持 → 明确说明
         if loader not in ("fabric", "forge", "neoforge"):
-            inline_notice(self, f"一键配置 · {inst['id']}",
-                                    f"该实例没有加载器(原版),{name} 是 mod 需要加载器。\n"
-                                    "先装个 Fabric/Forge 再回来。")
+            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                                    t('该实例没有加载器(原版),{v0} 是 mod 需要加载器。\n先装个 Fabric/Forge 再回来。').format(v0=(name)))
             return
         if not lan_tools.mod_supported(slug, gv, loader):
-            inline_notice(self, f"一键配置 · {inst['id']}",
-                                    f"{name} 暂不支持 {gv}+{loader}。\n"
-                                    "可以换个版本,或到「联机」看别的方案。")
+            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+                                    t('{v0} 暂不支持 {v1}+{v2}。\n可以换个版本,或到「联机」看别的方案。').format(v0=(name), v1=(gv), v2=(loader)))
             return
         # 已装?
         mods_dir = os.path.join(inst_dir, "mods")
         has = any(name and (slug in f.lower() or name.split("(")[0].strip().lower() in f.lower())
                   for f in os.listdir(mods_dir) if f.endswith(".jar")) if os.path.isdir(mods_dir) else False
         ret = action_question(
-            self, f"一键配置 · {inst['id']}",
-            (f"✅ {name} 支持 {gv}+{loader}。\n\n"
-             f"{'已检测到,重装/更新吗?' if has else '自动从 Modrinth 下载并安装到该实例吗?'}"),
+            self, t('一键配置 · {v0}').format(v0=(inst['id'])),
+            (t('✅ {v0} 支持 {v1}+{v2}。\n\n{v3}').format(v0=(name), v1=(gv), v2=(loader), v3=('已检测到,重装/更新吗?' if has else '自动从 Modrinth 下载并安装到该实例吗?'))),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
         if ret != QMessageBox.StandardButton.Yes:
             return
@@ -3169,7 +3171,7 @@ class MainWindow(QMainWindow):
 
     def _install_bridge_mod(self, inst):
         """后台下载 bridge-mod(本地指令口)到实例 mods 目录"""
-        import bridge_mod_dist
+        import launcher_app.core.bridge_mod_dist as bridge_mod_dist
         self.statusBar().showMessage(f"正在为 {inst['id']} 下载 bridge-mod…")
 
         def worker(status_cb, progress_cb):
@@ -3200,7 +3202,7 @@ class MainWindow(QMainWindow):
                 status_cb(f"没有 {inst['base']}+{inst['loader']} 的版本,换个版本试试")
                 return False
             # 装好 → 自动写 RCON 配置
-            from game_command import ensure_rcon_config
+            from launcher_app.instances.game_command import ensure_rcon_config
             cfg = ensure_rcon_config(self.game_dir_for(inst["id"]))
             status_cb(f"Lan Server Properties 已安装:{filename}\n{cfg}")
 
@@ -3228,7 +3230,7 @@ class MainWindow(QMainWindow):
             self.main_tabs.setTabText(self._details_tab_idx, '服务端详情')
             server = self.home_panel.server_center.selected()
             if server is None:
-                self.details_placeholder.setText('请先在“我的实例”中选择一个服务端。')
+                self.details_placeholder.setText(t('请先在“我的实例”中选择一个服务端。'))
                 self.details_stack.setCurrentWidget(self.details_placeholder)
             else:
                 self.server_details.set_server(server)
@@ -3237,7 +3239,7 @@ class MainWindow(QMainWindow):
             self.main_tabs.setTabText(self._details_tab_idx, t('INSTANCE_DETAILS'))
             inst = self.home_panel.current_instance()
             if inst is None:
-                self.details_placeholder.setText('请先在“我的实例”中选择一个实例。')
+                self.details_placeholder.setText(t('请先在“我的实例”中选择一个实例。'))
                 self.details_stack.setCurrentWidget(self.details_placeholder)
             else:
                 self.instance_details.set_instance(inst, paths.GAME_DIR)
@@ -3282,24 +3284,24 @@ class MainWindow(QMainWindow):
         if getattr(home, '_server_mode', False):
             server = home.server_center.selected()
             if server is None:
-                inline_notice(self, '实例详情', '请先在右侧选中一个服务端。')
+                inline_notice(self, t('实例详情'), t('请先在右侧选中一个服务端。'))
                 return
             self._show_server_details(server)
             return
         inst = home.current_instance()
         if inst is None:
-            inline_notice(self, '实例详情', '请先在右侧选中一个实例。')
+            inline_notice(self, t('实例详情'), t('请先在右侧选中一个实例。'))
             return
         self._show_instance_details(inst)
 
     def _smart_import_path(self, path: str):
         """「导入服务端 → 智能导入」:交给既有的智能导入流程。"""
-        from smart_import_ui import start_smart_import
+        from launcher_app.ui.smart_import_ui import start_smart_import
         start_smart_import(self, path)
 
     def _on_main_tab_changed(self, idx: int):
         """主标签页切换时短暂显现新页面。"""
-        from ui_anim import reveal
+        from launcher_app.ui.ui_anim import reveal
         w = self.main_tabs.widget(idx) if 0 <= idx < self.main_tabs.count() else None
         if w is getattr(self, 'details_stack', None):
             if getattr(self, '_details_skip_sync_once', False):
@@ -3332,34 +3334,31 @@ class MainWindow(QMainWindow):
 
     def backup_current_instance(self, inst):
         """GUI 备份按钮(灵感 #6 补齐):手动备份一个实例"""
-        from backup import backup_instance
+        from launcher_app.core.backup import backup_instance
         try:
             out = backup_instance(inst["id"], paths.GAME_DIR)
         except Exception as e:
-            task_warning(self, "备份失败", str(e))
+            task_warning(self, t('备份失败'), str(e))
             return
         self.statusBar().showMessage(f"已备份到:{out}")
 
     def _rename_instance(self, inst):
         """同步重命名安装目录、版本文件和继承引用。"""
         from PySide6.QtWidgets import QInputDialog
-        from instance_metadata import rename_instance
+        from launcher_app.instances.instance_metadata import rename_instance
         if self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
-            inline_notice(self, "稍等一下", "游戏或安装任务还在运行，结束后再改名吧。")
+            inline_notice(self, t('稍等一下'), t('游戏或安装任务还在运行，结束后再改名吧。'))
             return
         name, accepted = QInputDialog.getText(
-            self, "重命名实例",
-            '新名称（中文、英文、数字和空格均可）：\n'
-            '不能留空，不能包含 \\ / : * ? " < > |\n'
-            '不能以下划线开头、以句点结尾，或使用 CON、NUL、COM1 等系统保留名。\n'
-            '不能与已有实例重名。安装目录和版本文件会同步改名，存档与配置保留。',
+            self, t('重命名实例'),
+            t('新名称（中文、英文、数字和空格均可）：\n不能留空，不能包含 \\ / : * ? " < > |\n不能以下划线开头、以句点结尾，或使用 CON、NUL、COM1 等系统保留名。\n不能与已有实例重名。安装目录和版本文件会同步改名，存档与配置保留。'),
             QLineEdit.EchoMode.Normal, inst.get("name") or inst["id"])
         if not accepted:
             return
         try:
             rename_instance(paths.GAME_DIR, inst["id"], name.strip())
         except (OSError, ValueError, RuntimeError) as error:
-            inline_warning(self, "名称暂时没改成", str(error))
+            inline_warning(self, t('名称暂时没改成'), str(error))
             return
         new_id = name.strip()
         if self.settings.get('last_played_instance') == inst['id']:
@@ -3380,11 +3379,11 @@ class MainWindow(QMainWindow):
     def _delete_instance(self, inst):
         """删除一个实例的安装文件(只删 versions/<id>，共用 gameDir 保留)。"""
         if inst['id'] in self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
-            inline_notice(self, "稍等一下", "游戏正在运行，或文件还在准备中，结束后再删除实例吧。")
+            inline_notice(self, t('稍等一下'), t('游戏正在运行，或文件还在准备中，结束后再删除实例吧。'))
             return
         if action_question(
-                self, "确认删除",
-                f"确定删除实例 {inst['id']} 吗?\n(只删该实例,共用文件保留)", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+                self, t('确认删除'),
+                t('确定删除实例 {v0} 吗?\n(只删该实例,共用文件保留)').format(v0=(inst['id'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
         # ``game_dir_for`` 在关闭版本隔离时会返回整个 .minecraft；它只适合
         # 运行参数、存档和配置，绝不能作为删除目标。实例安装文件始终固定在
@@ -3409,12 +3408,12 @@ if __name__ == "__main__":
     import sys as _sys
     if "--mcp" in _sys.argv:
         # MCP 服务模式(stdio):供外部 AI 宿主调用启动器工具,不启动 GUI
-        from mcp_server import serve
+        from launcher_app.browser.mcp_server import serve
         serve()
         raise SystemExit(0)
     if "--mcp-http" in _sys.argv:
         # MCP Streamable-HTTP 模式:POST /mcp → 供「http」连接。--mcp-http [port]
-        from mcp_server import serve_http
+        from launcher_app.browser.mcp_server import serve_http
         port = 8766
         try:
             i = _sys.argv.index("--mcp-http")
@@ -3429,14 +3428,14 @@ if __name__ == "__main__":
     # Fusion gives custom-styled controls the same geometry on Windows 10/11.
     app.setStyle("Fusion")
     app.setWindowIcon(application_icon())
-    from ui_style import apply_global_dark_palette, set_theme_mode
+    from launcher_app.ui.ui_style import apply_global_dark_palette, set_theme_mode
     set_theme_mode(load_settings().get('ui_theme', 'system'))
     apply_global_dark_palette(app)   # 系统深色 → 全局深色调色板,统一对话框/菜单/标签页
 
     # 退出兜底:强制回收本地模型 llama-server 子进程,避免孤儿(关闭走 closeEvent.shutdown,
     # 但异常退出/多路径时可能漏;atexit + aboutToQuit 双保险,配合 local_ai._TRACKED_PROCS)。
     try:
-        from local_ai import _reap_tracked as _reap_llama
+        from launcher_app.ai.local_ai import _reap_tracked as _reap_llama
         app.aboutToQuit.connect(_reap_llama)
     except Exception:
         pass
@@ -3445,15 +3444,14 @@ if __name__ == "__main__":
     # and macOS. Keep the lock object alive for the full GUI lifetime.
     _instance_lock = None
     if not _CI_STARTUP_SMOKE:
-        _instance_lock = QLockFile(os.path.join(paths.CONFIG_DIR, "launcher.lock"))
+        _instance_lock = QLockFile(os.path.join(paths.CONFIG_DIR, 'launcher_app.instances.launcher.lock'))
         _instance_lock.setStaleLockTime(0)
         if not _instance_lock.tryLock(0):
             if _instance_lock.error() == QLockFile.LockError.LockFailedError:
                 answer = action_question(
                     None,
-                    "启动器已在运行",
-                    "检测到这个数据目录已有一个启动器进程。\n\n"
-                    "仍要再启动一个吗？多个窗口可能同时修改配置、下载或操作同一实例。",
+                    t('启动器已在运行'),
+                    t('检测到这个数据目录已有一个启动器进程。\n\n仍要再启动一个吗？多个窗口可能同时修改配置、下载或操作同一实例。'),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.Yes,
                 )
@@ -3462,9 +3460,8 @@ if __name__ == "__main__":
             else:
                 QMessageBox.critical(
                     None,
-                    "无法检查启动器是否已运行",
-                    f"无法创建单实例锁文件：{_instance_lock.fileName()}\n"
-                    "请检查 AMCL 文件夹的写入权限后重试。",
+                    t('无法检查启动器是否已运行'),
+                    t('无法创建单实例锁文件：{v0}\n请检查 AMCL 文件夹的写入权限后重试。').format(v0=(_instance_lock.fileName())),
                 )
                 raise SystemExit(1)
 
@@ -3479,7 +3476,7 @@ if __name__ == "__main__":
     _auto_tutorial = False
     if first:
         splash.hide()
-        from onboarding import OnboardingDialog
+        from launcher_app.ui.onboarding import OnboardingDialog
         od = OnboardingDialog()
         od.exec()
         # 新手:配置完成后自动走一遍引导式新手教程(老手跳过,设置→界面可重播)
@@ -3511,7 +3508,7 @@ if __name__ == "__main__":
         QTimer.singleShot(
             500,
             lambda message=_rollback_notice: inline_notice(
-                window, "已恢复旧版本", message),
+                window, t('已恢复旧版本'), message),
         )
     _startup_smoke_status = 0
     if _CI_STARTUP_SMOKE:

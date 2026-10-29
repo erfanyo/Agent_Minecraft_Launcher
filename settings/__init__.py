@@ -19,6 +19,7 @@ DEFAULTS = {
     "username": "Steve",        # 离线模式游戏名
     "memory_gb": 0,              # 0=启动时按可用内存自动预算；正数=手动 GB
     "ignore_memory_launch_advice": False,  # 启动内存建议可由用户永久忽略
+    "dismissed_notices": [],  # 仅信息说明；不隐藏安全授权或威胁告警
     "version_isolation": True,   # 版本隔离:每版本独立游戏目录
     "last_played_instance": "", # 最近一次成功启动的实例;首页启动时优先选中
     "java_paths": {},            # Java 大版本首选路径，如 {"8": ".../java.exe"};实例设置可覆盖
@@ -70,6 +71,11 @@ DEFAULTS = {
     "ai_mod_translate_source": "local",          # Mod 描述翻译来源:local(默认) / cloud(使用已配置云端模型)
     "ui_task_notifications": True,               # 任务提示进状态球；可在系统设置恢复传统窗口
     "ai_cloud_tool_log": True,                     # 云端工具调用训练日志:仅本机 JSONL，可在设置关闭
+    "ai_run_log_auto_cleanup": True,
+    "ai_run_log_retention_days": 30,
+    "ai_run_log_max_mb": 100,
+    "ai_web_allowed_domains": "bilibili.com,b23.tv",
+    'cloud_drive_defender_scan': True,
     # ---- 云端 / 本地 两组独立设置(设置 UI 分开,ai_source 决定当前用哪边)----
     "ai_source": "cloud",          # 当前模型来源:cloud(云端)/ local(本地)
     # 云端模型(ai_source=cloud 时生效;硅基流动(默认)/DeepSeek/OpenRouter/智谱/通义/自定义)
@@ -109,7 +115,7 @@ DEFAULTS = {
 
 def suggested_memory_gb() -> int:
     """按当前可用内存预算，不能保证满足特定整合包需求。"""
-    from memory_policy import automatic_gb
+    from launcher_app.runtime.memory_policy import automatic_gb
     return automatic_gb()
 
 

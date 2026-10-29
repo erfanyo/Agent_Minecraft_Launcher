@@ -29,7 +29,7 @@ def write(path, value):
 
 def prepare(source, output, modes=('control', 'duplicate', 'loader_mismatch', 'resume')):
     # Preserve a complete hash inventory so accidental source writes are detected.
-    import diagnostic_tools as diagnostic
+    import launcher_app.instances.diagnostic_tools as diagnostic
     original = diagnostic._inventory(str(source))
     sodium = source / 'mods' / 'sodium-neoforge-0.6.13+mc1.21.1.jar'
     fabric = source / 'mods' / 'iris-fabric-1.10.6+mc1.21.11.jar.disabled'
@@ -76,11 +76,11 @@ def prepare(source, output, modes=('control', 'duplicate', 'loader_mismatch', 'r
 
 def execute_case(case, config, output):
     import paths
-    import agent_tools
-    import diagnostic_tools as diagnostic
-    from assistant import TOOLS
-    from ai_run import run
-    from skill_manager import SkillManager
+    import launcher_app.ai.agent_tools as agent_tools
+    import launcher_app.instances.diagnostic_tools as diagnostic
+    from launcher_app.ai.assistant import TOOLS
+    from launcher_app.ai.ai_run import run
+    from launcher_app.extensions.skill_manager import SkillManager
     identity = case['id']
     paths.set_game_dir(case['root'])  # This subprocess only; never saves global settings.
     config = dict(config, ai_run_timeout_seconds=180, ai_run_context_chars=24000,
@@ -185,11 +185,11 @@ def main():
         if config.get('ai_provider') in ('local_builtin', 'ollama', 'lmstudio'):
             raise ValueError('This runner requires the configured cloud tool provider')
         paths.data_dir = lambda sub='': str(output / 'run-records' / sub)
-        import ai_run
+        import launcher_app.ai.ai_run as ai_run
         ai_run.data_dir = paths.data_dir
         for case in cases:
             results.append(execute_case(case, config, output))
-        import diagnostic_tools
+        import launcher_app.instances.diagnostic_tools as diagnostic_tools
         unchanged = diagnostic_tools._inventory(str(source)) == original
         write(output / 'summary.json', {'model': config.get('ai_model'),
               'provider_host': urlsplit(config.get('ai_base_url', '')).hostname,

@@ -11,11 +11,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import pytest
 from PySide6.QtWidgets import QWidget
 from PySide6.QtGui import QFont, QFontDatabase
-from download_indicator import DownloadIndicator
-from task_center import TaskCenter
-from ui_anim import set_animations_enabled
-from ui_tokens import set_theme_mode, theme_mode, set_wallpaper_active
-from ui_style import clear_registered_styles
+from launcher_app.ui.download_indicator import DownloadIndicator
+from launcher_app.ui.task_center import TaskCenter
+from launcher_app.ui.ui_anim import set_animations_enabled
+from launcher_app.ui.ui_tokens import set_theme_mode, theme_mode, set_wallpaper_active
+from launcher_app.ui.ui_style import clear_registered_styles
 
 _TEST_FONT_FAMILY = None
 
@@ -59,7 +59,7 @@ def pytest_runtest_makereport(item, call):
 @pytest.fixture(autouse=True)
 def isolated_theme(qapp, monkeypatch):
     global _TEST_FONT_FAMILY
-    monkeypatch.setattr('ui_notifications.notifications_enabled', lambda: True)
+    monkeypatch.setattr('launcher_app.ui.ui_notifications.notifications_enabled', lambda: True)
     previous = theme_mode()
     previous_font = qapp.font()
     # Offscreen Windows Qt has no platform font fallback. Load a system CJK

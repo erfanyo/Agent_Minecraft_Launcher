@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 
 import pytest
-from ui_tokens import set_theme_mode
-from ui_style import refresh_theme
+from launcher_app.ui.ui_tokens import set_theme_mode
+from launcher_app.ui.ui_style import refresh_theme
 
 pytestmark = pytest.mark.ui
 
@@ -19,7 +19,7 @@ def test_visual_scene(hub, qtbot, request, theme, scene):
     second = hub.begin_task('导出服务端')
     hub.update_task(second, message='第 2 轮测试，已停用 1 个客户端 Mod。')
     if scene == 'inline-validation':
-        from ui_notifications import inline_notice
+        from launcher_app.ui.ui_notifications import inline_notice
         target = inline_notice(hub.parent(), '名称不可用', '请输入另一个实例名称。')
     elif scene == 'confirmation':
         hub.request_confirmation(second, '服务端准备完成', '文件已准备好。现在开始隔离启动测试吗？',

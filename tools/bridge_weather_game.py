@@ -14,7 +14,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from launcher import resolve_inherited_json, build_launch_command
+from launcher_app.instances.launcher import resolve_inherited_json, build_launch_command
 from os_platform.process import external_process_environment
 from tools.bridge_weather_test import run_case, PROMPT, write_json
 from tools.bridge_game_input import send_chat, close_window, click_client, press_key, system_close

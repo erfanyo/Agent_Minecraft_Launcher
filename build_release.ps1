@@ -21,6 +21,7 @@ param(
     [string]$GpgExe = "",                 # 覆盖 gpg 路径;留空则从 PATH 找
     [switch]$NoSign,                      # 跳过签名(仅打包)
     [switch]$SkipTests,                   # CI 已单独跑完整测试时使用
+    [switch]$SkipLocalAI,                 # 本轮可只构建标准版，不下载/打包 GGUF
     [string]$KeyId = "erfanyo",           # 用于签名的密钥 id/uid
     [string]$PythonExe = "",              # 留空:优先项目 .venv-release,其次 .venv/PATH；随后强制检查 3.14.7
     [string]$OutputDir = ""               # 留空输出到 dist;验证时可用 .tmp\release-validation
@@ -70,7 +71,7 @@ function Find-Gpg {
 if (-not $SkipTests) {
     Write-Host "==> 1/5 完整自动测试 ==" -ForegroundColor Cyan
     $env:QT_QPA_PLATFORM = "offscreen"
-    & $PythonExe -m unittest discover -v
+    & $PythonExe -m pytest tests/unit -v
     if ($LASTEXITCODE -ne 0) { throw "自动测试失败" }
 }
 
@@ -108,11 +109,15 @@ Write-Host "  产物: $exe" -ForegroundColor Green
 
 # The local-AI variant is a separate portable ZIP. The helper downloads (if
 # needed) and verifies the pinned GGUF before placing only that file in AMCL.
-Write-Host "==> 生成预装本地 AI 压缩包 ==" -ForegroundColor Cyan
 $localAiZip = Join-Path $OutputDir "AgentMinecraftLauncher-Windows-LocalAI.zip"
+if (-not $SkipLocalAI) {
+Write-Host "==> 生成预装本地 AI 压缩包 ==" -ForegroundColor Cyan
 & $PythonExe tools\build_local_ai_bundle.py --exe $exe --output $localAiZip
 if ($LASTEXITCODE -ne 0) { throw "预装本地 AI 压缩包生成失败" }
 Write-Host "  产物: $localAiZip" -ForegroundColor Green
+} else {
+    Write-Host "==> 本轮跳过本地 AI 压缩包；保留本地模型功能 ==" -ForegroundColor Yellow
+}
 
 Write-Host "==> 4/5 成品启动检查 ==" -ForegroundColor Cyan
 # Windows runner 可以使用 qwindows；冻结包没有收集开发环境的 offscreen 插件。
@@ -165,9 +170,12 @@ Write-Host "==> SHA256 ==" -ForegroundColor Cyan
 $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
 Write-Host "  SHA256: $hash" -ForegroundColor Green
 $hashLine = "$($hash.ToLower())  $ExeName"
-$zipHash = (Get-FileHash $localAiZip -Algorithm SHA256).Hash.ToLower()
-$zipHashLine = "$zipHash  AgentMinecraftLauncher-Windows-LocalAI.zip"
-Set-Content -LiteralPath (Join-Path $OutputDir "SHA256SUMS.txt") -Value @($hashLine, $zipHashLine) -Encoding ascii
+$hashLines = @($hashLine)
+if (-not $SkipLocalAI) {
+    $zipHash = (Get-FileHash $localAiZip -Algorithm SHA256).Hash.ToLower()
+    $hashLines += "$zipHash  AgentMinecraftLauncher-Windows-LocalAI.zip"
+}
+Set-Content -LiteralPath (Join-Path $OutputDir "SHA256SUMS.txt") -Value $hashLines -Encoding ascii
 Write-Host ""
 Write-Host "======== 发布清单 ($OutputDir) ========" -ForegroundColor Cyan
 Get-ChildItem $OutputDir -File | Where-Object { $_.Name -in @($ExeName, "$ExeName.sig", "SHA256SUMS.txt", "AgentMinecraftLauncher-Windows-LocalAI.zip") } |

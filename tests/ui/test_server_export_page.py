@@ -1,6 +1,6 @@
 import pytest
 from PySide6.QtWidgets import QPushButton
-from server_pack_builder_ui import ServerPackBuilderDialog
+from launcher_app.servers.server_pack_builder_ui import ServerPackBuilderDialog
 
 pytestmark = pytest.mark.ui
 

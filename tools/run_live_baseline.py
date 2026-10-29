@@ -40,7 +40,7 @@ def prepare(root, source):
     for extension in ('json', 'jar'):
         shutil.copy2(source / 'versions' / '1.21.1' / ('1.21.1.' + extension), base)
     os.environ['FORGE_PROCESSOR_JAVA'] = r'D:\programs\Java\jdk-21.0.12\bin\java.exe'
-    from loaders import install_loader
+    from launcher_app.instances.loaders import install_loader
     identity = install_loader('neoforge', '1.21.1', str(game), loader_version='21.1.250',
                               status_callback=lambda status: print(status, flush=True))
     folder = game / 'versions' / identity
@@ -58,12 +58,12 @@ def prepare(root, source):
 def launch(root, world=None, instance=None):
     import paths
     from settings import load_settings
-    from game_launch_service import GameLaunchService
-    from instances import scan_instances
+    from launcher_app.instances.game_launch_service import GameLaunchService
+    from launcher_app.instances.instances import scan_instances
     meta = json.loads((root / 'baseline.json').read_text(encoding='utf-8'))
     game = Path(meta['game_root'])
     identity = instance or meta['instance']
-    from safe_paths import safe_component
+    from launcher_app.core.safe_paths import safe_component
     safe_component(identity)
     folder = game / 'versions' / identity
     paths.set_game_dir(str(game))  # Local to this runner process.

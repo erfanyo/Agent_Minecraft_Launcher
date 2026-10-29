@@ -209,8 +209,8 @@ def extract_tool_call(text: str):
 # ---------- 跑单步用例 ----------
 def _build_system_prompt():
     """构造评测用 system:列工具名 + 强约束输出格式(0.8B 必须明确约束才不瞎填)。"""
-    import assistant
-    from ai_testset import SYSTEM_TEMPLATE, DEFAULT_INSTANCES
+    import launcher_app.ai.assistant as assistant
+    from launcher_app.ai.ai_testset import SYSTEM_TEMPLATE, DEFAULT_INSTANCES
     names = [t["function"]["name"] for t in assistant.TOOLS]
     tool_list = ", ".join(sorted(names))
     base = SYSTEM_TEMPLATE.format(instances=DEFAULT_INSTANCES)
@@ -263,7 +263,7 @@ def run_single(server, cfg, cases, runs=1, system_extra=""):
 def run_multistep(server, cfg, scripts):
     """跑多步剧本:发起请求→模型调工具→喂预设回复→看下一步→…产出决策链(供人工面试)。
     返回 {script_id: {"user", "chain":[{step, tool, args, tool_reply}], "auto_hint"}}。"""
-    from ai_testset import SYSTEM_TEMPLATE, DEFAULT_INSTANCES
+    from launcher_app.ai.ai_testset import SYSTEM_TEMPLATE, DEFAULT_INSTANCES
     base_sys = SYSTEM_TEMPLATE.format(instances=DEFAULT_INSTANCES) + \
         f" 可用服务端:{single_set.DEFAULT_SERVERS}。\n" + _tool_format_block()
     out = {}
@@ -307,8 +307,8 @@ def run_multistep(server, cfg, scripts):
 
 def _tool_format_block():
     """多步用的输出格式约束(同 single)。"""
-    import assistant
-    from ai_testset import SYSTEM_TEMPLATE  # noqa
+    import launcher_app.ai.assistant as assistant
+    from launcher_app.ai.ai_testset import SYSTEM_TEMPLATE  # noqa
     names = ", ".join(sorted(t["function"]["name"] for t in assistant.TOOLS))
     return (f"【可用工具名】(name 必须从中选):{names}\n"
             "【输出格式】只输出 JSON:{\"name\": \"<工具名>\", \"arguments\": {<参数>}}\n"

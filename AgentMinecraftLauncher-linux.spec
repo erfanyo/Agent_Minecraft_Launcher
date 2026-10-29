@@ -5,7 +5,7 @@ from pathlib import Path
 import importlib.util
 
 import PySide6
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
 WEB_DATA, WEB_BINARIES, WEB_IMPORTS = [], [], []
@@ -19,8 +19,8 @@ if importlib.util.find_spec("webview"):
 SMOKE_IMPORTS = [
     "paths", "settings",
     "os_platform.system", "os_platform.openpath", "os_platform.temperature",
-    "os_platform.notify", "game_command", "lan_tools", "instance_manager",
-    "version_home", "online_center", "assistant_ui", "local_ai", "ci_smoke",
+    "os_platform.notify", 'launcher_app.instances.game_command', 'launcher_app.ui.lan_tools', 'launcher_app.ui.instance_manager',
+    'launcher_app.ui.version_home', 'launcher_app.ui.online_center', 'launcher_app.ai.assistant_ui', 'launcher_app.ai.local_ai', "ci_smoke",
 ]
 
 PYSIDE6_DIR = Path(PySide6.__file__).parent
@@ -35,7 +35,7 @@ datas = [
     ("LICENSE", "."),
     ("THIRD_PARTY.md", "."),
     ("THIRD_PARTY_NOTICES.md", "."),
-] + WEB_DATA
+] + [(f'languages/{lang}.json', 'languages') for lang in ('en', 'ja', 'ko', 'fr', 'es', 'ru', 'ar')] + WEB_DATA
 
 icu_data = PYSIDE6_DIR / "resources" / "icudtl.dat"
 if icu_data.is_file():
@@ -46,7 +46,7 @@ a = Analysis(
     pathex=[],
     binaries=WEB_BINARIES,
     datas=datas,
-    hiddenimports=WEB_IMPORTS + SMOKE_IMPORTS,
+    hiddenimports=WEB_IMPORTS + SMOKE_IMPORTS + collect_submodules('launcher_app.features'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -58,7 +58,13 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-pyz = PYZ(a.pure)
+import sys
+sys.path.insert(0, str(Path(SPECPATH) / 'tools'))
+from bundle_credentials import inject_credentials
+inject_credentials(a, SPECPATH)
+from PyInstaller.config import CONF
+from uuid import uuid4
+pyz = PYZ(a.pure, name=str(Path(CONF['workpath']) / ('PYZ-' + uuid4().hex + '.pyz')))
 
 exe = EXE(
     pyz,

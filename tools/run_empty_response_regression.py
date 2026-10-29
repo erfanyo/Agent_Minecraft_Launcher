@@ -13,11 +13,11 @@ def main():
         raise ValueError('Use a new regression output directory')
     root.mkdir(parents=True)
 
-    import ai_run
-    import agent_tools
-    from assistant import CLOUD_MAX_TOKENS, TOOLS
+    import launcher_app.ai.ai_run as ai_run
+    import launcher_app.ai.agent_tools as agent_tools
+    from launcher_app.ai.assistant import CLOUD_MAX_TOKENS, TOOLS
     from settings import load_settings
-    from skill_manager import SkillManager
+    from launcher_app.extensions.skill_manager import SkillManager
 
     config = load_settings()
     config.update(ai_run_timeout_seconds=240, ai_run_context_chars=64000,

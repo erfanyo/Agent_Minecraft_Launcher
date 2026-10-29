@@ -24,7 +24,7 @@ if ($Files.Count -gt 0) {
     $changed = Get-ChildItem -Recurse -File -Path $LOCAL |
         Where-Object {
             $_.LastWriteTime -gt $cutoff -and
-            $_.FullName -notmatch '\\\.venv\\|\\__pycache__\\|\\\.tmp\\|\\dist\\|\\dist_070\\|\\build\\|\\\.minecraft\\|\\AMCL\\' -and
+            $_.FullName -notmatch '\\\.venv\\|\\__pycache__\\|\\\.tmp\\|\\dist\\|\\dist_070\\|\\build\\|\\\.minecraft\\|\\AMCL\\|\\related-projects\\|\\local-maintenance\\|\\archives\\|\\outputs\\|\\00-工作区入口\\' -and
             $_.Extension -match '\.(py|json|md|txt|spec)$'
         } | ForEach-Object {
             $_.FullName.Substring($LOCAL.Length + 1).Replace('\', '/')
@@ -47,7 +47,7 @@ if ($Files.Count -gt 0) {
         $_ -notmatch '^build' -and
         $_ -notmatch '^\.venv' -and
         $_ -notmatch '^AMCL' -and
-        $_ -notmatch '^(acl-recovery|comfy|host_fixes|outputs)/'
+        $_ -notmatch '^(acl-recovery|comfy|host_fixes|outputs|related-projects|local-maintenance|archives|00-工作区入口)/'
     }
 }
 

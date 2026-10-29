@@ -58,11 +58,11 @@ def main() -> int:
         "paths", "settings",
         "os_platform.system", "os_platform.openpath", "os_platform.temperature",
         "os_platform.notify",
-        "game_command", "lan_tools", "instance_manager",
-        "version_home", "online_center", "smart_import", "smart_import_ui",
-        "server_pack_builder", "server_pack_builder_ui", "server_pack_report",
-        "server_pack_rules", "export_paths", "export_destination_ui",
-        "assistant_ui", "local_ai", "main",
+        'launcher_app.instances.game_command', 'launcher_app.ui.lan_tools', 'launcher_app.ui.instance_manager',
+        'launcher_app.ui.version_home', 'launcher_app.ui.online_center', 'launcher_app.ui.smart_import', 'launcher_app.ui.smart_import_ui',
+        'launcher_app.servers.server_pack_builder', 'launcher_app.servers.server_pack_builder_ui', 'launcher_app.servers.server_pack_report',
+        'launcher_app.servers.server_pack_rules', 'launcher_app.ui.export_paths', 'launcher_app.ui.export_destination_ui',
+        'launcher_app.ai.assistant_ui', 'launcher_app.ai.local_ai', "main",
     ]
     for m in mods:
         try:
@@ -73,6 +73,16 @@ def main() -> int:
     for error in packaged_file_errors():
         _report("SMOKE FAIL: " + error, error=True)
         return 1
+    if getattr(sys, 'frozen', False) and os.environ.get('AMCL_EXPECT_BUNDLED_CF_KEY') == '1':
+        from launcher_app.runtime.bundled_credentials import curseforge_key
+        key = curseforge_key()
+        if not key:
+            _report('SMOKE FAIL: bundled CurseForge credential missing', error=True)
+            return 1
+        from launcher_app.core.log_privacy import redact_text
+        if key in redact_text('credential-check: ' + key):
+            _report('SMOKE FAIL: bundled credential redaction failed', error=True)
+            return 1
     _report("SMOKE OK: all modules import and packaged files are present")
     return 0
 

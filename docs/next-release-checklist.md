@@ -1,5 +1,13 @@
 # 下一版本发布清单
 
+## 本轮候选准备（2026-10-29）
+
+- 用户明确本轮暂不打包预装本地 AI 模型 ZIP；本地模型能力保留。CI 增加 `include_local_ai` 输入，缺省 false；Windows 标准版与 Linux 包继续构建验收。
+- 核心测试改用 pytest 收集全部 `tests/unit`，避免漏掉函数式测试。Qt UI 普通与 150% DPI 继续单独执行。
+- Windows/Linux spec 显式收集七种语言包；标准发行版构建使用已明确授权的仓库 Actions Secret 注入 CurseForge Key，成品冒烟检查验证注入存在且会被日志脱敏。公开源码中无真实 Key，授权邮件与私有构建输入不提交。
+- 本轮只准备与验证 CI，不自动签名、发布 Release 或宣布正式版。版本号与最终更新说明仍待确定。以下 1.1.0 记录为上一轮历史，不作为本轮通过证据。
+- 本地检查：核心 pytest 951 通过、1 跳过（可见 WebView）、70 子测试通过；UI 普通/150% 各 124 通过；源码导入冒烟通过。日志与 JUnit 保留在 `.tmp/ci-preflight-*`。待远端 CI 与冻结成品验证，不以本地源码测试代替成品结果。
+
 更新日期：2026-10-13。版本号：1.1.0（已发布）。
 
 ## 1.1.0 发布完成
@@ -54,7 +62,7 @@
 
 候选：联机、运行实例检测、插件分类/分享码与自动保存、Linux 插件安装/重启异常、复制代码、内存守护、AI 修复锁、BridgeMod 老 Forge 构建兼容。BridgeMod 发布前需核对 jar 及清单是否匹配源码。
 
-`acl-recovery/`、`comfy/`、`host_fixes/`、`outputs/` 是本地工作目录，不作为默认发布输入。现有历史版本说明保留，不覆盖 1.0.0 发布记录。
+`related-projects/`（含 DPH_Chat、comfy）、`local-maintenance/`（含 acl-recovery、host_fixes）、`archives/`、`outputs/` 和 `00-工作区入口/` 是本地工作目录，不作为默认发布输入。根目录的 `DPH_Chat/` 仅为旧路径兼容入口。现有历史版本说明保留，不覆盖 1.0.0 发布记录。
 
 ## 服务端修复循环回归（2026-10-12）
 

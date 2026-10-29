@@ -13,7 +13,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from ai_testset import evaluate_output, norm, _INSTANCE_ALIASES
+from launcher_app.ai.ai_testset import evaluate_output, norm, _INSTANCE_ALIASES
 
 # 声明的合法值(与 testset/single.py 对齐)——瞎编检测用
 KNOWN_INSTANCES = {"neoforge-21.1.248", "fabric-1.21.1", "vanilla-1.20.1"}

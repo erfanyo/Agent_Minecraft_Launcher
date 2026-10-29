@@ -19,7 +19,7 @@ Write-Host "[sync] Scanning changed files..." -ForegroundColor Cyan
 $changed = Get-ChildItem -Recurse -File -Path $LOCAL |
     Where-Object {
         $_.LastWriteTime -gt $CUTOFF -and
-        $_.FullName -notmatch '\\\.venv\\|\\__pycache__\\|\\\.tmp\\|\\dist\\|\\dist_070\\|\\build\\|\\\.minecraft\\|\\AMCL\\' -and
+        $_.FullName -notmatch '\\\.venv\\|\\__pycache__\\|\\\.tmp\\|\\dist\\|\\dist_070\\|\\build\\|\\\.minecraft\\|\\AMCL\\|\\related-projects\\|\\local-maintenance\\|\\archives\\|\\outputs\\|\\00-工作区入口\\' -and
         $_.Extension -match '\.(py|json|md|txt|spec)$'
     }
 

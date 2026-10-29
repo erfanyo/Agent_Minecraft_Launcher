@@ -63,7 +63,9 @@ jobs:
           (cd "$LINUX_DIR" && sha256sum -c SHA256SUMS-linux.txt)
           mkdir -p release/assets
           cp "$WINDOWS_DIR/AgentMinecraftLauncher.exe" release/assets/
-          cp "$WINDOWS_DIR/AgentMinecraftLauncher-Windows-LocalAI.zip" release/assets/
+          if grep -Fq 'AgentMinecraftLauncher-Windows-LocalAI.zip' "$WINDOWS_DIR/SHA256SUMS.txt"; then
+            cp "$WINDOWS_DIR/AgentMinecraftLauncher-Windows-LocalAI.zip" release/assets/
+          fi
           cp "$WINDOWS_DIR/SHA256SUMS.txt" release/assets/
           cp "$LINUX_DIR/AgentMinecraftLauncher-linux-x86_64.tar.gz" release/assets/
           cp "$LINUX_DIR/SHA256SUMS-linux.txt" release/assets/

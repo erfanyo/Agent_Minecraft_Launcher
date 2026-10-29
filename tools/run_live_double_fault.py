@@ -59,7 +59,7 @@ def main():
     game = Path(meta['game_root'])
     baseline = game / 'versions' / meta['instance']
     identity = sys.argv[2] if len(sys.argv) > 2 else 'double-trial'
-    from safe_paths import safe_component
+    from launcher_app.core.safe_paths import safe_component
     safe_component(identity)
     folder = game / 'versions' / identity
     trial = root / identity
@@ -81,7 +81,7 @@ def main():
     mixin_config, removed_class = corrupt_declared_mixin(iris, staged)
     shutil.copyfile(staged, iris)
 
-    import diagnostic_tools as diagnostic
+    import launcher_app.instances.diagnostic_tools as diagnostic
     baseline_hashes = diagnostic._inventory(str(baseline))
     protected_names = ('launch_options.json', identity + '.json', identity + '.jar',
                        'saves/New World/data/scoreboard.dat')
@@ -107,14 +107,14 @@ def main():
         return str(destination)
 
     paths.data_dir = data_dir
-    import ai_run
+    import launcher_app.ai.ai_run as ai_run
     ai_run.data_dir = data_dir
-    import agent_tools
-    from assistant import TOOLS
-    from game_launch_service import GameLaunchService
-    from instances import scan_instances
-    from log_privacy import redact
-    from skill_manager import SkillManager
+    import launcher_app.ai.agent_tools as agent_tools
+    from launcher_app.ai.assistant import TOOLS
+    from launcher_app.instances.game_launch_service import GameLaunchService
+    from launcher_app.instances.instances import scan_instances
+    from launcher_app.core.log_privacy import redact
+    from launcher_app.extensions.skill_manager import SkillManager
 
     attempts = []
     calls = []
