@@ -109,7 +109,7 @@ class InstanceTests(unittest.TestCase):
         timer = QTimer()
         timer.timeout.connect(lambda: ticks.append(True))
         timer.start(10)
-        with patch('main.GameLaunchService') as service:
+        with patch('launcher_app.instances.launch_preparation.GameLaunchService') as service:
             service.return_value.prepare.side_effect = prepare
             MainWindow.launch_selected(window, _processes_checked=True)
             deadline = time.monotonic() + 2

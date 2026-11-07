@@ -1701,6 +1701,22 @@
     "粘贴网盘分享链接": "Pegar enlace de nube",
     "补齐文件并重试": "Completar archivos y reintentar",
     "尚未启动浏览器助手，请在网页手动点击下载；文件落地后会自动接收。": "El asistente del navegador no se ha iniciado. Descarga desde la página; los archivos completos se recibirán automáticamente.",
-    "已向浏览器助手提交下载任务，请在 AI 对话中查看操作和所需确认。": "Tarea enviada al asistente del navegador. Consulta el chat de IA para ver acciones y confirmaciones necesarias."
+    "已向浏览器助手提交下载任务，请在 AI 对话中查看操作和所需确认。": "Tarea enviada al asistente del navegador. Consulta el chat de IA para ver acciones y confirmaciones necesarias.",
+    "房间收藏": "Salas guardadas",
+    "加入收藏房间": "Unirse a la sala guardada",
+    "重开收藏房间": "Reabrir la sala guardada",
+    "收藏当前房间": "Guardar sala actual",
+    "修改备注": "Editar nombre local",
+    "移除收藏": "Eliminar sala guardada",
+    "选择收藏房间": "Seleccionar sala guardada",
+    "本地备注名称：": "Nombre local:",
+    "房主": "Anfitrión",
+    "加入者": "Invitado",
+    "重试连接房主": "Reintentar conexión con el anfitrión",
+    "房间收藏读写失败，请检查本机文件权限。": "No se pudieron leer o guardar las salas. Revisa los permisos de los archivos locales.",
+    "收藏含房间凭证，仅保存在本机；备注不改变房间码，也不代表房间永久在线。": "Las salas guardadas incluyen credenciales de invitación y permanecen en este dispositivo. Cambiar el nombre no cambia el código ni mantiene la sala conectada.",
+    "连接难度不代表成功率，也不能据此判断实际使用直连还是中继。": "La dificultad de conexión no es una tasa de éxito ni indica si la conexión es directa o por relé.",
+    "可重试或更换公共节点；仍失败时可尝试支持中继的其他联机方案。": "Reintenta o cambia los nodos públicos. Si sigue fallando, prueba otro método que admita retransmisión.",
+    "陶瓦操作失败，请检查程序、房间信息和网络后重试。": "La operación de Terracotta falló. Revisa el programa, los datos de la sala y la red, y vuelve a intentarlo."
   }
 }

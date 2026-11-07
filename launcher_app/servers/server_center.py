@@ -240,19 +240,19 @@ class ServerCenter(QWidget):
         self._poll_repair(server, state)
 
     def _poll_repair(self, server, state):
+        from launcher_app.servers.repair_policy import RepairAction, poll_action
         repair = self._repair
-        if not repair or repair['id'] != server['id'] or repair['processing']:
+        action = poll_action(repair, server['id'], state)
+        if action is RepairAction.WAIT:
             return
-        if not state or state.get('sessionId') != repair.get('session'):
-            return
-        if repair.get('ready') and state.get('running'):
+        if action is RepairAction.READY:
             self._finish_repair('ready')
             message = f"服务端已启动完成；本轮停用了 {len(repair['disabled'])} 个 Mod。"
             self.task_status.setText(message)
             self.log.appendPlainText('[AMCL 修复测试] ' + message)
             task_notice(self, t('服务端测试通过'), message + t('\n请再进服检查整合包玩法是否正常。'))
             return
-        if repair.get('startup_failed') and state.get('running'):
+        if action is RepairAction.ABORT_AND_DIAGNOSE:
             repair['processing'] = True
             from launcher_app.servers.server_host_client import abort_failed_server_startup
             def abort_and_diagnose(_task):
@@ -262,8 +262,6 @@ class ServerCenter(QWidget):
             self._run(abort_and_diagnose,
                       lambda result: self._offer_repair(server, result),
                       '正在分析服务端启动失败…')
-            return
-        if state.get('running') or state.get('exitCode') is None:
             return
         repair['processing'] = True
         self.log.appendPlainText('[AMCL 修复测试] 本轮未启动完成，正在分析本次日志…')
@@ -280,11 +278,8 @@ class ServerCenter(QWidget):
         repair = self._repair
         if not repair or repair['id'] != server['id']:
             return
-        candidates = [row for row in diagnosis.get('suggestions', [])
-                      if row.get('level') in ('high', 'medium')
-                      and ('客户端类' in row.get('reason', '')
-                           or '仅客户端' in row.get('reason', ''))
-                      and row.get('file') not in repair['attempted']]
+        from launcher_app.servers.repair_policy import client_only_candidates
+        candidates = client_only_candidates(diagnosis, repair['attempted'])
         if not candidates:
             for note in diagnosis.get('notes', []):
                 self.log.appendPlainText('[AMCL 修复诊断] ' + str(note))

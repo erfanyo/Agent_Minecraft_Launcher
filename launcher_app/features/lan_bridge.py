@@ -134,17 +134,19 @@ def terracotta_state():
     return _terracotta_request('')
 
 
-def terracotta_host(player='', public_nodes=None):
+def terracotta_host(player='', public_nodes=None, *, room=None):
     params = {'public_nodes': list(TERRACOTTA_PUBLIC_NODES if public_nodes is None else public_nodes)}
     if player:
         params['player'] = player
+    if room is not None:
+        from launcher_app.online.room_bookmarks import validate_room
+        params['room'] = validate_room(room)
     _terracotta_request('scanning', params)
 
 
 def terracotta_join(room, player='', public_nodes=None):
-    room = str(room or '').strip()
-    if not room or len(room) > 256:
-        raise ValueError('请输入有效的 Terracotta 大厅编号')
+    from launcher_app.online.room_bookmarks import validate_room
+    room = validate_room(room)
     _terracotta_request('guesting', {'room': room, 'public_nodes': list(TERRACOTTA_PUBLIC_NODES if public_nodes is None else public_nodes), **({'player': player} if player else {})})
 
 
@@ -272,9 +274,10 @@ def _download_terracotta(destination, report):
 
 def _add_terracotta_ui(layout, page, api):
     from PySide6.QtCore import Qt, QTimer, QObject, Signal
-    from PySide6.QtWidgets import (QApplication, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QPushButton, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QComboBox, QListWidget, QListWidgetItem)
+    from PySide6.QtWidgets import (QApplication, QFileDialog, QMessageBox, QHBoxLayout, QVBoxLayout, QLabel, QLineEdit, QPushButton, QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QComboBox, QListWidget, QListWidgetItem, QLayout)
     from launcher_app.ui.ui_style import set_style, panel_style, card_btn_style, muted_color
 
+    layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
     layout.addWidget(QLabel(t('Terracotta · 跨启动器大厅编号')))
     info = QLabel(t('房主先在游戏中开放局域网，再创建大厅。访客输入大厅编号，连接成功后会把本机地址加入当前实例的多人游戏列表。陶瓦自带 EasyTier 核心，无需在 EasyTier 页面另建网络。'))
     info.setWordWrap(True)
@@ -311,11 +314,12 @@ def _add_terracotta_ui(layout, page, api):
     top = QHBoxLayout()
     top.setSpacing(12)
     layout.addLayout(top)
-    room_card, manage_card = QWidget(), QWidget()
-    for card in (room_card, manage_card):
-        set_style(card, panel_style)
-        top.addWidget(card, 1)
-    room_layout, manage_layout = QVBoxLayout(room_card), QVBoxLayout(manage_card)
+    room_card = QWidget()
+    room_card.setObjectName('terracottaRoomCard')
+    set_style(room_card, lambda: 'QWidget#terracottaRoomCard {' + panel_style() + '}')
+    top.addWidget(room_card, 1)
+    room_layout = QVBoxLayout(room_card)
+    room_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
     def section_title(text):
         label = QLabel(text)
         font = label.font()
@@ -387,7 +391,6 @@ def _add_terracotta_ui(layout, page, api):
             port_status.setText(t('局域网端口：暂未检测到；已开放时仍可继续创建大厅。'))
 
     instance_choice.currentIndexChanged.connect(update_port_status)
-    manage_layout.addWidget(section_title(t('大厅管理')))
     root = page.window()
     while root is not None and not hasattr(root, 'settings'):
         root = root.parentWidget()
@@ -408,8 +411,9 @@ def _add_terracotta_ui(layout, page, api):
     room_layout.addLayout(nickname_row)
     nickname.editingFinished.connect(lambda: api.set_config('terracotta_player', nickname.text().strip()))
     connection = QLabel(t('尚未加入大厅'))
+    connection.setObjectName('terracottaConnection')
     connection.setWordWrap(True)
-    manage_layout.addWidget(connection)
+    room_layout.addWidget(connection)
     log_button = QPushButton(t('查看陶瓦日志'))
     log_button.setEnabled(bool(_terracotta_port))
     def open_log():
@@ -426,11 +430,12 @@ def _add_terracotta_ui(layout, page, api):
     path_row.addWidget(path, 1)
     path_row.addWidget(choose)
     path_row.addWidget(download)
-    manage_layout.addLayout(path_row)
+    room_layout.addLayout(path_row)
     for control in (path, choose, download):
         control.hide()
     room_row = QHBoxLayout()
     room = QLineEdit()
+    room.setObjectName('terracottaJoinCode')
     room.setPlaceholderText(t('访客输入房主分享的大厅编号'))
     copy_room = QPushButton(t('复制大厅编号'))
     copy_room.setEnabled(False)
@@ -446,6 +451,10 @@ def _add_terracotta_ui(layout, page, api):
     room_layout.addLayout(hall_code_row)
     hall_code.hide()
     copy_room.hide()
+    room.setProperty('ai_pin_sensitive', True)
+    hall_code.setProperty('ai_pin_sensitive', True)
+    last_join = {}
+    displayed_session = {'role': None}
     join_mode = {'value': False}
     disconnect_notice = {'value': ''}
     cancel_join = QPushButton(t('返回'))
@@ -456,21 +465,23 @@ def _add_terracotta_ui(layout, page, api):
     leave = QPushButton(t('退出大厅'))
     for button in (host, cancel_join, join):
         buttons.addWidget(button)
-    manage_layout.addWidget(leave)
+    buttons.addWidget(leave)
     buttons.addStretch()
     room_layout.addLayout(buttons)
     address_row = QHBoxLayout()
     address = QLineEdit()
     address.setReadOnly(True)
+    address.setObjectName('terracottaAddress')
     address.setPlaceholderText(t('加入成功后显示本机游戏地址'))
     copy_address = QPushButton(t('复制地址'))
     copy_address.setEnabled(False)
     address_row.addWidget(address, 1)
     address_row.addWidget(copy_address)
-    manage_layout.addLayout(address_row)
+    room_layout.addLayout(address_row)
+    address.hide()
+    copy_address.hide()
     status = QLabel(_install_state['terracotta'] or t('创建或加入大厅时会自动准备 Terracotta。'))
     status.setWordWrap(True)
-    manage_layout.addStretch()
     layout.addWidget(status)
     members_title = section_title(t('大厅成员 · 尚未连接'))
     layout.addWidget(members_title)
@@ -490,12 +501,36 @@ def _add_terracotta_ui(layout, page, api):
     footer.addWidget(log_button)
     layout.addLayout(footer)
 
+    from launcher_app.online.room_bookmarks import RoomBookmarks, connection_difficulty
+    from launcher_app.ui.room_bookmarks_panel import RoomBookmarksPanel
+    def current_invitation():
+        code = hall_code.text().strip()
+        if code and displayed_session['role']:
+            return displayed_session['role'], code
+        if not room.isHidden() and room.text().strip():
+            return 'guest', room.text().strip()
+        return None
+    bookmarks = RoomBookmarksPanel(
+        RoomBookmarks(api.data_path('room-invitations.json')),
+        current_invitation=current_invitation,
+        activate=lambda item: run('host' if item.role == 'host' else 'join', bookmark=item), parent=page)
+    room_layout.addWidget(bookmarks)
+    room.textChanged.connect(lambda _: bookmarks._selection())
+    hall_code.textChanged.connect(lambda _: bookmarks._selection())
+    retry = QPushButton(t('重试连接房主'))
+    retry.hide()
+    retry.setObjectName('terracottaRetry')
+    set_style(retry, card_btn_style)
+    room_layout.addWidget(retry)
+    retry.clicked.connect(lambda: run('retry'))
+
     copy_room.clicked.connect(lambda: copy_with_feedback(copy_room, hall_code.text().strip()))
     copy_address.clicked.connect(lambda: copy_with_feedback(copy_address, address.text().strip()))
     address.textChanged.connect(lambda value: copy_address.setEnabled(bool(value.strip())))
 
     busy = {'value': False}
     polling = {'value': False}
+    operation_generation = {'value': 0}
     saved_address = {'value': ''}
     phase = {'stage': '', 'since': time.monotonic()}
     leave.hide()
@@ -571,7 +606,11 @@ def _add_terracotta_ui(layout, page, api):
         copy_room.setVisible(active)
         leave.setVisible(active)
         leave.setText(t('解散大厅') if stage.startswith('host-') else t('退出大厅'))
-        code = str(state.get('room') or '')
+        displayed_session['role'] = 'host' if stage.startswith('host-') else ('guest' if stage.startswith('guest-') else None)
+        bookmarks.set_session(active=active, busy=busy['value'])
+        retry.setVisible(bool(last_join) and not active)
+        retry.setEnabled(not busy['value'])
+        code = str(state.get('room') or (last_join.get('code', '') if stage.startswith('guest-') else ''))
         if code:
             hall_code.setText(code)
         elif not active:
@@ -606,6 +645,8 @@ def _add_terracotta_ui(layout, page, api):
         log_button.setEnabled(bool(_terracotta_port))
         copy_room.setEnabled(stage in ('host-ok', 'guest-ok') and bool(hall_code.text().strip()))
         address.setText(str(state.get('url') or '') if stage == 'guest-ok' else '')
+        address.setVisible(stage == 'guest-ok' and bool(address.text()))
+        copy_address.setVisible(stage == 'guest-ok' and bool(address.text()))
         messages = {
             'waiting': '已就绪，可创建或加入大厅。',
             'host-scanning': '正在查找游戏开放的局域网端口…',
@@ -613,7 +654,7 @@ def _add_terracotta_ui(layout, page, api):
             'host-ok': '大厅已就绪，请分享大厅编号。',
             'guest-connecting': '正在查找并连接大厅…',
             'guest-starting': '大厅码有效，正在通过陶瓦内置 EasyTier 连接房主…',
-            'guest-ok': '已连接；在 Minecraft 多人游戏中连接大厅管理区的地址。',
+            'guest-ok': '已连接；可在 Minecraft 多人游戏中使用下方本机地址。',
         }
         message = 'Terracotta：' + messages.get(stage, str(state.get('message') or stage or '未知状态'))
         guest_address = address.text().strip()
@@ -643,17 +684,26 @@ def _add_terracotta_ui(layout, page, api):
             message += f'（{elapsed} 秒）'
             if elapsed >= 30:
                 message += '\n连接耗时较长：请确认房主仍在大厅、已开放局域网，并检查双方防火墙 / 网络限制。'
-        difficulty = {'UNKNOWN': '检测中', 'EASIEST': '容易', 'SIMPLE': '较容易', 'MEDIUM': '一般', 'TOUGH': '困难'}
-        connection.setText(message + (t('\n网络连接难度：') + difficulty.get(state.get('difficulty'), '未知') if 'difficulty' in state else ''))
-        status.setText(message)
+        if 'difficulty' in state:
+            message += t('\n网络连接难度：') + t(connection_difficulty(state) or '未知')
+            message += '\n' + t('连接难度不代表成功率，也不能据此判断实际使用直连还是中继。')
+        if stage == 'exception' or (stage in ('guest-connecting', 'guest-starting', 'host-starting') and elapsed >= 30):
+            message += '\n' + t('可重试或更换公共节点；仍失败时可尝试支持中继的其他联机方案。')
+        connection.setText(message)
+        status.setVisible(False)
 
     def ready(result):
         busy['value'] = False
         for button in (host, join, leave, choose):
             button.setEnabled(True)
+        bookmarks.set_session(active=phase['stage'].startswith(('host-', 'guest-')), busy=False)
+        retry.setEnabled(True)
         if isinstance(result, Exception):
-            status.setText('Terracotta：' + str(result))
-            connection.setText(t('无法读取陶瓦状态：') + str(result))
+            show_state({'state': 'waiting'})
+            retry.setVisible(bool(last_join))
+            status.show()
+            status.setText(t('陶瓦操作失败，请检查程序、房间信息和网络后重试。'))
+            connection.setText(t('陶瓦操作失败，请检查程序、房间信息和网络后重试。'))
             members_title.setText(t('大厅成员 · 状态读取失败'))
             if not _terracotta_path or not os.path.isfile(_terracotta_path):
                 show_recovery()
@@ -721,8 +771,10 @@ def _add_terracotta_ui(layout, page, api):
             state = dict(state, _amcl_left=True)
         return state
 
-    def run(action):
+    def run(action, *, bookmark=None):
         if busy['value']:
+            return
+        if action == 'retry' and not last_join:
             return
         if action == 'host':
             refresh_running_instances()
@@ -738,6 +790,12 @@ def _add_terracotta_ui(layout, page, api):
                 if reminder.clickedButton() is not proceed:
                     return
         busy['value'] = True
+        operation_generation['value'] += 1
+        if action == 'host':
+            last_join.clear()
+        bookmarks.set_session(active=False, busy=True)
+        retry.setEnabled(False)
+        status.show()
         for button in (host, join, leave, choose):
             button.setEnabled(False)
         disconnect_notice['value'] = ''
@@ -746,26 +804,35 @@ def _add_terracotta_ui(layout, page, api):
         selected_path, code = path.text().strip(), room.text().strip()
         player = nickname.text().strip()
         public_nodes = list(node_choice.currentData() or [])
-        if action in ('host', 'join'):
+        if bookmark is not None:
+            code = bookmark.code
+        if action == 'retry':
+            code, player, public_nodes = last_join['code'], last_join['player'], list(last_join['nodes'])
+        if action in ('join', 'retry'):
+            last_join.update(code=code, player=player, nodes=list(public_nodes))
+        host_room = bookmark.code if bookmark is not None and bookmark.role == 'host' else None
+        if action in ('host', 'join', 'retry'):
             selected_instance = instance_choice.currentData()
             page._terracotta_instance = dict(selected_instance) if selected_instance else None
-        if action in ('host', 'join'):
+        if action in ('host', 'join', 'retry'):
             api.set_config('terracotta_player', player)
         def work():
             try:
-                binary_path = selected_path
-                if action != 'leave' and not os.path.isfile(binary_path):
-                    signals.progress.emit('正在自动准备 Terracotta…')
-                    binary_path = download_terracotta(api.data_path('terracotta'), signals.progress.emit)
-                    signals.auto_installed.emit(binary_path)
-                terracotta_connect(binary_path)
-                if action == 'host':
-                    terracotta_host(player, public_nodes)
-                elif action == 'join':
-                    terracotta_join(code, player, public_nodes)
-                elif action == 'leave':
-                    terracotta_leave()
-                result = fetch_state()
+                with _terracotta_lock:
+                    binary_path = selected_path
+                    if action != 'leave' and not os.path.isfile(binary_path):
+                        signals.progress.emit('正在自动准备 Terracotta…')
+                        binary_path = download_terracotta(api.data_path('terracotta'), signals.progress.emit)
+                        signals.auto_installed.emit(binary_path)
+                    terracotta_connect(binary_path)
+                    if action == 'host':
+                        terracotta_host(player, public_nodes, room=host_room)
+                    elif action in ('join', 'retry'):
+                        terracotta_leave()
+                        terracotta_join(code, player, public_nodes)
+                    elif action == 'leave':
+                        terracotta_leave()
+                    result = fetch_state()
             except Exception as exc:
                 result = exc
             try:
@@ -776,13 +843,19 @@ def _add_terracotta_ui(layout, page, api):
 
     def poll_ready(result):
         polling['value'] = False
+        if isinstance(result, tuple):
+            generation, result = result
+            if generation != operation_generation['value']:
+                return
         # 操作进行中时不使用可能早于操作的状态快照。
         if busy['value']:
             return
         if isinstance(result, Exception):
             if _terracotta_port is None:
                 show_state({'state': 'waiting'})
-            connection.setText(t('无法读取陶瓦状态：') + str(result))
+            address.hide()
+            copy_address.hide()
+            connection.setText(t('陶瓦操作失败，请检查程序、房间信息和网络后重试。'))
             members_title.setText(t('大厅成员 · 状态读取失败'))
         else:
             show_state(result)
@@ -792,13 +865,15 @@ def _add_terracotta_ui(layout, page, api):
         if busy['value'] or polling['value']:
             return
         polling['value'] = True
+        generation = operation_generation['value']
         def work():
             try:
-                result = fetch_state()
+                with _terracotta_lock:
+                    result = fetch_state() if generation == operation_generation['value'] else None
             except Exception as exc:
                 result = exc
             try:
-                signals.polled.emit(result)
+                signals.polled.emit((generation, result))
             except RuntimeError:
                 pass
         threading.Thread(target=work, daemon=True).start()

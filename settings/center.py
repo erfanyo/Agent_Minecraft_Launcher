@@ -230,7 +230,7 @@ class SettingsCenter(QWidget):
         self.memory_spin.valueChanged.connect(self.memory_meter.refresh)
         self.memory_auto_check.toggled.connect(self.memory_meter.refresh)
         form.addRow('', self.memory_meter)
-        from launcher_app.instances.advanced_launch import editor
+        from launcher_app.ui.jvm_options_editor import editor
         self.jvm_editor = editor(self.settings.get('jvm_args', ''))
         memory_form = form
         form = QFormLayout()

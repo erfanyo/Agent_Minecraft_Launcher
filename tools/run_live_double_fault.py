@@ -110,7 +110,7 @@ def main():
     import launcher_app.ai.ai_run as ai_run
     ai_run.data_dir = data_dir
     import launcher_app.ai.agent_tools as agent_tools
-    from launcher_app.ai.assistant import TOOLS
+    from launcher_app.ai.tool_catalog import TOOLS
     from launcher_app.instances.game_launch_service import GameLaunchService
     from launcher_app.instances.instances import scan_instances
     from launcher_app.core.log_privacy import redact

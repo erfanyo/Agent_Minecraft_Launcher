@@ -78,7 +78,7 @@ def execute_case(case, config, output):
     import paths
     import launcher_app.ai.agent_tools as agent_tools
     import launcher_app.instances.diagnostic_tools as diagnostic
-    from launcher_app.ai.assistant import TOOLS
+    from launcher_app.ai.tool_catalog import TOOLS
     from launcher_app.ai.ai_run import run
     from launcher_app.extensions.skill_manager import SkillManager
     identity = case['id']

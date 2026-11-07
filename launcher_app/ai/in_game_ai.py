@@ -144,7 +144,7 @@ class InGameAI:
 def _in_game_tools():
     """游戏内可用的 AI 工具子集(从 assistant.TOOLS 里挑):以指令/查询为主,不含写操作。"""
     try:
-        from launcher_app.ai.assistant import TOOLS
+        from launcher_app.ai.tool_catalog import TOOLS
     except Exception:
         return None
     want = {"send_game_command", "get_command_guide", "get_recipe_path",
@@ -191,12 +191,15 @@ def _can_exec(ctx: dict) -> bool:
     return False
 
 
-def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) -> str:
+def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None, *, context_provider=None) -> str:
     """游戏内 AI 的系统提示 = 启动器 ai_context(含 skill 系统)+ 当前实例说明 + 玩家上下文。"""
     parts = []
-    if win is not None and hasattr(win, "ai_context"):
+    provider = context_provider
+    if provider is None and win is not None and hasattr(win, 'ai_context'):
+        provider = win.ai_context  # Compatibility for external integrations.
+    if provider is not None:
         try:
-            parts.append(win.ai_context())
+            parts.append(provider())
         except Exception:
             pass
     if not parts:
@@ -256,7 +259,7 @@ def _in_game_ctx(win, instance: str, settings: dict, ctx: dict | None = None) ->
     return "\n\n".join(parts)
 
 
-def make_answerer(win=None, settings: dict | None = None):
+def make_answerer(win=None, settings: dict | None = None, *, context_provider=None):
     """返回 answer_fn(text, ctx) -> str:游戏内 AI,按启动器 AI 路由(ai_strategy)作答。
 
     开关(ai_in_game):off=关闭;其它值(如 on)=打开 → 走 assistant.route_answer,
@@ -280,9 +283,9 @@ def make_answerer(win=None, settings: dict | None = None):
             # 由 Minecraft 本身做最后的权限裁决，绝不退化为控制台身份。
             allow_exec = _can_exec(ctx)
             force_tools = _FULL_TOOLS if allow_exec else _READONLY_TOOLS
-            from launcher_app.ai.assistant import route_answer
-            system = _in_game_ctx(win, instance, cfg, ctx)
-            from launcher_app.ai.assistant import build_executor
+            from launcher_app.ai.response_router import route_answer
+            system = _in_game_ctx(win, instance, cfg, ctx, context_provider=context_provider)
+            from launcher_app.ai.tool_executor import build_executor
             # 游戏内没有可交互的确认对话框:玩家在游戏里主动敲 /ai,权限也已由 _can_exec
             # 按身份判定(集成服房主 / OP / --console),所以 send_game_command 直接执行,
             # 而不是返回"请在启动器里点确认"——启动器里并没有这个待确认项,玩家会白等。

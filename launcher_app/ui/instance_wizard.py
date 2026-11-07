@@ -20,18 +20,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from launcher_app.ai.agent_tools import OPTIMIZE_MODS, SHADER_MODS  # 可选 Mod 清单(与 CLI/AI 共用)
+from launcher_app.instances.install_options import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from launcher_app.instances.loaders import list_fabric_loaders, list_forge_versions, list_quilt_loaders, list_neoforge_versions
 from launcher_app.resources.modrinth import list_mod_versions
 
 # 可扩展的加载器列表:None 表示"原版不装加载器"
-LOADER_CHOICES = [
-    ("原版(无加载器)", None, None),
-    ("Fabric", "fabric", "fabric"),
-    ("Quilt", "quilt", "quilt"),
-    ("Forge", "forge", "forge"),
-    ("NeoForge", "neoforge", "neoforge"),
-]
 
 
 class LoaderOptionsPanel(QWidget):

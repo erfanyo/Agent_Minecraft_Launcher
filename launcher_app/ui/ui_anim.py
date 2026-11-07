@@ -7,8 +7,9 @@
 - 不引第三方库;QPainter 自绘控件(下载环 / Mod 依赖力导向图)继续用 QTimer 节流,不走这里。
 - 时长/easing 读 ui_tokens.DURATION / EASING。
 """
-from PySide6.QtCore import QEvent, QObject, Qt, QEasingCurve, QPropertyAnimation
-from PySide6.QtWidgets import QAbstractButton, QApplication, QGraphicsOpacityEffect
+from PySide6.QtCore import QEvent, QObject, Qt, QEasingCurve, QPropertyAnimation, QVariantAnimation
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QAbstractButton, QApplication, QGraphicsOpacityEffect, QWidget
 
 from launcher_app.ui.ui_tokens import DURATION, EASING
 import weakref
@@ -114,10 +115,72 @@ def fade_out(widget, duration_ms: int | None = None, on_done=None) -> None:
                      on_done)
 
 
+class _FeedbackLayer(QWidget):
+    """Animate a tint without offscreen compositing the entire widget subtree."""
+
+    def __init__(self, target):
+        super().__init__(target)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.amount = 0.0
+        self.color = QColor()
+        self.animation = QVariantAnimation(self)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutQuad)
+        self.animation.valueChanged.connect(self._frame)
+        self.animation.finished.connect(self._finished)
+        track_animation(self.animation)
+        target.installEventFilter(self)
+        self.hide()
+
+    def play(self, color, start, end, duration):
+        self.animation.stop()
+        self.color = QColor(color)
+        self.setGeometry(self.parentWidget().rect())
+        self.animation.setDuration(duration)
+        self.animation.setStartValue(start)
+        self.animation.setEndValue(end)
+        self._frame(start)
+        self.show()
+        self.raise_()
+        self.animation.start()
+
+    def _frame(self, amount):
+        self.amount = float(amount)
+        self.update()
+
+    def _finished(self):
+        if self.amount <= 0 or not is_animations_enabled():
+            self.hide()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Resize:
+            self.setGeometry(obj.rect())
+        elif event.type() == QEvent.Type.Hide:
+            self.animation.stop()
+            self.amount = 0.0
+            self.hide()
+        return False
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        color = QColor(self.color)
+        color.setAlphaF(max(0.0, min(1.0, self.amount)))
+        painter.fillRect(event.rect(), color)
+
+
+def _feedback_layer(widget):
+    layer = getattr(widget, '_ui_feedback_layer', None)
+    if layer is None:
+        layer = _FeedbackLayer(widget)
+        widget._ui_feedback_layer = layer
+    return layer
+
+
 def reveal(widget):
-    """轻微显现：保留文字可读性，不移动布局，不延迟用户输入。"""
-    if widget is not None and widget.isVisible():
-        _animate_opacity(widget, 0.62, 1.0, 190)
+    """轻微显现，不给整页控件树添加透明度效果或改变布局。"""
+    if _ANIMATIONS_ENABLED and widget is not None and widget.isVisible():
+        from launcher_app.ui.ui_style import current_color
+        _feedback_layer(widget).play(current_color('bg0'), 0.30, 0.0, 220)
 
 
 class InteractionFeedback(QObject):
@@ -141,16 +204,17 @@ class InteractionFeedback(QObject):
                 return False
         elif event.key() not in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
             return False
-        effect = obj.graphicsEffect()
-        if effect is not None and not isinstance(effect, QGraphicsOpacityEffect):
-            return False  # Keep custom shadows and effects intact.
         if kind in (QEvent.Type.MouseButtonPress, QEvent.Type.KeyPress):
             if kind != QEvent.Type.KeyPress or not event.isAutoRepeat():
                 obj._interaction_pressed = True
-                _animate_opacity(obj, 1.0, 0.78, 85)
+                layer = _feedback_layer(obj)
+                layer.play(obj.palette().highlight().color(), layer.amount, 0.18, 85)
         elif getattr(obj, '_interaction_pressed', False):
+            if kind == QEvent.Type.KeyRelease and event.isAutoRepeat():
+                return False
             obj._interaction_pressed = False
-            _animate_opacity(obj, 0.78, 1.0, 160)
+            layer = _feedback_layer(obj)
+            layer.play(obj.palette().highlight().color(), layer.amount, 0.0, 160)
         return False
 
 

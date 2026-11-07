@@ -1701,6 +1701,22 @@
     "粘贴网盘分享链接": "Coller un lien de partage cloud",
     "补齐文件并重试": "Compléter les fichiers et réessayer",
     "尚未启动浏览器助手，请在网页手动点击下载；文件落地后会自动接收。": "L’assistant du navigateur n’a pas démarré. Lancez le téléchargement sur le site ; les fichiers seront reçus automatiquement.",
-    "已向浏览器助手提交下载任务，请在 AI 对话中查看操作和所需确认。": "Tâche transmise à l’assistant du navigateur. Consultez le chat IA pour les actions et confirmations nécessaires."
+    "已向浏览器助手提交下载任务，请在 AI 对话中查看操作和所需确认。": "Tâche transmise à l’assistant du navigateur. Consultez le chat IA pour les actions et confirmations nécessaires.",
+    "房间收藏": "Salons enregistrés",
+    "加入收藏房间": "Rejoindre le salon enregistré",
+    "重开收藏房间": "Rouvrir le salon enregistré",
+    "收藏当前房间": "Enregistrer ce salon",
+    "修改备注": "Modifier le nom local",
+    "移除收藏": "Supprimer le salon enregistré",
+    "选择收藏房间": "Choisir un salon enregistré",
+    "本地备注名称：": "Nom local :",
+    "房主": "Hôte",
+    "加入者": "Invité",
+    "重试连接房主": "Réessayer la connexion à l’hôte",
+    "房间收藏读写失败，请检查本机文件权限。": "Lecture ou enregistrement impossible. Vérifiez les autorisations des fichiers locaux.",
+    "收藏含房间凭证，仅保存在本机；备注不改变房间码，也不代表房间永久在线。": "Les salons enregistrés contiennent des identifiants d’invitation et restent sur cet appareil. Les renommer ne change pas leur code et ne les maintient pas en ligne.",
+    "连接难度不代表成功率，也不能据此判断实际使用直连还是中继。": "La difficulté de connexion ne représente ni un taux de réussite ni le type de liaison, directe ou relayée.",
+    "可重试或更换公共节点；仍失败时可尝试支持中继的其他联机方案。": "Réessayez ou changez de nœuds publics. Si l’échec persiste, essayez une autre solution prenant en charge le relais.",
+    "陶瓦操作失败，请检查程序、房间信息和网络后重试。": "Échec de l’opération Terracotta. Vérifiez le programme, les informations du salon et le réseau, puis réessayez."
   }
 }

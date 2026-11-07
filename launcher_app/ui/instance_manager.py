@@ -284,7 +284,7 @@ class InstanceManagerDialog(QWidget):
         self.memory_meter = MemoryMeter(allocation, self.inst_dir)
         self.inst_memory_spin.valueChanged.connect(self.memory_meter.refresh)
         form.addRow('', self.memory_meter)
-        from launcher_app.instances.advanced_launch import editor
+        from launcher_app.ui.jvm_options_editor import editor
         self.jvm_editor = editor(opts.get('jvm_args'), instance=True)
         memory_form = form
         form = QFormLayout()

@@ -4,8 +4,8 @@ import json
 import sys
 
 MASK = "[REDACTED]"
-_KEY = re.compile(r"token|api[_-]?key|password|secret|authorization|credential|auth_session", re.I)
-_PAIR = re.compile(r'''(?i)((?:["']?)(?:[\w.-]*(?:token|api[_-]?key|password|secret|authorization|auth_session)[\w.-]*)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)''')
+_KEY = re.compile(r"token|api[_-]?key|password|secret|authorization|credential|auth_session|^room(?:_code)?$", re.I)
+_PAIR = re.compile(r'''(?i)((?:["']?)(?:[\w.-]*(?:token|api[_-]?key|password|secret|authorization|auth_session|room_code|room)[\w.-]*)(?:["']?)\s*[:=]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}]+)''')
 _CLI = re.compile(r'(?i)(--(?:accessToken|access_token|refresh_token|clientToken|session|password|api[_-]?key)(?:\s+|=))("[^"]*"|\S+)')
 
 def sensitive_key(key):

@@ -3,7 +3,7 @@ from unittest.mock import patch
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QPainter, QColor
 from PySide6.QtWidgets import QApplication
-import launcher_app.ui.ui_background as bg
+import launcher_app.ui.wallpaper_assets as bg
 
 
 class BlurTests(unittest.TestCase):

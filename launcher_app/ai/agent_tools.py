@@ -27,13 +27,9 @@ from launcher_app.resources.resource_tools import (
 )
 from settings import load_settings, save_settings
 
-# 可选 Mod 清单(与 GUI 共用;定义在这里避免 CLI 依赖 Qt)
-SHADER_MODS = {"fabric": "iris", "forge": "oculus", "neoforge": "iris"}
-OPTIMIZE_MODS = {
-    "fabric": ["sodium", "lithium", "ferrite-core"],
-    "forge": ["embeddium", "ferrite-core"],
-    "neoforge": ["sodium", "lithium", "ferrite-core"],
-}
+# 可选 Mod 清单由安装业务拥有，CLI、AI 与 GUI 共享。
+from launcher_app.instances.install_options import SHADER_MODS, OPTIMIZE_MODS
+
 # Sodium 的 Modrinth 项目 id:Iris 把它列为 required 依赖,且两者必须精确配对
 # (Iris 的 compat mixin 直接引用 Sodium 内部类,版本不符会在进世界时崩)。
 SODIUM_PROJECT_ID = "AANobbMI"

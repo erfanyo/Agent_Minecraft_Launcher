@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from launcher_app.resources.fetch_versions import fetch_version_manifest
 from launcher_app.core.background_tasks import BackgroundTask
-from launcher_app.ui.instance_wizard import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
+from launcher_app.instances.install_options import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
 from launcher_app.core.i18n import t
 from launcher_app.instances.loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions, list_quilt_loaders
 from launcher_app.resources.modrinth import list_mod_versions

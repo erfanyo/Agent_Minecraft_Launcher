@@ -110,8 +110,8 @@ import launcher_app.core.i18n as i18n  # 界面语言(跟随系统,可设置覆�
 from launcher_app.core.i18n import t
 from launcher_app.instances.instance_install_service import InstanceInstallService
 from launcher_app.instances.game_launch_service import GameLaunchService, LoginRequiredError
-from launcher_app.runtime.game_process_controller import GameProcessController
-from launcher_app.instances.crash_diagnostics import collect_crash_report, detect_crash
+from launcher_app.runtime.game_session_controller import GameSessionController
+from launcher_app.instances.crash_diagnostics import GameRunEvidence
 from launcher_app.instances.instance_catalog_service import InstanceCatalogService
 from launcher_app.resources.modpack import import_modpack as import_modpack_file  # 整合包导入
 from launcher_app.resources.modrinth import download_mod  # Modrinth 搜索与下载(含中文名支持)
@@ -509,13 +509,12 @@ class MainWindow(QMainWindow):
         # 游戏进程相关的运行时状态
         self.game_process = None
         self._launch_task = None
-        self.game_processes = GameProcessController(self)
-        self.game_processes.line_received.connect(self._on_game_log_line)
-        self.game_processes.exited.connect(self._on_game_process_exited)
-        self._game_controllers = [self.game_processes]
-        self._owned_game_instances = {}
-        self._detected_game_clients = []
-        self._seen_game_windows = set()
+        self.game_sessions = GameSessionController(self)
+        self.game_sessions.line_received.connect(self._on_game_log_line)
+        self.game_sessions.exited.connect(self._on_game_process_exited)
+        self.game_sessions.background_exited.connect(self._scan_running_games)
+        from launcher_app.runtime.running_games import RunningGames
+        self.running_games = RunningGames()
         self._running_scan_task = None
         self._running_scan_timer = QTimer(self)
         self._running_scan_timer.setInterval(2500)
@@ -729,50 +728,24 @@ class MainWindow(QMainWindow):
             widget.setPalette(palette)
 
     def _recompute_wallpaper(self):
-        """按当前中央区尺寸 + 壁纸源,重算共享壁纸(一张画布),并设置中央区与 AI dock 视口。"""
-        from launcher_app.ui.ui_background import prepare_shared_wallpaper
-        pix = getattr(self, "_wallpaper_source", None)
-        mask = getattr(self, "_wallpaper_mask", 0.55)
-        online = getattr(self, 'online_surface', None)
-        if online is not None:
-            online.set_wallpaper(pix, mask)
-        if getattr(self, '_settings_open', False):
-            self.settings_page.set_wallpaper(pix, mask)
-            return
-        if getattr(self, '_ai_focus_mode', False):
-            sidebar = self.ai_focus_sidebar
-            if pix is None:
-                self._wallpaper_scaled = None
-                self._wallpaper_ox = self._wallpaper_oy = 0
-                sidebar.clear()
-                if online is not None:
-                    online.clear()
-            else:
-                canvas = QSize(max(1, self.width()), max(1, sidebar.height()))
-                scaled, ox, oy = prepare_shared_wallpaper(pix, canvas)
-                self._wallpaper_scaled = scaled
-                self._wallpaper_ox, self._wallpaper_oy = ox, oy
-                sidebar.set_shared_view(scaled, ox, oy, mask)
+        """Publish the asset to active views; keep dock compatibility state here."""
+        from launcher_app.ui.wallpaper_presenter import present_wallpaper
+        settings_open = getattr(self, '_settings_open', False)
+        focus = getattr(self, '_ai_focus_mode', False) and not settings_open
+        canvas = present_wallpaper(
+            getattr(self, '_wallpaper_source', None),
+            getattr(self, '_wallpaper_mask', 0.55),
+            background=getattr(self, '_background', None),
+            online=getattr(self, 'online_surface', None),
+            settings_surface=self.settings_page if settings_open else None,
+            focus_surface=self.ai_focus_sidebar if focus else None,
+            focus_width=self.width() if focus else 0,
+            dock_width=self._ai_dock_width() if not settings_open and not focus else 0,
+        )
+        if canvas is not None:
+            self._wallpaper_scaled = canvas.pixmap
+            self._wallpaper_ox, self._wallpaper_oy = canvas.x, canvas.y
             self._sync_ai_wallpaper()
-            return
-        bg = getattr(self, "_background", None)
-        if pix is None or bg is None:
-            self._wallpaper_scaled = None
-            self._wallpaper_ox = self._wallpaper_oy = 0
-            if bg is not None:
-                bg.clear()
-            if online is not None:
-                online.clear()
-            self._sync_ai_wallpaper()
-            return
-        right_width = self._ai_dock_width()
-        scaled, ox, oy = prepare_shared_wallpaper(pix, bg.size(), right_width)
-        self._wallpaper_scaled = scaled
-        self._wallpaper_ox = ox
-        self._wallpaper_oy = oy
-        if scaled is not None:
-            bg.set_shared_view(scaled, ox, oy, mask)
-        self._sync_ai_wallpaper()
 
     def _ai_dock_width(self) -> int:
         """右侧 AI dock 的当前宽度(用于共享画布覆盖「中央 + dock」的左右跨度)。
@@ -1100,8 +1073,11 @@ class MainWindow(QMainWindow):
         if self._launch_task is not None:
             self._launch_task.cancel()
         self.version_manifest.cancel()
-        for controller in self._game_controllers:
-            controller.detach()
+        self.game_sessions.detach()
+        self._stop_in_game_ai()
+        memory = getattr(self, '_memory_launch_controller', None)
+        if memory is not None:
+            memory.close()
         self._running_scan_timer.stop()
         if self._running_scan_task is not None:
             self._running_scan_task.cancel()
@@ -1333,39 +1309,10 @@ class MainWindow(QMainWindow):
             self.ai_dock.show()
 
     def ai_context(self) -> str:
-        """给 AI 的上下文:启动器设置 + 当前选中的实例信息"""
-        # 输出语言跟随界面/系统选择:中文界面用中文为主,英文界面用英文为主。
-        # 专业/英文术语(如 Mod 名、路径、工具名、报错)保留原样,不强行翻译,避免引入 bug。
-        ui_lang = i18n.get_language()
-        if ui_lang == "en":
-            lang_instr = ("Reply in English by default. Keep technical terms, command names, "
-                          "Mod/instance IDs, paths and error messages in their original form "
-                          "(do not force-translate them).")
-        else:
-            lang_instr = ("默认用中文回答。Mod 名、命令、实例 id、路径、报错等专业/英文术语保留原样,"
-                          "不要强行翻译。")
-        lines = [
-            "你是 Agent Minecraft Launcher 启动器里内置的 AI 助手。",
-            lang_instr,
-            f"启动器设置: 离线游戏名 {self.settings.get('username', 'Player')},"
-            f" 内存 {str(self.settings.get('memory_gb')) + 'G' if self.settings.get('memory_gb') else '自动（按可用内存）'},"
-            f" 版本隔离 {'开' if self.settings.get('version_isolation', True) else '关'}",
-        ]
-        inst = None
+        from launcher_app.ai.context_builder import launcher_context
         item = self.instance_list.currentItem()
-        if item is not None:
-            inst = item.data(Qt.ItemDataRole.UserRole)
-        if inst:
-            lines.append(f"当前选中的实例: {inst['id']}"
-                         f"(加载器:{inst['loader'] or '原版'}, 基础版本:{inst['base']})")
-        lines.append(permission_instructions(self.settings))
-        lines.append(plain_language_instructions(self.settings))
-        # t16:不再在 system 里枚举工具名——工具 schema 由请求 body 提供(云端按需挂载),
-        # 枚举既冗余(每轮多花几百 token)又会误导模型去调用未挂载的工具。
-        # 技能提示:任务拆分 / 指令指南 等启用的技能注入行为指导
-        for hint in self.skill_mgr.ai_hints():
-            lines.append(hint)
-        return "\n".join(lines)
+        instance = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        return launcher_context(self.settings, instance, i18n.get_language(), self.skill_mgr.ai_hints())
 
     # ---- 查看:图标/列表视图切换 ----
     def set_view_mode(self, list_widget: QListWidget, icon_mode: bool, key: str):
@@ -1391,119 +1338,35 @@ class MainWindow(QMainWindow):
         open_path(paths.GAME_DIR)
 
     def clear_instances(self):
-        """清空所有实例(versions 目录),共用文件(依赖库/资源/Java)保留"""
-        if action_question(
-                self, t('确认'), t('确定要删除所有实例吗?\n(versions 目录会被清空,共用文件保留)'), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
-            return
-        versions_dir = os.path.join(paths.GAME_DIR, "versions")
-        if os.path.isdir(versions_dir):
-            for name in os.listdir(versions_dir):
-                p = os.path.join(versions_dir, name)
-                if os.path.isdir(p):
-                    shutil.rmtree(p, ignore_errors=True)
-        self.load_versions()
-        self.refresh_instances()
-        self.statusBar().showMessage("所有实例已清空")
+        self._instance_actions().clear()
+
+    def _pack_imports(self):
+        controller = getattr(self, '_pack_import_controller', None)
+        if controller is None:
+            from launcher_app.ui.pack_import_controller import PackImportController
+            from launcher_app.ui.smart_import_ui import start_smart_import
+            from launcher_app.ui.cloud_download import choose_classic_archive
+            from launcher_app.ui.import_safety import check_before_import
+            from launcher_app.resources.folder_instance_import import start_import
+            controller = PackImportController(
+                parent=self,
+                smart_enabled=lambda: getattr(getattr(self, 'skill_mgr', None), 'is_enabled', lambda _: False)('smart_import') is True,
+                smart_import=lambda path, **kw: start_smart_import(self, path, **kw),
+                choose_archive=lambda: choose_classic_archive(self),
+                check_archive=lambda path, ready: check_before_import(self, path, ready),
+                import_server=self._import_server_archive,
+                import_directory=lambda path: start_import(self, [path]),
+                submit=self._run_download, game_root=lambda: paths.GAME_DIR,
+                show_status=lambda text: self.statusBar().showMessage(text))
+            self._pack_import_controller = controller
+        return controller
+
+    def _import_server_archive(self, path):
+        self.home_panel.tabs.setCurrentIndex(self.home_panel._server_tab_index)
+        self.home_panel.server_center.scan_import(path)
 
     def import_modpack(self, path=None, *, safety_checked=False):
-        """导入整合包(自动识别格式:Modrinth .mrpack / CurseForge .zip / 扁平实例文件夹 zip),后台执行不卡界面"""
-        if self.skill_mgr.is_enabled('smart_import') is True:
-            from launcher_app.ui.smart_import_ui import start_smart_import
-            start_smart_import(self, path or None, safety_checked=safety_checked)
-            return
-        import traceback as _tb
-        DBG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                ".tmp", "import_debug.log")
-
-        def dbg(msg):
-            try:
-                os.makedirs(os.path.dirname(DBG_PATH), exist_ok=True)
-                with open(DBG_PATH, "a", encoding="utf-8") as f:
-                    f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-            except Exception:
-                pass
-
-        from PySide6.QtWidgets import QInputDialog
-        from launcher_app.ui.cloud_download import choose_classic_archive
-        path = path or choose_classic_archive(self)
-        dbg(f"file dialog returned: {path!r}")
-        if not path:
-            dbg("empty path -> return")
-            return
-
-        if not safety_checked:
-            from launcher_app.ui.import_safety import check_before_import
-            check_before_import(self, path, lambda prepared: self.import_modpack(
-                prepared, safety_checked=True))
-            return
-
-        # 识别格式;扁平整合包(无清单的实例文件夹 zip)需要用户提供 MC 版本(可选加载器)
-        from launcher_app.resources.modpack import detect_modpack_format, suggested_instance_id
-        mc_version = None
-        loader = None
-        try:
-            fmt = detect_modpack_format(path)
-        except Exception as e:
-            fmt = None
-            dbg(f"detect_modpack_format EXC: {e}")
-        dbg(f"fmt={fmt!r}")
-        if fmt == 'server':
-            self.home_panel.tabs.setCurrentIndex(self.home_panel._server_tab_index)
-            self.home_panel.server_center.scan_import(path)
-            return
-        if fmt == "flat":
-            mc_version, okv = QInputDialog.getText(self, t('导入扁平整合包'), t('该整合包没有清单,请填游戏版本(如 1.20.1):'))
-            if not okv or not mc_version.strip():
-                return
-            mc_version = mc_version.strip()
-            loader, okl = QInputDialog.getItem(
-                self, t('导入扁平整合包'), t('加载器(可选,跳过=原版):'),
-                ["(原版)", "fabric", "forge", "neoforge"], 0, False)
-            if okl:
-                loader = None if loader == "(原版)" else loader
-        elif fmt is None:
-            task_warning(self, t('导入整合包'),
-                                t('无法识别该文件的格式(既不是 Modrinth/CurseForge,也不像实例文件夹 zip)'))
-            dbg("fmt None -> warning, return")
-            return
-
-        # 同名预检:实例名已存在 → 让用户自己命名(不直接失败)
-        instance_id = None
-        try:
-            default_id = suggested_instance_id(path)
-            dbg(f"default_id={default_id!r}")
-            if default_id and os.path.isdir(os.path.join(paths.GAME_DIR, "versions", default_id)):
-                new_id, okn = QInputDialog.getText(
-                    self, t('实例名重复'),
-                    t('已存在实例「{v0}」,请为新实例命名:').format(v0=(default_id)), text=default_id + "-2")
-                if not okn or not new_id.strip():
-                    dbg("name conflict -> user cancelled")
-                    return
-                instance_id = new_id.strip()
-        except Exception as e:
-            dbg(f"suggested_instance_id EXC: {e}")
-            pass   # 预检失败也不拦导入(让 import_modpack 的"已存在"兜底)
-
-        self.statusBar().showMessage("正在导入整合包...")
-        dbg(f"calling _run_download, instance_id={instance_id!r}, mc={mc_version!r}, loader={loader!r}")
-
-        def worker(status_cb, progress_cb):
-            try:
-                dbg("worker: import_modpack_file BEGIN")
-                # 注意:返回变量用 done_id,避免和闭包里的 instance_id 同名导致 UnboundLocalError
-                done_id = import_modpack_file(path, paths.GAME_DIR,
-                                             mc_version=mc_version, loader=loader,
-                                             instance_id=instance_id,
-                                             status_callback=status_cb,
-                                             progress_callback=progress_cb)
-                dbg(f"worker: import_modpack_file OK -> {done_id}")
-                status_cb(f"整合包导入完成:{done_id} ✅")
-            except Exception as e:
-                dbg(f"worker: import_modpack_file EXC: {type(e).__name__}: {e}\n{_tb.format_exc()}")
-                status_cb(f"❌ 整合包导入失败:{type(e).__name__}: {e}")
-
-        self._run_download(worker)
-        dbg("_run_download called, returning")
+        return self._pack_imports().import_archive(path, safety_checked=safety_checked)
 
     # ---- 下载新实例:左侧菜单 → 分类面板 → 后台下载 ----
     def start_instance_download(self):
@@ -1512,14 +1375,9 @@ class MainWindow(QMainWindow):
         if not st["version"]:
             self.download_tab.set_status("请先选一个游戏版本")
             return
-        self._run_download(lambda status, progress: self.create_instance(
-            st["version"], st["loader_key"], st["modrinth_loader"],
-            st["shader"], st["optimize"],
-            loader_version=st["loader_version"],
-            shader_version=st["shader_version"],
-            optimize_versions=st["optimize_versions"],
-            fabric_api_version=st.get("fabric_api_version"),
-            status_cb=status, progress_cb=progress))
+        from launcher_app.instances.install_requests import InstanceCreateJob
+        job = InstanceCreateJob(st, paths.GAME_DIR, self.settings.get('version_isolation'))
+        self._run_download(job.run)
 
     # ---- 后台下载:统一任务对象用 Qt 信号把进度搬回主线程 ----
     def _run_download(self, worker_fn):
@@ -1826,56 +1684,7 @@ class MainWindow(QMainWindow):
             e.ignore()   # 其它页面:不当作整合包,交由该页控件处理(如实例详情列表拷入文件夹)
 
     def install_modpack_from_path(self, path: str, *, safety_checked=False):
-        """把本地的整合包文件导入成新实例(拖放入口;自动识别格式)。"""
-        enabled = getattr(getattr(self, 'skill_mgr', None), 'is_enabled',
-                          lambda _name: False)('smart_import') is True
-        if enabled:
-            from launcher_app.ui.smart_import_ui import start_smart_import
-            start_smart_import(self, path, safety_checked=safety_checked)
-            return
-        if not safety_checked:
-            from launcher_app.ui.import_safety import check_before_import
-            check_before_import(self, path, lambda prepared: self.install_modpack_from_path(
-                prepared, safety_checked=True))
-            return
-        if os.path.isdir(path):
-            from launcher_app.resources.folder_instance_import import start_import
-            start_import(self, [path])
-            return
-        from launcher_app.resources.modpack import detect_modpack_format, import_modpack
-        from PySide6.QtWidgets import QInputDialog
-        fmt = detect_modpack_format(path)
-        mc_version = None
-        loader = None
-        if fmt == 'server':
-            self.home_panel.tabs.setCurrentIndex(self.home_panel._server_tab_index)
-            self.home_panel.server_center.scan_import(path)
-            return
-        if fmt == "flat":
-            mc_version, ok = QInputDialog.getText(
-                self, t('导入扁平整合包'), t('该整合包没有清单,请填游戏版本(如 1.20.1):'))
-            if not ok or not mc_version.strip():
-                return
-            mc_version = mc_version.strip()
-            loader, ok2 = QInputDialog.getItem(
-                self, t('加载器'), t('加载器(可选,跳过=原版):'),
-                ["(原版)", "fabric", "forge", "neoforge"], 0, False)
-            if ok2:
-                loader = None if loader == "(原版)" else loader
-        elif fmt is None:
-            task_notice(self, t('拖入文件'),
-                                    t('无法识别该文件为整合包(Modrinth/CurseForge/实例文件夹 zip)。'))
-            return
-
-        def worker(status, progress):
-            try:
-                done = import_modpack(path, paths.GAME_DIR, mc_version=mc_version,
-                                      loader=loader, status_callback=status,
-                                      progress_callback=progress)
-                status(f"✅ 整合包导入完成:{done}")
-            except Exception as ex:
-                status(f"❌ 整合包导入失败:{type(ex).__name__}: {ex}")
-        self._run_download(worker)
+        return self._pack_imports().import_archive(path, safety_checked=safety_checked, classic=False)
 
     def _place_download_ball(self):
         """状态球在内容区右下角；手动拖动后按相对位置随窗口缩放。"""
@@ -2036,45 +1845,13 @@ class MainWindow(QMainWindow):
         task.start()
 
     def _apply_running_games(self, clients):
-        self._detected_game_clients = clients
+        self.running_games.set_detected(clients)
         self._update_running_label()
 
     def _update_running_label(self):
         """刷新顶部的"已有 x 个运行中的实例"(悬停显示具体实例)"""
         from launcher_app.ui.ui_style import muted_color, success_color
-        import psutil
-        def window_open(pid, owned=False):
-            if not psutil.pid_exists(pid):
-                return False
-            if os.name != 'nt':
-                return True
-            from launcher_app.runtime.memory_relief import visible_game_window
-            if visible_game_window(pid):
-                self._seen_game_windows.add(pid)
-                return True
-            # Own launches are counted while their first window is still loading.
-            return owned and pid not in self._seen_game_windows
-
-        for client in self._detected_game_clients:
-            if client.get('window_visible', True):
-                for parent_pid in client.get('parent_pids', []):
-                    if self._owned_game_instances.get(parent_pid) == client['id']:
-                        self._seen_game_windows.add(parent_pid)
-        live = {controller.process.pid: self._owned_game_instances.get(controller.process.pid, '')
-                for controller in self._game_controllers
-                if controller.is_running and window_open(controller.process.pid, owned=True)}
-        for client in self._detected_game_clients:
-            try:
-                process = psutil.Process(client['pid'])
-                if process.create_time() != client.get('create_time', process.create_time()):
-                    continue
-            except psutil.Error:
-                continue
-            if client['pid'] in self._owned_game_instances and client['pid'] not in live:
-                continue
-            if not window_open(client['pid']):
-                continue
-            live.setdefault(client['pid'], client['id'])
+        live = self.running_games.live(self.game_sessions.running_processes)
         self._running_instances = set(live.values()) - {''}
         n = len(live)
         if n:
@@ -2288,7 +2065,9 @@ class MainWindow(QMainWindow):
         if v is None:
             self.statusBar().showMessage("请先在列表里选中一个版本")
             return
-        if (self._launch_task is not None and self._launch_task.is_running) or self.download_tasks.is_running:
+        preparation = getattr(self, '_launch_preparation', None)
+        if ((self._launch_task is not None and self._launch_task.is_running)
+                or (preparation is not None and preparation.busy) or self.download_tasks.is_running):
             self.statusBar().showMessage("正在准备或安装，等这一小步完成再启动吧")
             return
 
@@ -2321,20 +2100,19 @@ class MainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"正在获取 {v['id']} 的启动信息...")
 
-        v = dict(v)
-        from copy import deepcopy
-        from launcher_app.core.accounts import update_refreshed_microsoft_credentials
-        launch_settings = deepcopy(load_settings())
-        game_root, runtime_root = paths.GAME_DIR, paths.RUNTIME_DIR
-        service = GameLaunchService(
-            lambda: game_root, lambda: runtime_root, lambda: launch_settings,
-            lambda changed: update_refreshed_microsoft_credentials(
-                (launch_settings.get('ms_credentials') or {}).get('uuid', ''),
-                changed.get('ms_credentials', {})),
-            lambda identity: os.path.join(game_root, 'versions', identity)
-            if launch_settings.get('version_isolation') else game_root)
-        task = BackgroundTask(lambda current: service.prepare(
-            v, status_cb=current.report_status, progress_cb=current.report_progress), self)
+        from launcher_app.instances.launch_preparation import LaunchRequest
+        from launcher_app.runtime.launch_preparation_controller import LaunchPreparationController
+        controller = getattr(self, '_launch_preparation', None)
+        if controller is None:
+            controller = LaunchPreparationController(lambda: paths.GAME_DIR, self)
+            controller.status.connect(self._on_download_status)
+            controller.progress.connect(self._on_download_progress)
+            controller.failed.connect(self._on_launch_prepare_failed)
+            controller.cancelled.connect(self._on_download_cancelled)
+            controller.prepared.connect(self._start_prepared_game)
+            self._launch_preparation = controller
+        request = LaunchRequest.capture(v, load_settings(), paths.GAME_DIR, paths.RUNTIME_DIR)
+        task = controller.create_task(request)
         self._launch_task = task
         self.launch_btn.setEnabled(False)
         self._start_launch_button_animation()
@@ -2346,12 +2124,6 @@ class MainWindow(QMainWindow):
             self._ensure_dl_overlay(create_download=True, task_title='启动准备')
             self.task_center.begin_task('启动准备', task_id='download', cancel=self._cancel_current_task)
         self.dl_indicator.show()
-        task.status.connect(self._on_download_status)
-        task.progress.connect(self._on_download_progress)
-        task.failed.connect(self._on_launch_prepare_failed)
-        task.cancelled_signal.connect(self._on_download_cancelled)
-        task.succeeded.connect(lambda plan: self._start_prepared_game(plan, v)
-                               if paths.GAME_DIR == game_root else self._on_launch_prepare_failed("游戏目录已经变了，请重新点击启动"))
         task.start()
 
     def _on_launch_prepare_failed(self, error):
@@ -2367,10 +2139,25 @@ class MainWindow(QMainWindow):
     def _start_prepared_game(self, plan, v):
         # 准备阶段可能刷新了正版令牌；下次启动须读取刚保存的凭证。
         self.settings = load_settings()
-        from launcher_app.ui.memory_launch_card import offer_memory_actions
-        if offer_memory_actions(self, plan, v, self._start_game_after_memory):
+        if self._memory_actions().offer(plan, v, self._start_game_after_memory):
             return
         self._start_game_after_memory(plan, v)
+
+    def _local_ai_process(self):
+        return getattr(getattr(self.ai_dock, '_local_engine', None), 'proc', None)
+
+    def _memory_actions(self):
+        controller = getattr(self, '_memory_launch_controller', None)
+        if controller is None:
+            from settings import update_setting
+            from launcher_app.ui.memory_launch_card import MemoryLaunchController, MemoryLaunchPorts
+            controller = MemoryLaunchController(self, MemoryLaunchPorts(
+                read_settings=load_settings, write_setting=update_setting,
+                current_process=lambda: self.game_process, local_ai_process=self._local_ai_process,
+                stop_local_ai=self.ai_dock.stop_local_engine,
+                history_dir=lambda instance: os.path.join(paths.GAME_DIR, 'versions', instance)))
+            self._memory_launch_controller = controller
+        return controller
 
     def _start_game_after_memory(self, plan, v, exit_after=False):
         self._start_launch_button_animation()
@@ -2391,26 +2178,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("游戏启动中...")
         self.launch_btn.setEnabled(False)
 
-        # 游戏内 AI 通道:关闭 → 游戏启动前卸载本地模型(llama-server),把内存让给游戏;
-        # 开启 → 可能用本地模型(看 ai_strategy),保持加载(游戏内 AI 通道)
-        ai_in_game = str(self.settings.get("ai_in_game", "off") or "off").strip().lower()
-        if ai_in_game == "off":
-            self.ai_dock.stop_local_engine()
+        self._game_integrations().before_launch(self.settings)
 
         try:
-            if self.game_processes.is_running:
-                previous = self.game_processes
-                previous.line_received.disconnect(self._on_game_log_line)
-                previous.exited.disconnect(self._on_game_process_exited)
-                previous.exited.connect(lambda code: self._scan_running_games())
-                self.game_processes = GameProcessController(self)
-                self._game_controllers.append(self.game_processes)
-                self.game_processes.line_received.connect(self._on_game_log_line)
-                self.game_processes.exited.connect(self._on_game_process_exited)
-            if exit_after:
-                self.game_process = self.game_processes.start(cmd, java_exe, game_dir, independent=True)
-            else:
-                self.game_process = self.game_processes.start(cmd, java_exe, game_dir)
+            launched = self._game_runtime().start(plan, v, paths.GAME_DIR, independent=exit_after)
+            self.game_process = launched.process
         except Exception as e:
             self._stop_launch_button_animation()
             self.ai_focus_sidebar.set_launch_state("failed")
@@ -2429,66 +2201,32 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'task_center'):
             self.task_center.finish_task('download', message='游戏已启动')
 
-        from launcher_app.runtime.memory_policy import track_process
-        track_process(self.game_process, os.path.join(paths.GAME_DIR, 'versions', v['id']))
-
-        # 只在进程确实已拉起后记录，下载/Java/命令拼装失败不会污染下次默认选择。
-        if self.settings.get("last_played_instance") != v["id"]:
-            self.settings["last_played_instance"] = v["id"]
-            try:
-                from settings import update_setting
-                update_setting("last_played_instance", v["id"])
-            except Exception:
-                pass
-
-        # 运行实例指示:登记并刷新底部标签
-        self._owned_game_instances[self.game_process.pid] = d['id']
-        self._running_instance_id = v['id']
-        self._running_instances.add(d["id"])
+        self._game_runtime().record_started(self.settings)
+        self._running_instances.add(launched.runtime_id)
         self._update_running_label()
-        # 游戏内 AI 通道(ai_in_game=cloud/local):启动 .bridge/ai_request↔ai_reply 轮询器
-        self._start_in_game_ai(v["id"])
+        from copy import deepcopy
+        self._game_integrations().started(
+            self.game_process, launched.instance_id, deepcopy(self.settings), launched.game_root, self.ai_context())
 
-        # 通知技能系统:游戏已启动(自动重启等技能开始工作)
-        self.skill_mgr.on_game_start(self.game_process, self._running_instance_id)
-
-        # 主动避让(§5):告诉 AI 面板游戏在跑,本地推理降为低于游戏优先级/暂停(ai_in_game=local 时保持)
-        try:
-            self.ai_dock.set_game_running(self.game_process)
-        except Exception:
-            pass
-
-        # 记录本次运行起点,用于判断"本次是否新产生了崩溃报告"(即使退出码为 0)
-        self._game_started_at = time.time()
         if exit_after:
-            from launcher_app.ui.memory_launch_card import exit_when_ready
-            exit_when_ready(self, self.game_process)
+            self._memory_actions().exit_when_ready(self.game_process)
 
     def _on_game_log_line(self, line: str):
         line = redact_text(line, self.settings)
         self.log_view.appendPlainText(line)
-        self.skill_mgr.on_game_log(line)
+        self._game_integrations().log(line)
 
     def _on_game_process_exited(self, code: int):
         self._stop_launch_button_animation()
         self.launch_btn.setEnabled(True)
         self.statusBar().showMessage(f"游戏进程已退出(退出码 {code})")
-        inst_id = getattr(self, "_running_instance_id", None)
+        current = self._game_runtime().current
+        inst_id = current.instance_id if current is not None else None
         if inst_id:
             self._running_instances.discard(inst_id)
         self._update_running_label()
         self._scan_running_games()
-        self.skill_mgr.on_game_stop(code)
-        try:
-            remaining = next((controller.process for controller in self._game_controllers
-                              if controller.is_running), None)
-            if remaining is not None:
-                self.ai_dock.set_game_running(remaining)
-            else:
-                self.ai_dock.set_game_stopped()
-        except Exception:
-            pass
-        self._stop_in_game_ai()
+        self._game_integrations().stopped(code, next(iter(self.game_sessions.running_processes), None))
         if code not in (0, None):
             self.dl_indicator.set_failed(True)
             self.dl_indicator.setToolTip(t('游戏异常退出（{v0}），点击查看日志').format(v0=(code)))
@@ -2498,31 +2236,37 @@ class MainWindow(QMainWindow):
             self.dl_indicator.setToolTip(t('发现崩溃报告，点击查看日志'))
             self._auto_debug(0)
 
+    def _game_runtime(self):
+        runtime = getattr(self, '_runtime_game', None)
+        if runtime is None:
+            from settings import update_setting
+            from launcher_app.runtime.game_runtime import GameRuntime
+            runtime = GameRuntime(self.game_sessions, self.running_games,
+                                  lambda instance: update_setting('last_played_instance', instance))
+            self._runtime_game = runtime
+        return runtime
+
+    def _game_integrations(self):
+        integration = getattr(self, '_game_integration', None)
+        if integration is None:
+            from launcher_app.ai.game_integration import GameIntegration, GameIntegrationPorts
+            integration = GameIntegration(GameIntegrationPorts(
+                stop_local_engine=self.ai_dock.stop_local_engine,
+                game_running=self.ai_dock.set_game_running, game_stopped=self.ai_dock.set_game_stopped,
+                skill_started=self.skill_mgr.on_game_start, skill_stopped=self.skill_mgr.on_game_stop,
+                skill_log=self.skill_mgr.on_game_log,
+                show_status=lambda text: self.statusBar().showMessage(text)))
+            self._game_integration = integration
+        return integration
+
     def _start_in_game_ai(self, instance_id: str):
-        """游戏内 AI(ai_in_game 开启):启动 InGameAI 轮询器(读 .bridge/ai_request.json)。
-        目标实例在 launch_selected 里用 v['id'](游戏目录名)。"""
-        try:
-            if str(self.settings.get("ai_in_game", "off") or "off").strip().lower() == "off":
-                return
-            from launcher_app.ai.in_game_ai import InGameAI, make_answerer
-            ai = InGameAI(instance_id,
-                          make_answerer(win=self, settings=self.settings),
-                          poll=1.0, game_dir=paths.GAME_DIR)
-            ai.start()
-            self._in_game_ai = ai
-            self.statusBar().showMessage(
-                f"游戏内 AI 已开启({instance_id}),进游戏敲 /ai 试试")
-        except Exception as e:
-            self.statusBar().showMessage(f"游戏内 AI 启动失败: {type(e).__name__}: {e}")
+        from copy import deepcopy
+        self._game_integrations().start_bridge(instance_id, deepcopy(self.settings), paths.GAME_DIR, self.ai_context())
 
     def _stop_in_game_ai(self):
-        ai = getattr(self, "_in_game_ai", None)
-        if ai:
-            try:
-                ai.stop()
-            except Exception:
-                pass
-            self._in_game_ai = None
+        integration = getattr(self, '_game_integration', None)
+        if integration is not None:
+            integration.stop_bridge()
 
     def _toggle_log(self, checked: bool):
         """打开共用详情标签，并切到当前实例的游戏日志。"""
@@ -2537,15 +2281,14 @@ class MainWindow(QMainWindow):
     def _detect_log_crash(self) -> bool:
         """很多崩溃(如 F3+C 调试崩溃、Mod 崩溃)退出码是 0,但留下了崩溃报告或日志特征。
         这里只判断"本次运行是否发生崩溃",不弹窗。"""
-        inst_id = getattr(self, "_running_instance_id", None)
-        game_dir = self.game_dir_for(inst_id) if inst_id else paths.GAME_DIR
-        return detect_crash(game_dir, getattr(self, "_game_started_at", 0))
+        return self._game_runtime().has_crash()
 
     def _auto_debug(self, code: int):
         """游戏异常退出(退出码非 0 或检测到本次崩溃):自动抓最新日志 + 崩溃报告,问用户是否让 AI 分析"""
-        inst_id = getattr(self, "_running_instance_id", None)
-        game_dir = self.game_dir_for(inst_id) if inst_id else paths.GAME_DIR
-        msg = collect_crash_report(game_dir, code)
+        runtime = self._game_runtime()
+        if runtime.current is None:
+            return
+        msg = runtime.crash_report(code)
         preview = msg[:400] + ("…" if len(msg) > 400 else "")
         if QMessageBox.question(
                 self, t('游戏异常退出'),
@@ -2687,153 +2430,22 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._log_feedback(f"实例目录变动刷新失败:{e}", "警告")
 
+    def _resource_downloads(self):
+        controller = getattr(self, '_resource_download_controller', None)
+        if controller is None:
+            from launcher_app.ui.resource_download_controller import ResourceDownloadController
+            controller = ResourceDownloadController(
+                parent=self, submit=self._run_download,
+                show_status=lambda text: self.statusBar().showMessage(text),
+                game_root=lambda: paths.GAME_DIR)
+            self._resource_download_controller = controller
+        return controller
+
     def _resource_download(self, hit, version, inst, target_dir, sub_dir):
-        """资源中心下载回调:把项目下载到目标实例的对应目录(mods/shaderpacks/...)"""
-        if hit.get("source") == "curseforge":
-            if not target_dir:
-                self.statusBar().showMessage("未选择安装位置")
-                return
-            if not isinstance(version, dict) or not version.get("file_id"):
-                self.statusBar().showMessage("请先在详情中选择一个 CurseForge 文件版本")
-                return
-            title = hit.get("title") or "CurseForge 资源"
-            project_id = hit.get("curseforge_id")
-            file_id = version["file_id"]
-
-            def worker(status, progress):
-                try:
-                    from launcher_app.resources.curseforge import download_mod
-                    filename = download_mod(project_id, file_id, target_dir, progress_callback=progress)
-                    status(f"✅ 已下载 {filename} → {sub_dir}")
-                except Exception as e:
-                    status(f"❌ 下载 CurseForge 资源 {title} 失败: {e}")
-
-            self._run_download(worker)
-            return
-        slug = hit["slug"]
-        if not target_dir:
-            self.statusBar().showMessage("未选择安装位置")
-            return
-        # Pack version tags are guidance, not an exact install requirement.
-        # A chosen Modrinth version ID wins over these preference hints.
-        if sub_dir == "shaderpacks":
-            gv = None
-        elif sub_dir in ("datapacks", "resourcepacks"):
-            gv = inst.get("base") if inst else None
-        else:
-            gv = (inst["base"] if inst else "1.21.1") or "1.21.1"
-        loader = (inst["loader"] if inst else None)
-        # Mod 按加载器过滤;光影/数据包/资源包一般不区分加载器
-        use_loader = loader if sub_dir == "mods" else None
-
-        # 正向依赖提示(灵感 #4):下载 Mod 前,解析该版本依赖,提示"需要什么/冲突";
-        # 用户可一并安装缺少的必需依赖。仅 Mod 下载时提示,光影/数据包等跳过。
-        extra_deps = []
-        skipped_deps = False
-        if sub_dir == "mods":
-            try:
-                from launcher_app.resources.modrinth import (dependency_is_installed,
-                                      installed_mod_identifiers, resolve_dependencies)
-                deps = resolve_dependencies(slug, gv, use_loader, version)
-            except Exception:
-                deps = None
-            if deps:
-                installed_ids = installed_mod_identifiers(target_dir)
-                missing = [dep for dep in deps["required"]
-                           if not dependency_is_installed(dep, installed_ids)]
-                lines = [hit.get("title", slug) + " 的依赖提示:"]
-                if missing:
-                    lines.append("缺少的必需前置:\n" + "\n".join(f" · {d['title']}" for d in missing))
-                if deps["optional"]:
-                    lines.append("可选(选装):\n" + "\n".join(f" · {d['title']}" for d in deps["optional"]))
-                if deps["incompatible"]:
-                    lines.append("⚠ 冲突(不建议同装):\n" + "\n".join(f" · {d['title']}" for d in deps["incompatible"]))
-                if len(lines) > 1:
-                    choices = [('下载并安装前置' if missing else '继续下载', 'install')]
-                    if missing:
-                        choices.append(('跳过前置，继续下载', 'skip'))
-                    choices.append(('取消', None))
-                    note = '跳过必需前置后，Mod 可能无法加载。' if missing else '是否继续下载该 Mod？'
-                    selected = task_choice(self, '依赖提示', '\n'.join(lines) + '\n\n' + note, choices)
-                    if selected == 'install':
-                        extra_deps = missing
-                    elif selected == 'skip':
-                        skipped_deps = True
-                    else:
-                        return
-
-        def worker(status, progress):
-            from launcher_app.resources.modrinth import (dependency_is_installed, download_mod,
-                                  installed_mod_identifiers)
-            if skipped_deps:
-                status('已手动跳过前置，仅下载所选 Mod；缺少必需前置可能导致游戏无法加载。')
-            installed_ids = installed_mod_identifiers(target_dir) if extra_deps else set()
-            for dep in extra_deps:
-                dep_slug = dep["slug"]
-                if dependency_is_installed(dep, installed_ids):
-                    status(f"已跳过已有前置: {dep['title']}")
-                    continue
-                try:
-                    dn = download_mod(dep_slug, gv, use_loader, target_dir, progress_callback=progress)
-                    if dn:
-                        status(f"依赖已装:{dn}")
-                        installed_ids = installed_mod_identifiers(target_dir)
-                except Exception as e:
-                    status(f"依赖 {dep_slug} 装入失败(跳过): {e}")
-            filename = download_mod(slug, gv, use_loader, target_dir,
-                                    version_number=version,
-                                    progress_callback=progress)
-            if not filename:
-                if gv:
-                    target = f"{gv}{'+' + use_loader if use_loader else ''}"
-                    raise RuntimeError(f"{slug} 没有适用于 {target} 的可下载文件；请在详情中更换文件版本，或调整顶部筛选")
-                raise RuntimeError(f"{slug} 所选版本没有可下载文件；请在详情中更换文件版本")
-            status(f"✅ 已下载 {filename} → {sub_dir}")
-
-        self._run_download(worker)
+        return self._resource_downloads().download(hit, version, inst, target_dir, sub_dir)
 
     def _resource_download_modpack(self, hit, version):
-        """下载所选平台的整合包，并按清单导入成新实例。
-        (整合包是一键全集,不装进已有实例,而是创建一个新实例。)"""
-        slug = hit["slug"]
-        title = hit.get("title", slug)
-
-        def worker(status, progress):
-            from launcher_app.resources.modpack import import_modpack
-            from launcher_app.resources.modrinth import download_modpack
-            from launcher_app.resources.pack_downloads import new_download_directory
-            tmp = new_download_directory(paths.GAME_DIR)
-            # 1) 下载 Modrinth .mrpack 或 CurseForge .zip
-            try:
-                status(f"下载整合包 {title}...")
-                if hit.get("source") == "curseforge":
-                    from launcher_app.resources.curseforge import download_mod as download_cf_resource
-                    if not isinstance(version, dict) or not version.get("file_id"):
-                        raise ValueError("请先选择一个 CurseForge 整合包文件版本")
-                    filename = download_cf_resource(hit["curseforge_id"], version["file_id"], tmp,
-                                                    progress_callback=progress)
-                    local = os.path.join(tmp, filename)
-                else:
-                    local = download_modpack(slug, tmp, version_number=version,
-                                             progress_callback=progress)
-                if not local:
-                    status("❌ 该整合包没有可下载的文件")
-                    return
-            except Exception as e:
-                status(f"❌ 下载整合包失败:{type(e).__name__}: {e}")
-                return
-            # 2) 按包内清单安装基础、加载器和资源文件。
-            try:
-                status("导入整合包(自动装基础+加载器+全部 mod,可能要几分钟)...")
-                inst = import_modpack(local, paths.GAME_DIR,
-                                      status_callback=status,
-                                      progress_callback=progress)
-                status(f"整合包导入完成:{inst}；原包已保留，可分享：{local}")
-            except Exception as e:
-                status(f"❌ 整合包导入失败:{type(e).__name__}: {e}"
-                       f"(同名实例可先在「我的版本」删除或改名后重试)。原包已保留：{local}")
-
-        self._run_download(worker)
+        return self._resource_downloads().download_pack(hit, version)
 
     def _tidy_base_versions(self):
         """兼容旧调用；整理逻辑由实例目录服务负责。"""
@@ -2947,6 +2559,16 @@ class MainWindow(QMainWindow):
             return None
         return item.data(Qt.ItemDataRole.UserRole)
 
+    def _command_setup(self):
+        controller = getattr(self, '_command_setup_controller', None)
+        if controller is None:
+            from launcher_app.ui.command_setup_controller import CommandSetupController
+            controller = CommandSetupController(
+                parent=self, game_dir_for=self.game_dir_for, submit=self._run_download,
+                show_status=self.statusBar().showMessage, clear_status=self.statusBar().clearMessage)
+            self._command_setup_controller = controller
+        return controller
+
     def _one_click_config_kind(self, kind: str):
         """「我的版本」首页「一键配置 ▾」按钮 → 按用户选择执行 bridge-mod / RCON / 自动。"""
         inst = self._current_instance()
@@ -2979,78 +2601,13 @@ class MainWindow(QMainWindow):
         self._one_click_bridge_for(inst)
 
     def _one_click_bridge_for(self, inst):
-        """一键配置 bridge-mod(本地指令口,推荐):检测 → 确认 → 自动下载安装。
-        兼容(能自动发现该加载器+版本)则下载;不兼容 → 明确提示 + 说明可改走 RCON。
-        已装但版本旧(check_bridge_mod=outdated)→ 提示可更新到最新。
-
-        ⚠ 状态检测要读本地 dist 并访问 GitHub(同步网络请求),必须放后台线程:
-        早期直接在 UI 线程里调,最坏会卡十几秒,用户看到的就是"点了没反应、也没弹框"。
-        """
-        loader = inst.get("loader")
-        if loader not in ("fabric", "forge", "neoforge"):
-            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                                    t('该实例没有加载器(原版),bridge-mod 是 mod 需要加载器。\n先给这个实例装个 Fabric/Forge 等加载器再回来。'))
-            return
-        self._check_bridge_async(inst, self._on_bridge_status_ready)
+        return self._command_setup()._one_click_bridge_for(inst)
 
     def _check_bridge_async(self, inst, on_ready):
-        """后台检测 bridge-mod 状态,完成后在 UI 线程回调 on_ready(inst, payload)。
-
-        payload = {"status": ..., "info": ...};检测失败会弹提示(不静默失败)。
-        """
-        import launcher_app.core.bridge_mod_dist as bridge_mod_dist
-        inst_dir = self.game_dir_for(inst["id"])
-        loader = inst.get("loader")
-        self.statusBar().showMessage(f"正在检测 {inst['id']} 的 bridge-mod 状态…")
-
-        def work(_task):
-            status = bridge_mod_dist.check_bridge_mod(inst_dir, loader, inst["base"])
-            # not_installed 时还要拿版本号给确认框用;同一次后台往返里取完,避免二次阻塞
-            info = (bridge_mod_dist.bridge_mod_info(loader, inst["base"])
-                    if status == "not_installed" else None)
-            return {"status": status, "info": info}
-
-        task = BackgroundTask(work, self)
-        task.succeeded.connect(lambda payload: on_ready(inst, payload))
-        task.failed.connect(lambda err: inline_warning(
-            self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-            t('检测 bridge-mod 状态失败:{v0}\n(可能是无法访问 GitHub;也可以手动把 agentmc-bridge-*.jar 放进实例 mods 目录)').format(v0=(err))))
-        task.finished.connect(self.statusBar().clearMessage)
-        task.start()
+        return self._command_setup()._check_bridge_async(inst, on_ready)
 
     def _on_bridge_status_ready(self, inst, payload):
-        """bridge-mod 状态检测完成(信号已回到 UI 线程)→ 弹确认框并决定是否安装。"""
-        status = (payload or {}).get("status")
-        info = (payload or {}).get("info")
-        if status == "up_to_date":
-            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                                    t("✅ bridge-mod 已就绪且是最新:重进世界即可用本地指令口\n(无需'对局域网开放',指令结果可精确回传)。"))
-            return
-        if status == "incompatible":
-            ret = action_question(
-                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                t('检测到当前 mods 目录中有其他 MC 版本或加载器的 bridge-mod。\n\n将替换为适用于 {v0}+{v1} 的版本吗？').format(v0=(inst['base']), v1=(inst['loader'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-            if ret == QMessageBox.StandardButton.Yes:
-                self._install_bridge_mod(inst)
-            return
-        if status == "outdated":
-            ret = action_question(
-                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                t('⚠️ 检测到已装 bridge-mod 但版本较旧({v0}+{v1})。\n\n自动更新到最新版吗?(会覆盖旧的 jar)').format(v0=(inst['base']), v1=(inst['loader'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-            if ret == QMessageBox.StandardButton.Yes:
-                self._install_bridge_mod(inst)
-            return
-        if info is None:
-            # 不兼容:明确提示,并引导走 RCON 临时方案
-            inline_notice(
-                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                t('💡 bridge-mod 暂不兼容 {v0}+{v1}(版本表/自动发现都没有这个组合)。\n\n可以改用临时方案 RCON:功能略弱(指令结果不精确),但覆盖更多版本。\n要换 RCON 的话,点菜单里的「一键配置 RCON」。').format(v0=(inst['base']), v1=(inst['loader'])))
-            return
-        ret = action_question(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                                   t('未安装 bridge-mod(本地指令口,推荐)。\n\n检测到 {v0}+{v1} 可用的 bridge-mod v{v2},自动下载安装吗?').format(v0=(inst['base']), v1=(inst['loader']), v2=(info['version'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-        if ret != QMessageBox.StandardButton.Yes:
-            return
-        self._install_bridge_mod(inst)
+        return self._command_setup()._on_bridge_status_ready(inst, payload)
 
     # ---- 一键配置:RCON(临时方案,需要开局域网) ----
     def _one_click_rcon_current(self):
@@ -3061,152 +2618,25 @@ class MainWindow(QMainWindow):
         self._one_click_rcon_for(inst)
 
     def _one_click_rcon_for(self, inst):
-        """一键配置 RCON(临时方案):需要 Lan Server Properties + 进世界后手动对局域网开放"""
-        from launcher_app.instances.game_command import ensure_rcon_config, has_lan_server_properties, read_rcon_config
-        inst_dir = self.game_dir_for(inst["id"])
-        loader = inst.get("loader")
-        if read_rcon_config(inst_dir):
-            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                                    t('✅ RCON 已就绪。\n(临时方案:进世界后按 ESC → 对局域网开放,RCON 才监听端口)'))
-            return
-        if not has_lan_server_properties(inst_dir):
-            if loader not in ("fabric", "forge", "neoforge"):
-                inline_notice(
-                    self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                    t('该实例没有加载器(原版),而 Lan Server Properties 需要加载器。\n先给这个实例装个加载器再回来。'))
-                return
-            ret = action_question(
-                self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                t("临时方案需要 Lan Server Properties mod\n(自动开 RCON,但每次进世界需手动'对局域网开放')。\n\n是否自动从 Modrinth 下载并安装?"), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-            if ret != QMessageBox.StandardButton.Yes:
-                return
-            self._install_lan_server_properties(inst)
-            return
-        msg = ensure_rcon_config(inst_dir)
-        if "\n" in msg:
-            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])), msg)
-        else:
-            self.statusBar().showMessage(msg)
+        return self._command_setup()._one_click_rcon_for(inst)
 
     def _add_online_mod_menu_items(self, menu, inst):
-        """在实例右键菜单加「一键配置 <联机mod>」项——仅当该实例版本+加载器支持时才显示。"""
-        import launcher_app.ui.lan_tools as lan_tools
-        gv = inst.get("base")
-        loader = inst.get("loader") or ""
-        if loader not in ("fabric", "forge", "neoforge"):
-            return
-        for slug, name in lan_tools.ONLINE_MODS.items():
-            try:
-                ok = lan_tools.mod_supported(slug, gv, loader)
-            except Exception:
-                continue
-            if ok:
-                it = menu.addAction(
-                    t('一键配置 {v0}…').format(v0=(name)),
-                    lambda _c=False, s=slug: self._one_click_online_mod_for(inst, s))
-                it.setToolTip(t('{v0}:{v1}+{v2} 可用,自动下载安装').format(v0=(name), v1=(gv), v2=(loader)))
+        return self._command_setup()._add_online_mod_menu_items(menu, inst)
 
-    def _one_click_online_mod_for(self, inst, slug: str):
-        """一键配置联机 mod(Essential / e4mc):按版本+加载器判断是否支持,支持才装。
-        已装 → 提示就绪;不支持 → 说明不支持;支持且未装 → 确认后后台下载。"""
-        import launcher_app.ui.lan_tools as lan_tools
-        inst_dir = self.game_dir_for(inst["id"])
-        loader = inst.get("loader") or ""
-        gv = inst["base"]
-        name = lan_tools.ONLINE_MODS.get(slug, slug)
-        # 不支持 → 明确说明
-        if loader not in ("fabric", "forge", "neoforge"):
-            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                                    t('该实例没有加载器(原版),{v0} 是 mod 需要加载器。\n先装个 Fabric/Forge 再回来。').format(v0=(name)))
-            return
-        if not lan_tools.mod_supported(slug, gv, loader):
-            inline_notice(self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-                                    t('{v0} 暂不支持 {v1}+{v2}。\n可以换个版本,或到「联机」看别的方案。').format(v0=(name), v1=(gv), v2=(loader)))
-            return
-        # 已装?
-        mods_dir = os.path.join(inst_dir, "mods")
-        has = any(name and (slug in f.lower() or name.split("(")[0].strip().lower() in f.lower())
-                  for f in os.listdir(mods_dir) if f.endswith(".jar")) if os.path.isdir(mods_dir) else False
-        ret = action_question(
-            self, t('一键配置 · {v0}').format(v0=(inst['id'])),
-            (t('✅ {v0} 支持 {v1}+{v2}。\n\n{v3}').format(v0=(name), v1=(gv), v2=(loader), v3=('已检测到,重装/更新吗?' if has else '自动从 Modrinth 下载并安装到该实例吗?'))),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes)
-        if ret != QMessageBox.StandardButton.Yes:
-            return
-        self.statusBar().showMessage(f"正在为 {inst['id']} 安装 {name}…")
-
-        def worker(status_cb, progress_cb):
-            try:
-                msg = lan_tools.install_online_mod(
-                    slug, gv, loader, mods_dir, progress_callback=progress_cb)
-            except Exception as e:
-                raise RuntimeError(f"安装失败:{type(e).__name__}: {e}") from e
-            status_cb(msg)
-
-        self._run_download(worker)
+    def _one_click_online_mod_for(self, inst, slug):
+        return self._command_setup()._one_click_online_mod_for(inst, slug)
 
     def _one_click_config_for(self, inst):
-        """对指定实例执行一键配置(自动:bridge-mod 优先,不兼容则提示走 RCON)。
-        菜单里两个显式入口(bridge / RCON)之外的兜底逻辑。
-        已装但版本旧(outdated)→ 走 bridge 提示(触发更新)。"""
-        loader = inst.get("loader")
-        if loader in ("fabric", "forge", "neoforge"):
-            # 与 bridge 入口共用同一个后台检测,避免在 UI 线程同步访问 GitHub 卡住界面
-            self._check_bridge_async(inst, self._on_config_auto_ready)
-            return
-        self.statusBar().showMessage(
-            f"bridge-mod 暂不可用于 {inst['base']}+{loader or '原版'},改走 RCON 临时方案")
-        self._one_click_rcon_for(inst)
+        return self._command_setup()._one_click_config_for(inst)
 
     def _on_config_auto_ready(self, inst, payload):
-        """自动模式的检测结果:bridge 已装/可用 → 走 bridge 提示;否则回退 RCON。"""
-        status = (payload or {}).get("status")
-        info = (payload or {}).get("info")
-        if status != "not_installed" or info:
-            self._on_bridge_status_ready(inst, payload)
-            return
-        self.statusBar().showMessage(
-            f"bridge-mod 暂不可用于 {inst['base']}+{inst['loader'] or '原版'},改走 RCON 临时方案")
-        self._one_click_rcon_for(inst)
+        return self._command_setup()._on_config_auto_ready(inst, payload)
 
     def _install_bridge_mod(self, inst):
-        """后台下载 bridge-mod(本地指令口)到实例 mods 目录"""
-        import launcher_app.core.bridge_mod_dist as bridge_mod_dist
-        self.statusBar().showMessage(f"正在为 {inst['id']} 下载 bridge-mod…")
-
-        def worker(status_cb, progress_cb):
-            try:
-                fn = bridge_mod_dist.download_bridge_mod(
-                    self.game_dir_for(inst["id"]), inst["loader"], inst["base"],
-                    progress_callback=progress_cb)
-            except Exception as e:
-                raise RuntimeError(f"下载失败:{e}") from e
-            status_cb(f"bridge-mod 已安装:{fn}\n"
-                      "重进世界后即可用本地指令口(无需对局域网开放)。")
-
-        self._run_download(worker)
+        return self._command_setup()._install_bridge_mod(inst)
 
     def _install_lan_server_properties(self, inst):
-        """后台下载 Lan Server Properties 到实例,装好后自动写 RCON 配置"""
-        self.statusBar().showMessage(f"正在为 {inst['id']} 下载 Lan Server Properties…")
-
-        def worker(status_cb, progress_cb):
-            mods_dir = os.path.join(self.game_dir_for(inst["id"]), "mods")
-            try:
-                filename = download_mod("lan-server-properties", inst["base"],
-                                        inst["loader"], mods_dir,
-                                        progress_callback=progress_cb)
-            except Exception as e:
-                raise RuntimeError(f"下载失败:{e}") from e
-            if not filename:
-                status_cb(f"没有 {inst['base']}+{inst['loader']} 的版本,换个版本试试")
-                return False
-            # 装好 → 自动写 RCON 配置
-            from launcher_app.instances.game_command import ensure_rcon_config
-            cfg = ensure_rcon_config(self.game_dir_for(inst["id"]))
-            status_cb(f"Lan Server Properties 已安装:{filename}\n{cfg}")
-
-        self._run_download(worker)
+        return self._command_setup()._install_lan_server_properties(inst)
 
     def open_instance_manager(self, inst):
         """打开共用详情标签中的客户端实例详情。"""
@@ -3332,67 +2762,36 @@ class MainWindow(QMainWindow):
             self.ai_focus_sidebar.login_card.refresh()
         self.statusBar().showMessage(t("LOGIN_INFO_UPDATED"))
 
-    def backup_current_instance(self, inst):
-        """GUI 备份按钮(灵感 #6 补齐):手动备份一个实例"""
-        from launcher_app.core.backup import backup_instance
-        try:
-            out = backup_instance(inst["id"], paths.GAME_DIR)
-        except Exception as e:
-            task_warning(self, t('备份失败'), str(e))
-            return
-        self.statusBar().showMessage(f"已备份到:{out}")
+    def _instance_actions(self):
+        from launcher_app.instances.instance_actions import InstanceActions
+        from launcher_app.ui.instance_actions_controller import InstanceActionsController
+        from settings import update_setting
+        preparing = lambda: self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running)
+        return InstanceActionsController(
+            parent=self, service_factory=lambda: InstanceActions(paths.GAME_DIR),
+            busy_any=lambda: bool(self._running_instances) or preparing(),
+            busy_instance=lambda instance: instance in self._running_instances or preparing(),
+            settings=lambda: self.settings,
+            save_last_played=lambda instance: update_setting('last_played_instance', instance),
+            refresh=self.refresh_instances, select=self._select_instance_by_id,
+            reload_versions=self.load_versions, show_status=self.statusBar().showMessage,
+            log_feedback=self._log_feedback)
 
-    def _rename_instance(self, inst):
-        """同步重命名安装目录、版本文件和继承引用。"""
-        from PySide6.QtWidgets import QInputDialog
-        from launcher_app.instances.instance_metadata import rename_instance
-        if self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
-            inline_notice(self, t('稍等一下'), t('游戏或安装任务还在运行，结束后再改名吧。'))
-            return
-        name, accepted = QInputDialog.getText(
-            self, t('重命名实例'),
-            t('新名称（中文、英文、数字和空格均可）：\n不能留空，不能包含 \\ / : * ? " < > |\n不能以下划线开头、以句点结尾，或使用 CON、NUL、COM1 等系统保留名。\n不能与已有实例重名。安装目录和版本文件会同步改名，存档与配置保留。'),
-            QLineEdit.EchoMode.Normal, inst.get("name") or inst["id"])
-        if not accepted:
-            return
-        try:
-            rename_instance(paths.GAME_DIR, inst["id"], name.strip())
-        except (OSError, ValueError, RuntimeError) as error:
-            inline_warning(self, t('名称暂时没改成'), str(error))
-            return
-        new_id = name.strip()
-        if self.settings.get('last_played_instance') == inst['id']:
-            from settings import update_setting
-            self.settings['last_played_instance'] = new_id
-            try:
-                update_setting('last_played_instance', new_id)
-            except OSError as error:
-                self._log_feedback(f'实例已改名，但最近游玩记录保存失败：{error}')
-        self.refresh_instances()
+    def _select_instance_by_id(self, instance_id):
         for index in range(self.instance_list.count()):
             item = self.instance_list.item(index)
-            if (item.data(Qt.ItemDataRole.UserRole) or {}).get('id') == new_id:
+            if (item.data(Qt.ItemDataRole.UserRole) or {}).get('id') == instance_id:
                 self.instance_list.setCurrentItem(item)
                 break
-        self.statusBar().showMessage(f"实例和安装目录已改名为：{new_id}")
+
+    def backup_current_instance(self, inst):
+        self._instance_actions().backup(inst)
+
+    def _rename_instance(self, inst):
+        self._instance_actions().rename(inst)
 
     def _delete_instance(self, inst):
-        """删除一个实例的安装文件(只删 versions/<id>，共用 gameDir 保留)。"""
-        if inst['id'] in self._running_instances or self.download_tasks.is_running or (self._launch_task is not None and self._launch_task.is_running):
-            inline_notice(self, t('稍等一下'), t('游戏正在运行，或文件还在准备中，结束后再删除实例吧。'))
-            return
-        if action_question(
-                self, t('确认删除'),
-                t('确定删除实例 {v0} 吗?\n(只删该实例,共用文件保留)').format(v0=(inst['id'])), QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
-            return
-        # ``game_dir_for`` 在关闭版本隔离时会返回整个 .minecraft；它只适合
-        # 运行参数、存档和配置，绝不能作为删除目标。实例安装文件始终固定在
-        # versions/<id>，从而保证删一个实例不会影响其他实例或共用游戏目录。
-        instance_dir = os.path.join(paths.GAME_DIR, "versions", inst["id"])
-        if os.path.isdir(instance_dir):
-            shutil.rmtree(instance_dir, ignore_errors=True)
-        self.statusBar().showMessage(f"实例已删除:{inst['id']}")
-        self.refresh_instances()
+        self._instance_actions().delete(inst)
 
 def _open_auto_tutorial_safe(window):
     """首次启动选「新手」后自动开引导式教程;失败只记日志,不影响使用。"""

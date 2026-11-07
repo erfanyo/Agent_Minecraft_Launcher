@@ -13,7 +13,7 @@ from collections.abc import Callable
 from launcher_app.resources.downloader import download_with_mirror
 from launcher_app.resources.fetch_versions import fetch_version_detail, fetch_version_manifest
 from launcher_app.instances.game_files import install_version_files
-from launcher_app.ui.instance_wizard import OPTIMIZE_MODS, SHADER_MODS
+from launcher_app.instances.install_options import OPTIMIZE_MODS, SHADER_MODS
 from launcher_app.instances.loaders import install_loader
 from launcher_app.resources.modrinth import download_mod
 

@@ -1,9 +1,11 @@
 """Non-modal launch memory advice. The game starts while the advice stays available."""
 from launcher_app.core.i18n import t
 import os
-import re
 import time
 from collections import deque
+from dataclasses import dataclass
+from typing import Callable
+from launcher_app.runtime.launch_memory import assess_launch_memory, WindowReadiness, WindowReadinessTracker
 from PySide6.QtCore import Qt, QTimer, QEvent, QPointF, QPropertyAnimation
 from PySide6.QtGui import QPainter, QPainterPath, QColor, QPen
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QCheckBox
@@ -193,24 +195,24 @@ class MemoryCompanion(QWidget):
         super().deleteLater()
 
 
-def offer_memory_actions(owner, plan, version, launch):
-    from settings import load_settings, update_setting
-    if load_settings().get('ignore_memory_launch_advice', False):
+def _offer_memory_actions(owner, plan, version, launch, ports, state_owner):
+    if ports.read_settings().get('ignore_memory_launch_advice', False):
         return False
-    state = snapshot()
-    heap = next((int(m[1]) for arg in plan.command if (m := re.fullmatch(r'-Xmx(\d+)G', arg))), 2)
-    import paths
-    budget = automatic_budget(history_peak_bytes=history_peak(os.path.join(paths.GAME_DIR, 'versions', plan.instance_id)),
-                              mods=enabled_mod_count(plan.game_dir))
-    level = pressure(state[1] if state else None, heap, budget.get('desired_gb', 0))
+    root = getattr(plan, 'game_root', None)
+    history_dir = os.path.join(root, 'versions', plan.instance_id) if root else ports.history_dir(plan.instance_id)
+    assessment = assess_launch_memory(
+        plan.command, history_dir, plan.game_dir,
+        sampler=snapshot, budgeter=automatic_budget, history_reader=history_peak,
+        mod_counter=enabled_mod_count, pressure_reader=pressure)
+    state, heap, budget, level = assessment.state, assessment.heap, assessment.budget, assessment.level
     if not level:
         return False
-    old = getattr(owner, '_memory_launch_card', None)
+    old = state_owner.card
     if old:
         old.hide()
         old.deleteLater()
     dock = MemoryCompanion(owner)
-    owner._memory_launch_card = dock
+    state_owner.card = dock
     content = QWidget()
     layout = QVBoxLayout(content)
     message = QLabel()
@@ -250,8 +252,7 @@ def offer_memory_actions(owner, plan, version, launch):
         controls.append(control)
         return control
     def refresh_local_ai():
-        engine = getattr(getattr(owner, 'ai_dock', None), '_local_engine', None)
-        process = getattr(engine, 'proc', None)
+        process = ports.local_ai_process()
         running = process is not None and process.poll() is None
         if stop_ai_control is not None:
             stop_ai_control.setVisible(running)
@@ -270,7 +271,7 @@ def offer_memory_actions(owner, plan, version, launch):
         if current_level != 2:
             exit_check.setChecked(False)
         message.setText(t('当前可用 {v0:.1f} GB · 本次堆上限 {v1} GB。游戏已开始启动；内存估算可能有偏差，可在此尝试释放内存。').format(v0=(current[1]/GIB), v1=(heap)) if current else t('游戏已开始启动，暂时无法读取可用内存。'))
-        process = getattr(owner, 'game_process', None)
+        process = ports.current_process()
         running = process is not None and process.poll() is None
         had_game = had_game or running
         status = '内存紧张' if current_level == 2 else ('运行中' if running else '正在启动')
@@ -283,8 +284,7 @@ def offer_memory_actions(owner, plan, version, launch):
                 return f'{psutil.Process(pid).memory_info().rss / GIB:.2f} GB'
             except Exception:
                 return '暂不可读'
-        engine = getattr(getattr(owner, 'ai_dock', None), '_local_engine', None)
-        ai_process = getattr(engine, 'proc', None)
+        ai_process = ports.local_ai_process()
         ai_usage = rss(ai_process.pid) if ai_process is not None and ai_process.poll() is None else '未启动'
         system_usage = f'{(current[0] - current[1]) / GIB:.1f} / {current[0] / GIB:.1f} GB' if current else '暂不可读'
         usage_label.setText(t('系统已用 {v0} · 游戏实际占用 {v1}\n启动器 {v2} · 本地 AI {v3}').format(v0=(system_usage), v1=(rss(process.pid) if running else "未运行"), v2=(rss(os.getpid())), v3=(ai_usage)))
@@ -300,22 +300,22 @@ def offer_memory_actions(owner, plan, version, launch):
         dock.sync_attachment()
     def dismiss():
         if ignore_check.isChecked():
-            update_setting('ignore_memory_launch_advice', True)
+            ports.write_setting('ignore_memory_launch_advice', True)
             dock.hide()
             dock.deleteLater()
-            owner._memory_launch_card = None
+            state_owner.card = None
         else:
             dock.collapse()
     def exit_when_ready_changed(enabled):
-        process = getattr(owner, 'game_process', None)
+        process = ports.current_process()
         if enabled and process is not None and process.poll() is None:
-            exit_when_ready(owner, process)
+            state_owner.exit_when_ready(process)
         elif not enabled:
-            timer = getattr(owner, '_memory_exit_timer', None)
+            timer = state_owner.exit_timer
             if timer is not None:
                 timer.stop()
     def stop_ai():
-        owner.ai_dock.stop_local_engine()
+        ports.stop_local_ai()
         refresh()
         detail.setText(t('已请求关闭对话使用的本地 AI，游戏会继续启动。'))
     def optimize():
@@ -358,29 +358,83 @@ def offer_memory_actions(owner, plan, version, launch):
     return True
 
 
-def exit_when_ready(owner, process):
-    timer = QTimer(owner)
-    timer.setInterval(1000)
-    owner._memory_exit_timer = timer
-    state = {'start': time.monotonic(), 'visible_since': None}
-    owner.statusBar().showMessage('等待游戏窗口就绪后退出启动器；游戏自己的 logs/latest.log 会保留。')
-    def poll():
-        if process.poll() is not None:
+
+@dataclass
+class MemoryLaunchPorts:
+    read_settings: Callable
+    write_setting: Callable
+    current_process: Callable
+    local_ai_process: Callable
+    stop_local_ai: Callable
+    history_dir: Callable
+
+
+class MemoryLaunchController:
+    def __init__(self, parent, ports):
+        self.parent, self.ports = parent, ports
+        self.card = None
+        self.exit_timer = None
+
+    def offer(self, plan, version, launch):
+        return _offer_memory_actions(self.parent, plan, version, launch, self.ports, self)
+
+    def exit_when_ready(self, process):
+        if self.exit_timer is not None:
+            self.exit_timer.stop()
+        timer = QTimer(self.parent)
+        timer.setInterval(1000)
+        self.exit_timer = timer
+        tracker = WindowReadinessTracker(time.monotonic())
+        self.parent.statusBar().showMessage('等待游戏窗口就绪后退出启动器；游戏自己的 logs/latest.log 会保留。')
+        def poll():
+            running = process.poll() is None
+            outcome = tracker.observe(now=time.monotonic(), running=running,
+                                      visible=bool(running and visible_game_window(process.pid)))
+            if outcome is WindowReadiness.WAIT:
+                return
             timer.stop()
-            return
-        now = time.monotonic()
-        if now - state['start'] > 180:
-            timer.stop()
-            owner.statusBar().showMessage('暂未确认游戏窗口就绪，已保留启动器，请检查游戏启动情况。')
-            return
-        if not visible_game_window(process.pid):
-            state['visible_since'] = None
-            return
-        if state['visible_since'] is None:
-            state['visible_since'] = now
-        if now - state['visible_since'] >= 10:
-            timer.stop()
-            if owner.close():
+            if outcome is WindowReadiness.TIMED_OUT:
+                self.parent.statusBar().showMessage('暂未确认游戏窗口就绪，已保留启动器，请检查游戏启动情况。')
+            elif outcome is WindowReadiness.READY and self.parent.close():
                 QApplication.quit()
-    timer.timeout.connect(poll)
-    timer.start()
+        timer.timeout.connect(poll)
+        timer.start()
+
+    def close(self):
+        if self.exit_timer is not None:
+            self.exit_timer.stop()
+        if self.card is not None:
+            self.card.hide()
+            self.card.deleteLater()
+            self.card = None
+
+
+def _legacy_controller(owner):
+    """Old entry points adapt once; new frontends provide explicit ports."""
+    controller = getattr(owner, '_memory_launch_controller', None)
+    if controller is None:
+        from settings import load_settings, update_setting
+        import paths
+        def local_process():
+            engine = getattr(getattr(owner, 'ai_dock', None), '_local_engine', None)
+            return getattr(engine, 'proc', None)
+        controller = MemoryLaunchController(owner, MemoryLaunchPorts(
+            read_settings=load_settings, write_setting=update_setting,
+            current_process=lambda: getattr(owner, 'game_process', None), local_ai_process=local_process,
+            stop_local_ai=lambda: owner.ai_dock.stop_local_engine(),
+            history_dir=lambda instance: os.path.join(paths.GAME_DIR, 'versions', instance)))
+        owner._memory_launch_controller = controller
+    return controller
+
+
+def offer_memory_actions(owner, plan, version, launch):
+    controller = _legacy_controller(owner)
+    result = controller.offer(plan, version, launch)
+    owner._memory_launch_card = controller.card
+    return result
+
+
+def exit_when_ready(owner, process):
+    controller = _legacy_controller(owner)
+    controller.exit_when_ready(process)
+    owner._memory_exit_timer = controller.exit_timer

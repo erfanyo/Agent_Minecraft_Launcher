@@ -15,7 +15,7 @@ def main():
 
     import launcher_app.ai.ai_run as ai_run
     import launcher_app.ai.agent_tools as agent_tools
-    from launcher_app.ai.assistant import CLOUD_MAX_TOKENS, TOOLS
+    from launcher_app.ai.tool_catalog import CLOUD_MAX_TOKENS, TOOLS
     from settings import load_settings
     from launcher_app.extensions.skill_manager import SkillManager
 

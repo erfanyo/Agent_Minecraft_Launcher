@@ -23,23 +23,20 @@ class ServerDropTests(unittest.TestCase):
                 self.assertEqual(detect_modpack_format(pack), 'server')
 
     def test_drop_routes_without_client_installer(self):
-        # Load just the real routing method, without initializing the application.
-        source = ast.parse((Path(__file__).resolve().parents[2] / 'main.py').read_text(encoding='utf-8-sig'))
-        method = next(node for node in ast.walk(source)
-                      if isinstance(node, ast.FunctionDef) and node.name == 'install_modpack_from_path')
-        namespace = {'os': os}
-        exec(compile(ast.fix_missing_locations(ast.Module(body=[method], type_ignores=[])), 'main.py', 'exec'), namespace)
+        from launcher_app.ui.pack_import_controller import PackImportController
         with tempfile.TemporaryDirectory() as root:
             pack = Path(root, 'server.zip')
             with zipfile.ZipFile(pack, 'w') as archive:
                 archive.writestr('server.properties', '')
-            window = Mock()
-            window.home_panel._server_tab_index = 1
+            route, submit = Mock(), Mock()
+            controller = PackImportController(
+                parent=None, smart_enabled=lambda: False, smart_import=Mock(), choose_archive=Mock(),
+                check_archive=Mock(), import_server=route, import_directory=Mock(), submit=submit,
+                game_root=lambda: root, show_status=Mock())
             # Routing starts after the separately tested safety preflight.
-            namespace['install_modpack_from_path'](window, str(pack), safety_checked=True)
-            window.home_panel.tabs.setCurrentIndex.assert_called_once_with(1)
-            window.home_panel.server_center.scan_import.assert_called_once_with(str(pack))
-            window._run_download.assert_not_called()
+            controller.import_archive(str(pack), safety_checked=True, classic=False)
+            route.assert_called_once_with(str(pack))
+            submit.assert_not_called()
 
     def test_client_still_detected(self):
         with tempfile.TemporaryDirectory() as root:

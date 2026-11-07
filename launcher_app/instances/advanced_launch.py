@@ -1,2 +1,3 @@
-# Compatibility shim — code merged into game_launch_service.py
-from launcher_app.instances.game_launch_service import parse_jvm, apply_jvm, editor
+# Compatibility imports for older callers.
+from launcher_app.runtime.jvm_options import parse_jvm, apply_jvm
+from launcher_app.ui.jvm_options_editor import editor

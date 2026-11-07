@@ -443,7 +443,8 @@ def _cmd_server_launch(args):
 
 
 def _cmd_ai(args):
-    from launcher_app.ai.assistant import build_executor, chat_with_tools
+    from launcher_app.ai.tool_executor import build_executor
+    from launcher_app.ai.response_router import chat_with_tools
     from settings import load_settings
 
     settings = load_settings()
@@ -457,7 +458,7 @@ def _cmd_ai(args):
 
 # 工具 schema 与 assistant 里的一致(避免循环导入,这里延迟引用)
 def _tools():
-    from launcher_app.ai.assistant import TOOLS
+    from launcher_app.ai.tool_catalog import TOOLS
     return TOOLS
 
 

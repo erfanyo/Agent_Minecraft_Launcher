@@ -27,7 +27,7 @@ from launcher_app.ui.ui_style import (accent_color, current_color, muted_color, 
 
 def _provider_label(pid: str) -> str:
     try:
-        from launcher_app.ai.assistant import _CLOUD_PROVIDERS
+        from launcher_app.ai.assistant_defaults import _CLOUD_PROVIDERS
         for label, value in _CLOUD_PROVIDERS:
             if value == pid:
                 return label
@@ -389,7 +389,7 @@ class ProviderCard(QFrame):
     def _download(self):
         try:
             import launcher_app.ai.model_registry as model_registry
-            from launcher_app.ai.assistant import LOCAL_MODEL_ID
+            from launcher_app.ai.assistant_defaults import LOCAL_MODEL_ID
             self.status.setText(t('内置模型:下载中…'))
             model_registry.download(LOCAL_MODEL_ID)
         except Exception as e:
@@ -399,7 +399,7 @@ class ProviderCard(QFrame):
     def _refresh_builtin_status(self):
         try:
             import launcher_app.ai.model_registry as model_registry
-            from launcher_app.ai.assistant import LOCAL_MODEL_ID
+            from launcher_app.ai.assistant_defaults import LOCAL_MODEL_ID
             ready = model_registry.is_downloaded(LOCAL_MODEL_ID)
         except Exception:
             ready = False
@@ -516,7 +516,7 @@ class ModelCardsPanel(QWidget):
 
     def _add_provider_card(self):
         """弹服务商选择菜单,让用户挑要添加哪个供应商(不再按预设顺序硬塞)。"""
-        from launcher_app.ai.assistant import _CLOUD_PROVIDERS
+        from launcher_app.ai.assistant_defaults import _CLOUD_PROVIDERS
         from PySide6.QtWidgets import QMenu
         from launcher_app.ui.ui_style import popup_menu_style
         menu = QMenu(self)

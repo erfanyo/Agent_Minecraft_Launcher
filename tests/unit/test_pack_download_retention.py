@@ -38,15 +38,16 @@ def test_original_archive_survives_import_success_and_failure(tmp_path, failed, 
             from launcher_app.ai.agent_tools import install_modpack
             message = install_modpack('friends', game_dir=str(tmp_path))
         else:
-            # Exercise the actual GUI worker without starting a real window/network.
-            tree = ast.parse(Path('main.py').read_text(encoding='utf-8-sig'))
-            method = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-                          and n.name == '_resource_download_modpack')
-            namespace = {'os': __import__('os'), 'paths': SimpleNamespace(GAME_DIR=str(tmp_path))}
-            exec(compile(ast.Module(body=[method], type_ignores=[]), 'main.py', 'exec'), namespace)
+            # The GUI and future frontends submit this same independent job.
+            from launcher_app.resources.download_jobs import PackDownloadJob
             messages = []
-            owner = SimpleNamespace(_run_download=lambda worker: worker(messages.append, lambda *args: None))
-            namespace[method.name](owner, {'slug': 'friends'}, None)
-            message = messages[-1]
+            job = PackDownloadJob({'slug': 'friends'}, None, str(tmp_path))
+            if failed:
+                with pytest.raises(RuntimeError) as error:
+                    job.run(messages.append, lambda *args: None)
+                message = str(error.value)
+            else:
+                job.run(messages.append, lambda *args: None)
+                message = messages[-1]
     assert originals[0].read_bytes() == b'original archive bytes'
     assert str(originals[0]) in message
