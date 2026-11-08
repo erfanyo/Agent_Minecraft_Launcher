@@ -987,7 +987,7 @@ class ResourceBrowser(QWidget):
         elif dir_:
             self.inst_cards_toggle.setText(t('▸ 目标实例: 自定义目录'))
             self._apply_inst_cards(None)
-            self.custom_label.setText(f"{t("INSTALL_TO")}: {dir_}")
+            self.custom_label.setText(f"{t('INSTALL_TO')}: {dir_}")
             self.custom_label.setVisible(True)
         else:
             self.inst_cards_toggle.setText(t('▸ 目标实例: 未选择'))
