@@ -1,6 +1,7 @@
 """Captured instance creation selections, usable by any frontend task runner."""
 from copy import deepcopy
 from launcher_app.instances.instance_install_service import InstanceInstallService
+from launcher_app.instances.instance_metadata import HORIZON_EDITION
 
 
 class InstanceCreateJob:
@@ -11,6 +12,10 @@ class InstanceCreateJob:
 
     def run(self, status, progress):
         selected = self.selection
+        if selected.get('edition') == HORIZON_EDITION:
+            from launcher_app.instances.horizon import HorizonLauncher
+            return HorizonLauncher(self.game_root, selected.get('horizon_launcher_path')).install(
+                selected['version'], status, progress, selected.get('instance_id'))
         service = InstanceInstallService(lambda: self.game_root, lambda: self.version_isolation)
         return service.create_instance(
             selected['version'], selected['loader_key'], selected['modrinth_loader'],

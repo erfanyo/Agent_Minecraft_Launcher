@@ -109,6 +109,7 @@ from launcher_app.resources.fetch_versions import fetch_version_detail, fetch_ve
 import launcher_app.core.i18n as i18n  # 界面语言(跟随系统,可设置覆盖)
 from launcher_app.core.i18n import t
 from launcher_app.instances.instance_install_service import InstanceInstallService
+from launcher_app.instances.instance_metadata import HORIZON_EDITION
 from launcher_app.instances.game_launch_service import GameLaunchService, LoginRequiredError
 from launcher_app.runtime.game_session_controller import GameSessionController
 from launcher_app.instances.crash_diagnostics import GameRunEvidence
@@ -1373,8 +1374,14 @@ class MainWindow(QMainWindow):
         """读取 DownloadTab 的汇总选择,后台线程创建实例(不卡界面)"""
         st = self.download_tab.state()
         if not st["version"]:
-            self.download_tab.set_status("请先选一个游戏版本")
+            self.download_tab.set_status(t('请先选择一个 Horizon 构建') if st.get('edition') == HORIZON_EDITION
+                                         else t('请先选一个游戏版本'))
             return
+        if st.get('edition') == HORIZON_EDITION and st.get('instance_id'):
+            self._update_running_label()
+            if st['instance_id'] in self._running_instances:
+                self.download_tab.set_status(t('请先关闭该 Horizon 实例，再更换版本。'))
+                return
         from launcher_app.instances.install_requests import InstanceCreateJob
         job = InstanceCreateJob(st, paths.GAME_DIR, self.settings.get('version_isolation'))
         self._run_download(job.run)
@@ -1443,6 +1450,9 @@ class MainWindow(QMainWindow):
             self.download_tab.set_status(f"下载失败：{error}\n{advice}")
             self.dl_indicator.setToolTip(t('下载失败\n{v0}\n点击查看详情').format(v0=(advice)))
         self._dl_finish(ok)
+        job = getattr(self.download_tasks.last_worker, '__self__', None)
+        if getattr(job, 'selection', {}).get('edition') == HORIZON_EDITION:
+            self.download_tab.horizon_install_finished(ok)
         if not ok and '[CF_MISSING_REPORT]' in error:
             from launcher_app.resources.cf_manual import show_missing_dialog
             show_missing_dialog(self, error, self._retry_download)
@@ -2091,6 +2101,9 @@ class MainWindow(QMainWindow):
             return
 
         self._update_running_label()
+        if v.get('edition') == HORIZON_EDITION and v['id'] in self._running_instances:
+            self.statusBar().showMessage(t('该 Horizon 实例已在运行。'))
+            return
         if self._running_instances:
             if action_question(self, t('启动另一个实例'),
                     t('已有游戏正在运行，是否继续启动「{v0}」？\n多开会增加内存占用，同一实例共用存档时请勿同时进入同一个世界。').format(v0=(v['id'])),
@@ -2139,7 +2152,7 @@ class MainWindow(QMainWindow):
     def _start_prepared_game(self, plan, v):
         # 准备阶段可能刷新了正版令牌；下次启动须读取刚保存的凭证。
         self.settings = load_settings()
-        if self._memory_actions().offer(plan, v, self._start_game_after_memory):
+        if v.get('edition') != HORIZON_EDITION and self._memory_actions().offer(plan, v, self._start_game_after_memory):
             return
         self._start_game_after_memory(plan, v)
 
@@ -2205,8 +2218,10 @@ class MainWindow(QMainWindow):
         self._running_instances.add(launched.runtime_id)
         self._update_running_label()
         from copy import deepcopy
+        integration_options = {'use_bridge': False} if v.get('edition') == HORIZON_EDITION else {}
         self._game_integrations().started(
-            self.game_process, launched.instance_id, deepcopy(self.settings), launched.game_root, self.ai_context())
+            self.game_process, launched.instance_id, deepcopy(self.settings), launched.game_root, self.ai_context(),
+            **integration_options)
 
         if exit_after:
             self._memory_actions().exit_when_ready(self.game_process)
@@ -2539,18 +2554,24 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         from launcher_app.ui.ui_style import popup_menu_style
         menu.setStyleSheet(popup_menu_style())
-        config_menu = menu.addMenu("一键配置")
-        config_menu.addAction(t('Bridge Mod（推荐）…'), lambda: self._one_click_bridge_for(inst))
-        rcon_menu_item = config_menu.addAction(t('RCON（临时方案）…'), lambda: self._one_click_rcon_for(inst))
-        rcon_menu_item.setToolTip(t('临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放'))
-        # 联机 mod 一键配置:按实例版本+加载器判断支持才显示(不支持不出现)
-        self._add_online_mod_menu_items(config_menu, inst)
+        if inst.get('edition') == HORIZON_EDITION:
+            menu.addAction(t('更换 Horizon 版本…'), lambda: self._change_horizon_version(inst))
+        else:
+            config_menu = menu.addMenu("一键配置")
+            config_menu.addAction(t('Bridge Mod（推荐）…'), lambda: self._one_click_bridge_for(inst))
+            rcon_menu_item = config_menu.addAction(t('RCON（临时方案）…'), lambda: self._one_click_rcon_for(inst))
+            rcon_menu_item.setToolTip(t('临时方案:需要 Lan Server Properties + 进世界按 ESC → 对局域网开放'))
+            self._add_online_mod_menu_items(config_menu, inst)
         menu.addAction(t('重命名实例…'), lambda: self._rename_instance(inst))
         menu.addAction(t('备份实例'), lambda: self.backup_current_instance(inst))
         menu.addAction(t('打开实例目录'), lambda: open_path(self.game_dir_for(inst["id"])))
         menu.addSeparator()
         menu.addAction(t('删除实例…'), lambda: self._delete_instance(inst))
         menu.exec(global_pos)
+
+    def _change_horizon_version(self, inst):
+        self._open_resource_page(1)
+        self.download_tab.open_horizon(inst)
 
     def _current_instance(self):
         """「我的版本」当前选中的实例;没选中返回 None"""

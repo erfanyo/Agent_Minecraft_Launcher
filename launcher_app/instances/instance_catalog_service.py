@@ -9,6 +9,7 @@ import shutil
 from collections.abc import Callable
 
 from launcher_app.instances.instances import scan_instances
+from launcher_app.instances.instance_metadata import HORIZON_EDITION
 
 
 def fingerprint(root):
@@ -50,6 +51,7 @@ class InstanceCatalogService:
             item for item in instances
             if not (
                 item["loader"] is None
+                and item.get('edition') != HORIZON_EDITION
                 and item["id"] in bases_in_use
                 and not os.path.isdir(os.path.join(self._game_dir_for(item["id"]), "saves"))
             )
@@ -63,7 +65,8 @@ class InstanceCatalogService:
         bases_in_use = {item["base"] for item in instances if item["loader"]}
         repository = os.path.join(self.game_root, "versions", "_versions")
         for item in instances:
-            if item["loader"] is not None or item["id"] not in bases_in_use:
+            if (item.get('edition') == HORIZON_EDITION or item['loader'] is not None
+                    or item['id'] not in bases_in_use):
                 continue
             instance_dir = os.path.join(self.game_root, "versions", item["id"])
             expected = {item["id"] + ".json", item["id"] + ".jar"}
@@ -100,7 +103,7 @@ class InstanceCatalogService:
             "instances": [
                 {
                     "id": item["id"],
-                    "loader": item.get("loader") or "原版",
+                    "loader": "Horizon" if item.get('edition') == HORIZON_EDITION else item.get('loader') or "原版",
                     "base": item.get("base", ""),
                     "note": old_notes.get(item["id"], ""),
                 }

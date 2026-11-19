@@ -28,10 +28,11 @@ class LaunchPlan:
     instance_id: str
     detail: dict
     game_dir: str
-    java_exe: str
+    java_exe: str | None
     command: list[str]
     first_run: bool
     game_root: str = ''
+    environment: dict | None = None
 
 
 class GameLaunchService:

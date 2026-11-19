@@ -23,6 +23,11 @@ class LaunchRequest:
                 if self.settings.get('version_isolation') else self.game_root)
 
     def prepare(self, status_cb=None, progress_cb=None, *, credentials_writer=None):
+        from launcher_app.instances.instance_metadata import HORIZON_EDITION
+        if self.version.get('edition') == HORIZON_EDITION:
+            from launcher_app.instances.horizon import HorizonLauncher
+            return HorizonLauncher(self.game_root, self.settings.get('horizon_launcher_path')).prepare_launch(
+                self.version['id'], status_cb)
         if credentials_writer is None:
             from launcher_app.core.accounts import update_refreshed_microsoft_credentials
             credentials_writer = update_refreshed_microsoft_credentials

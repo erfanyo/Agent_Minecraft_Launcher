@@ -10,6 +10,7 @@
 - 备份·存档:手动备份、备份历史(查看/删除)、查看存档、FTB Backups 频率联动
 """
 from launcher_app.core.i18n import t
+from launcher_app.instances.instance_metadata import HORIZON_EDITION
 from launcher_app.ui.ui_notifications import task_notice, task_warning, inline_notice, inline_warning, action_question
 from launcher_app.ui.task_center import task_question
 import os
@@ -135,7 +136,8 @@ class InstanceManagerDialog(QWidget):
         # 从实例详情里的菜单打开某个功能时，主窗口也会再次把同一实例传进来。
         # 不要因此销毁 CenterShell，否则它会按默认值回到「概览」。
         if (not force and self.shell is not None and self.inst_id == instance.get("id")
-                and self.game_dir == game_dir):
+                and self.game_dir == game_dir
+                and (instance.get('edition') != HORIZON_EDITION or self._inst_base == instance.get('base'))):
             return
         # 清旧内容
         if self.shell is not None:
@@ -144,11 +146,17 @@ class InstanceManagerDialog(QWidget):
         self.inst_id = instance["id"]
         self._inst_base = instance.get("base") or instance["id"]
         self._inst_loader = instance.get("loader")
+        self._inst_edition = instance.get('edition')
         self.game_dir = game_dir
         self.inst_dir = os.path.join(game_dir, "versions", instance["id"])
 
         from launcher_app.ui.center_shell import CenterShell
         self.shell = CenterShell(self, menu_width=150)
+        if self._inst_edition == HORIZON_EDITION:
+            self.shell.add_section(t('概览'), self._build_horizon_overview)
+            self.shell.add_section(t('备份·存档'), self._build_backup_tab)
+            self._layout.addWidget(self.shell)
+            return
         # 概览:实例基本信息 + 快捷操作
         self.shell.add_section(t("概览"), self._build_overview_tab)
         # 设置:单个实例的启动选项(分配内存等;完全体以后完善)
@@ -167,6 +175,27 @@ class InstanceManagerDialog(QWidget):
         self.shell.add_section(t("运行配置"), self._build_config_tab)
         self.shell.add_section(t("备份·存档"), self._build_backup_tab)
         self._layout.addWidget(self.shell)
+
+    def _build_horizon_overview(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        info = QLabel(t('Horizon 构建 {tag}').format(tag=self._inst_base))
+        info.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(info)
+        start = QPushButton(t('▶ 启动游戏'))
+        start.clicked.connect(self._launch_instance)
+        change = QPushButton(t('更换 Horizon 版本…'))
+        change.clicked.connect(lambda: self.window()._change_horizon_version(self._inst_dict()))
+        open_dir = QPushButton(t('打开实例目录'))
+        open_dir.clicked.connect(lambda: self._open_dir(self.inst_dir))
+        row = QHBoxLayout()
+        for button in (start, change, open_dir):
+            set_style(button, card_btn_style)
+            row.addWidget(button)
+        row.addStretch()
+        layout.addLayout(row)
+        layout.addStretch()
+        return tab
 
     # ---------- 概览 ----------
     def _build_overview_tab(self) -> QWidget:
@@ -390,7 +419,10 @@ class InstanceManagerDialog(QWidget):
             self.status_msg(f"启动失败:{e}")
 
     def _inst_dict(self) -> dict:
-        return {"id": self.inst_id, "base": self._inst_base, "loader": self._inst_loader}
+        data = {"id": self.inst_id, "base": self._inst_base, "loader": self._inst_loader}
+        if self._inst_edition:
+            data['edition'] = self._inst_edition
+        return data
 
     def _save_names(self) -> list:
         saves_dir = os.path.join(self.inst_dir, "saves")
@@ -1270,7 +1302,10 @@ class InstanceManagerDialog(QWidget):
         saves.content.addLayout(saves_row)
         saves.content.addWidget(self.saves_list)
         layout.addWidget(backups, 1)
-        layout.addWidget(automatic)
+        if self._inst_edition != HORIZON_EDITION:
+            layout.addWidget(automatic)
+        else:
+            automatic.deleteLater()
         layout.addWidget(saves)
         self._refresh_backups()
         self._refresh_saves()

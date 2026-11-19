@@ -30,20 +30,21 @@ class GameProcessController(QObject):
     def is_running(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def start(self, command: list[str], java_exe: str, cwd: str, independent=False):
+    def start(self, command: list[str], java_exe: str | None, cwd: str, independent=False, *, environment=None):
         from launcher_app.instances.instance_maintenance import assert_not_maintaining
         assert_not_maintaining()
         if self.is_running:
             raise RuntimeError("游戏进程已经在运行")
         cmd = list(command)
-        javaw = os.path.join(os.path.dirname(java_exe), "javaw.exe")
-        if os.path.isfile(javaw):
-            cmd = [javaw] + cmd[1:]
+        if java_exe:
+            javaw = os.path.join(os.path.dirname(java_exe), "javaw.exe")
+            if os.path.isfile(javaw):
+                cmd = [javaw] + cmd[1:]
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         import tempfile
         output = tempfile.TemporaryFile(mode='w+b') if independent else None
         try:
-            with external_process_environment() as env:
+            with external_process_environment(environment) as env:
                 process = subprocess.Popen(
                     cmd,
                     stdout=output if independent else subprocess.PIPE,
