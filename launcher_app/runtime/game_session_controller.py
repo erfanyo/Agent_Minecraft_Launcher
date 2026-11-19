@@ -33,11 +33,11 @@ class GameSessionController(QObject):
     def running_processes(self):
         return tuple(controller.process for controller in self._controllers if controller.is_running)
 
-    def start(self, command, java_exe, cwd, *, independent=False):
+    def start(self, command, java_exe, cwd, *, independent=False, **process_options):
         previous = self._current
         controller = self._create_controller() if previous.is_running else previous
         try:
-            process = controller.start(command, java_exe, cwd, independent=independent)
+            process = controller.start(command, java_exe, cwd, independent=independent, **process_options)
         except Exception:
             if controller is not previous:
                 self._controllers.remove(controller)

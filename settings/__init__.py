@@ -24,6 +24,7 @@ DEFAULTS = {
     "last_played_instance": "", # 最近一次成功启动的实例;首页启动时优先选中
     "java_paths": {},            # Java 大版本首选路径，如 {"8": ".../java.exe"};实例设置可覆盖
     "game_dir": "",              # 游戏目录(.minecraft 位置;空 = 启动器目录下默认位置)
+    "horizon_launcher_path": "",
     "skills": {},                # 技能启停状态 {技能id: true/false}(见 skill_manager.py)
     "backup_remind_on_exit": True,
     "backup_auto_on_exit": False,

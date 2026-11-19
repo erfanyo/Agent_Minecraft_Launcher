@@ -2905,6 +2905,8 @@ class ResourceCenter(QWidget):
 
     def refresh_browser_instances(self, instances: list):
         """刷新各资源浏览器里的目标实例卡片(反映全局目标)。"""
+        from launcher_app.instances.instance_metadata import HORIZON_EDITION
+        instances = [instance for instance in instances if instance.get('edition') != HORIZON_EDITION]
         for br in [*self.browsers.values(), self.favorite_browser]:
             br.set_instances(instances)
 

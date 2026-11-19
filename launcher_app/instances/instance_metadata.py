@@ -4,6 +4,8 @@ import os
 import tempfile
 from launcher_app.core.safe_paths import safe_child, safe_component
 
+HORIZON_EDITION = 'horizon'
+
 def atomic_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix='.amcl-', dir=os.path.dirname(path))
@@ -70,13 +72,13 @@ def rename_display(game_root, instance_id, name):
     if name.startswith('_'):
         raise ValueError('名称不能以下划线开头')
     folder = safe_child(os.path.join(game_root, 'versions'), instance_id)
-    if not os.path.isfile(os.path.join(folder, instance_id + '.json')):
+    data = read_metadata(folder)
+    if data.get('edition') != HORIZON_EDITION and not os.path.isfile(os.path.join(folder, instance_id + '.json')):
         raise ValueError('实例文件不完整，请刷新列表后再试')
     for item in scan_instances(game_root):
         if item['id'] != instance_id and name.casefold() in {
                 item['id'].casefold(), item['name'].casefold()}:
             raise ValueError('这个名称已经被另一个实例使用了')
-    data = read_metadata(folder)
     data['display_name'] = name
     atomic_json(safe_child(folder, 'amcl_instance.json'), data)
 
@@ -109,17 +111,19 @@ def rename_instance(game_root, instance_id, name):
     def read(path):
         with open(path, encoding='utf-8') as file:
             return json.load(file)
-    own_json = safe_child(source, instance_id + '.json')
-    own = read(own_json)
-    own['id'] = name
-    if own.get('jar') == instance_id:
-        own['jar'] = name
-    changes[own_json] = own
     meta = read_metadata(source)
     meta['display_name'] = name
-    meta['minecraft_version'] = current['base']
     changes[safe_child(source, 'amcl_instance.json')] = meta
-    for root in (versions, os.path.join(versions, '_versions')):
+    native = meta.get('edition') == HORIZON_EDITION
+    if not native:
+        own_json = safe_child(source, instance_id + '.json')
+        own = read(own_json)
+        own['id'] = name
+        if own.get('jar') == instance_id:
+            own['jar'] = name
+        changes[own_json] = own
+        meta['minecraft_version'] = current['base']
+    for root in (() if native else (versions, os.path.join(versions, '_versions'))):
         if not os.path.isdir(root):
             continue
         for entry in os.listdir(root):
@@ -161,7 +165,7 @@ def rename_instance(game_root, instance_id, name):
     try:
         os.rename(source, target)
         moved = True
-        for suffix in ('.json', '.jar'):
+        for suffix in (() if native else ('.json', '.jar')):
             old = os.path.join(target, instance_id + suffix)
             new = os.path.join(target, name + suffix)
             if os.path.isfile(old):

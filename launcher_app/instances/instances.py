@@ -14,14 +14,14 @@ import json
 import os
 
 import paths
-from launcher_app.instances.instance_metadata import read_metadata
+from launcher_app.instances.instance_metadata import HORIZON_EDITION, read_metadata
 
 
 def detect_running_instances(instance_dirs: dict[str, str]) -> set[str]:
     return {row['id'] for row in detect_running_clients(instance_dirs)}
 
 
-def detect_running_clients(instance_dirs: dict[str, str], inspect_ports=False) -> list[dict]:
+def detect_running_clients(instance_dirs: dict[str, str], inspect_ports=False, *, horizon_only=False) -> list[dict]:
     """Read client launch arguments, including Java argument files used by launchers."""
     import psutil
     import shlex
@@ -33,7 +33,22 @@ def detect_running_clients(instance_dirs: dict[str, str], inspect_ports=False) -
     running = []
     for process in psutil.process_iter(['name', 'cmdline']):
         try:
-            if 'java' not in (process.info['name'] or '').lower():
+            executable = (process.info['name'] or '').lower()
+            if executable in ('horizon-client', 'horizon-client.exe'):
+                game_dir = normalized(process.cwd())
+                instance_id = next((name for name, folder in directories.items()
+                                    if folder == game_dir), None)
+                if instance_id is not None:
+                    row = {'id': instance_id, 'pid': process.pid,
+                           'parent_pids': [parent.pid for parent in process.parents()],
+                           'create_time': process.create_time(), 'game_dir': game_dir,
+                           'external': False, 'name': instance_id}
+                    if os.name == 'nt':
+                        from launcher_app.runtime.memory_relief import visible_game_window
+                        row['window_visible'] = visible_game_window(process.pid)
+                    running.append(row)
+                continue
+            if horizon_only or 'java' not in executable:
                 continue
             args = process.info['cmdline'] or []
             expanded = []
@@ -247,6 +262,14 @@ def scan_instances(game_dir: str = None) -> list:
         if os.path.isfile(os.path.join(versions_dir, '_imports', name + '.json')):
             continue  # 尚未完成的导入不能作为可启动实例。
         folder = os.path.join(versions_dir, name)
+        metadata = read_metadata(folder)
+        if metadata.get('edition') == HORIZON_EDITION:
+            tag = metadata.get('horizon_version')
+            if isinstance(tag, str) and tag:
+                display = str(metadata.get('display_name') or name)
+                instances.append({'id': name, 'name': display, 'base': tag, 'loader': None,
+                                  'edition': HORIZON_EDITION, 'label': f'{display}  (Horizon · {tag})'})
+            continue
         vjson = find_instance_version_json(folder, name)
         if not vjson:
             continue
@@ -255,7 +278,6 @@ def scan_instances(game_dir: str = None) -> list:
                 data = json.load(f)
         except Exception:
             continue
-        metadata = read_metadata(folder)
         base = (metadata.get('minecraft_version') or data.get("inheritsFrom") or
                 data.get('clientVersion') or _base_from_launch_arguments(data))
         has_base = bool(data.get('inheritsFrom'))

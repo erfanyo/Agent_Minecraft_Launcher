@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from launcher_app.resources.fetch_versions import fetch_version_manifest
 from launcher_app.core.background_tasks import BackgroundTask
 from launcher_app.instances.install_options import LOADER_CHOICES, OPTIMIZE_MODS, SHADER_MODS
+from launcher_app.instances.instance_metadata import HORIZON_EDITION
 from launcher_app.core.i18n import t
 from launcher_app.instances.loaders import list_fabric_loaders, list_forge_versions, list_neoforge_versions, list_quilt_loaders
 from launcher_app.resources.modrinth import list_mod_versions
@@ -38,6 +39,9 @@ from launcher_app.ui.ui_style import (arrow_style, card_style, hint_style, inner
                       list_style, primary_btn_style, set_style, danger_color,
                       text_color)
 from launcher_app.ui.version_tree import fill_version_tree
+from launcher_app.ui.horizon_panel import HorizonPanel
+
+_HORIZON_ROW = 4
 
 
 class DownloadTab(QWidget):
@@ -65,7 +69,7 @@ class DownloadTab(QWidget):
         self.menu = QListWidget()
         self.menu.setFixedWidth(168)
         set_style(self.menu, list_style)
-        for title in ("游戏版本", "加载器", "光影 Mod", "优化 Mod"):
+        for title in ("游戏版本", "加载器", "光影 Mod", "优化 Mod", t('Rust 版 MC（实验性）')):
             item = QListWidgetItem(title, self.menu)
             item.setData(Qt.ItemDataRole.UserRole, title)
         self.menu.ai_pin_provider = self._pin_section
@@ -77,6 +81,8 @@ class DownloadTab(QWidget):
         self.stack.addWidget(self._build_loader_panel())
         self.stack.addWidget(self._build_shader_panel())
         self.stack.addWidget(self._build_optimize_panel())
+        self.horizon_panel = HorizonPanel(self)
+        self.stack.addWidget(self.horizon_panel)
         self.menu.setCurrentRow(0)  # 此时 stack 已就绪
 
         # ---- 底部:状态 + 进度 + 开始下载 ----
@@ -116,6 +122,8 @@ class DownloadTab(QWidget):
 
     def _on_start(self):
         """点"开始下载实例":没选版本时给出明确提示(先选版本,再选加载器)"""
+        if self.menu.currentRow() == _HORIZON_ROW:
+            return
         if not self.mc:
             self.status_label.setText("⚠️ 请先到「游戏版本」选择一个版本(如 1.21.1)")
             self.status_label.setStyleSheet(f"color: {danger_color()};")
@@ -348,6 +356,12 @@ class DownloadTab(QWidget):
     def _switch_panel(self, row):
         previous = self.stack.currentIndex()
         self.stack.setCurrentIndex(row)
+        if row == _HORIZON_ROW:
+            self._show_horizon()
+        elif previous == _HORIZON_ROW:
+            self.download_btn.setText(t('开始下载实例'))
+            self.import_btn.show()
+            self.set_status(t('已选版本：{version}').format(version=self.mc) if self.mc else t('先在「游戏版本」里选一个版本'))
         if previous != row:
             from launcher_app.ui.ui_anim import reveal
             reveal(self.stack.currentWidget())
@@ -358,6 +372,23 @@ class DownloadTab(QWidget):
             self._request_shader()
         elif row == 3:
             self._request_optimize()
+
+    def open_horizon(self, instance=None):
+        self.menu.setCurrentRow(_HORIZON_ROW)
+        self._show_horizon(instance)
+
+    def _show_horizon(self, instance=None):
+        self.horizon_panel.show_for(instance)
+        self.download_btn.setText(t('应用 Horizon 版本') if instance else t('下载并创建 Horizon 实例'))
+        self.import_btn.hide()
+        self.set_status('')
+
+    def horizon_install_finished(self, ok):
+        if self.menu.currentRow() == _HORIZON_ROW:
+            if ok:
+                self.open_horizon()
+                self.set_status(t('Horizon 实例已就绪'))
+            self.horizon_panel.refresh()
 
     # ================= 异步加载(网络请求不卡 UI) =================
     def _async(self, cache_key: tuple, fetch, on_done, on_error=None):
@@ -655,13 +686,15 @@ class DownloadTab(QWidget):
     # ================= 汇总与下载 =================
     def _update_ready(self):
         # 按钮始终可点:没选版本时点击会给出明确提示(见 _on_start)
-        if self.mc:
+        if self.mc and self.menu.currentRow() != _HORIZON_ROW:
             loader_name = self.loader_key or "原版(无加载器)"
             self.status_label.setText(f"已选版本:{self.mc} | 加载器:{loader_name}")
             self.status_label.setStyleSheet(hint_style())
 
     def state(self) -> dict:
         """汇总全部选择"""
+        if self.menu.currentRow() == _HORIZON_ROW:
+            return {'edition': HORIZON_EDITION, **self.horizon_panel.selection()}
         fa_ver = self.fabric_api_combo.currentData() if self.loader_key == "fabric" else None
         return {
             "version": self.mc,
@@ -685,6 +718,7 @@ class DownloadTab(QWidget):
     def set_busy(self, busy: bool):
         self.download_btn.setEnabled(not busy)
         self.menu.setEnabled(not busy)
+        self.horizon_panel.setEnabled(not busy)
 
     def bind_start(self, callback):
         """绑定"开始下载"回调(与 _on_start 并存,先检查版本再触发下载)"""

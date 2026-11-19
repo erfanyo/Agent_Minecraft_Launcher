@@ -44,8 +44,11 @@ class GameIntegration:
         except Exception as exc:
             self.ports.show_status(f'游戏内 AI 启动失败: {type(exc).__name__}: {exc}')
 
-    def started(self, process, instance_id, settings, game_root, context):
-        self.start_bridge(instance_id, settings, game_root, context)
+    def started(self, process, instance_id, settings, game_root, context, *, use_bridge=True):
+        if use_bridge:
+            self.start_bridge(instance_id, settings, game_root, context)
+        else:
+            self.stop_bridge()
         self.ports.skill_started(process, instance_id)
         try:
             self.ports.game_running(process)

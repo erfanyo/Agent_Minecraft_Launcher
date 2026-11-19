@@ -24,7 +24,9 @@ class GameRuntime:
 
     def start(self, plan, version, game_root, *, independent=False):
         started_at = self._clock()
-        process = self.sessions.start(plan.command, plan.java_exe, plan.game_dir, independent=independent)
+        environment = getattr(plan, 'environment', None)
+        options = {} if environment is None else {'environment': environment}
+        process = self.sessions.start(plan.command, plan.java_exe, plan.game_dir, independent=independent, **options)
         root = getattr(plan, 'game_root', None) or game_root
         launched = StartedGame(process, version['id'], plan.detail['id'], root,
                                GameRunEvidence(plan.game_dir, started_at),

@@ -87,6 +87,14 @@
 2. Windows 标准版直接运行 exe；本地 AI 版先解压 ZIP；Linux 版解压 tar.gz 后运行包内程序。
 3. 在首次引导中选好游戏目录和登录方式。AI 可选填 API Key，或使用预装本地 AI 版。
 
+### Rust 版 MC（Horizon，实验性）
+
+1. 从「创建实例」打开「Rust 版 MC（实验性）」，到 [Horizon Releases](https://github.com/horizon-rust/horizon/releases) 下载当前平台的 `launcher@…`，并在 AMCL 中选择解压后的 Horizon Launcher 可执行文件。
+2. 选择一个 Horizon 构建并下载。安装和校验由 Horizon Launcher 执行。AMCL 将每个实例固定到选中的构建，同一游戏目录下的 Horizon 实例共享已下载的构建。
+3. 首次游玩前点击「打开 Horizon 登录」，在上游启动器里登录拥有 Minecraft Java 版的微软账号，再从 AMCL 的「我的实例」启动。
+
+实例菜单中的「更换 Horizon 版本」会保留实例目录和存档。AMCL 的 Horizon 入口支持构建选择、下载和启动。Horizon 模组管理留待后续接入。
+
 ### 下载状态与反馈日志
 - 下载详情支持取消和重试。取消在下载分块、解压和 Forge 补丁步骤中生效；正在等待网络响应时需等待响应或超时。重试复用校验通过的文件。
 - 整合包导入未完成时保留文件，并暂不列入可启动实例；重新导入同一个压缩包可以继续补齐。CurseForge 清单使用设置中获批的 API Key 下载精确文件版本并校验；Mod、资源包、光影按类型安装。文件下载支持 ForgeCDN 候选地址和 MCIM 镜像回退，镜像请求不携带 API Key；仍失败时显示缺失清单和官方链接，监测下载目录、校验文件后复制到实例并继续安装。

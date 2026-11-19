@@ -36,8 +36,10 @@ class InstanceInstallService:
         return self._game_root()
 
     def game_dir_for(self, instance_id: str) -> str:
-        if self._version_isolation():
-            return os.path.join(self.game_root, "versions", instance_id)
+        from launcher_app.instances.instance_metadata import HORIZON_EDITION, read_metadata
+        folder = os.path.join(self.game_root, 'versions', instance_id)
+        if self._version_isolation() or read_metadata(folder).get('edition') == HORIZON_EDITION:
+            return folder
         return self.game_root
 
     def install_version(self, version_id: str, status_cb=None, progress_cb=None,
